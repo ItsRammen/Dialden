@@ -23,6 +23,11 @@ const createMediaItemBuilder = (override?: Partial<MediaItem>): MediaItem => ({
   mediaType: 'video',
   dateStart: null,
   dateEnd: null,
+  codec: null,
+  width: null,
+  height: null,
+  warning: null,
+  mtime: null,
   ...override,
 })
 

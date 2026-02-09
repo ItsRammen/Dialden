@@ -23,6 +23,11 @@ const createItem = (id: number, filename: string): MediaItem => ({
   mediaType: 'video',
   dateStart: null,
   dateEnd: null,
+  codec: null,
+  width: null,
+  height: null,
+  warning: null,
+  mtime: null,
 })
 
 describe('MediaService', () => {

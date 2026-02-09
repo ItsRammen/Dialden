@@ -8,6 +8,23 @@ import { describe, expect, test, beforeEach, afterEach } from 'bun:test'
 import { MediaRepository } from '../src/repositories/MediaRepository'
 import type { MediaItemInput } from '../src/repositories/IMediaRepository'
 
+// Builder for MediaItemInput with extended metadata defaults
+const createInput = (override?: Partial<MediaItemInput>): MediaItemInput => ({
+  path: '/videos/test.mp4',
+  filename: 'test.mp4',
+  durationSeconds: 60,
+  isInterlude: false,
+  mediaType: 'video',
+  dateStart: null,
+  dateEnd: null,
+  codec: null,
+  width: null,
+  height: null,
+  warning: null,
+  mtime: null,
+  ...override,
+})
+
 describe('MediaRepository', () => {
   let repo: MediaRepository
 
@@ -29,15 +46,7 @@ describe('MediaRepository', () => {
   })
 
   test('upsertMedia inserts and updates videos', async () => {
-    const input: MediaItemInput = {
-      path: '/videos/test.mp4',
-      filename: 'test.mp4',
-      durationSeconds: 60,
-      isInterlude: false,
-      mediaType: 'video',
-      dateStart: null,
-      dateEnd: null,
-    }
+    const input = createInput()
 
     await repo.upsertMedia(input)
 
@@ -55,25 +64,27 @@ describe('MediaRepository', () => {
   })
 
   test('getInterludes filters by date correctly', async () => {
-    await repo.upsertMedia({
-      path: '/int/always.mp4',
-      filename: 'always.mp4',
-      durationSeconds: 10,
-      isInterlude: true,
-      mediaType: 'interlude',
-      dateStart: null,
-      dateEnd: null,
-    })
+    await repo.upsertMedia(
+      createInput({
+        path: '/int/always.mp4',
+        filename: 'always.mp4',
+        durationSeconds: 10,
+        isInterlude: true,
+        mediaType: 'interlude',
+      })
+    )
 
-    await repo.upsertMedia({
-      path: '/int/winter.mp4',
-      filename: 'winter.mp4',
-      durationSeconds: 10,
-      isInterlude: true,
-      mediaType: 'interlude',
-      dateStart: '12-01',
-      dateEnd: '02-28',
-    })
+    await repo.upsertMedia(
+      createInput({
+        path: '/int/winter.mp4',
+        filename: 'winter.mp4',
+        durationSeconds: 10,
+        isInterlude: true,
+        mediaType: 'interlude',
+        dateStart: '12-01',
+        dateEnd: '02-28',
+      })
+    )
 
     // Test date in winter range
     const winterList = await repo.getInterludes('2023-01-15')
@@ -98,25 +109,21 @@ describe('MediaRepository', () => {
   })
 
   test('removeNotInPaths cleans up stale entries', async () => {
-    await repo.upsertMedia({
-      path: '/keep.mp4',
-      filename: 'keep.mp4',
-      durationSeconds: 10,
-      isInterlude: false,
-      mediaType: 'video',
-      dateStart: null,
-      dateEnd: null,
-    })
+    await repo.upsertMedia(
+      createInput({
+        path: '/keep.mp4',
+        filename: 'keep.mp4',
+        durationSeconds: 10,
+      })
+    )
 
-    await repo.upsertMedia({
-      path: '/remove.mp4',
-      filename: 'remove.mp4',
-      durationSeconds: 10,
-      isInterlude: false,
-      mediaType: 'video',
-      dateStart: null,
-      dateEnd: null,
-    })
+    await repo.upsertMedia(
+      createInput({
+        path: '/remove.mp4',
+        filename: 'remove.mp4',
+        durationSeconds: 10,
+      })
+    )
 
     const removedCount = await repo.removeNotInPaths(['/keep.mp4'])
 
@@ -128,30 +135,26 @@ describe('MediaRepository', () => {
 
   test('conflicting upsert preserves user settings', async () => {
     // Insert as Video
-    await repo.upsertMedia({
-      path: '/test.mp4',
-      filename: 'test.mp4',
-      durationSeconds: 10,
-      isInterlude: false,
-      mediaType: 'video',
-      dateStart: null,
-      dateEnd: null,
-    })
+    await repo.upsertMedia(
+      createInput({
+        path: '/test.mp4',
+        filename: 'test.mp4',
+        durationSeconds: 10,
+      })
+    )
 
     // User manually changes to Interlude via method
     const id = (await repo.getAll())[0]?.id ?? 0
     await repo.toggleInterlude(id, true)
 
     // Re-scan (Upsert) as Video (file system says it's a video)
-    await repo.upsertMedia({
-      path: '/test.mp4',
-      filename: 'test.mp4',
-      durationSeconds: 10,
-      isInterlude: false, // Indexer says false
-      mediaType: 'video',
-      dateStart: null,
-      dateEnd: null,
-    })
+    await repo.upsertMedia(
+      createInput({
+        path: '/test.mp4',
+        filename: 'test.mp4',
+        durationSeconds: 10,
+      })
+    )
 
     // Should remain Interlude because User override (in DB) persists if FS says "Video" (default)
     // Logic: if excluded.is_interlude = 0 (Video), keep existing.
@@ -163,30 +166,30 @@ describe('MediaRepository', () => {
 
   test('upsert special types override existing interlude', async () => {
     // Simulate: File was previously indexed as interlude (before detection fix)
-    await repo.upsertMedia({
-      path: '/interludes/penny_outro.mp4',
-      filename: 'penny_outro.mp4',
-      durationSeconds: 30,
-      isInterlude: true,
-      mediaType: 'interlude', // Old indexer didn't detect special type
-      dateStart: null,
-      dateEnd: null,
-    })
+    await repo.upsertMedia(
+      createInput({
+        path: '/interludes/penny_outro.mp4',
+        filename: 'penny_outro.mp4',
+        durationSeconds: 30,
+        isInterlude: true,
+        mediaType: 'interlude', // Old indexer didn't detect special type
+      })
+    )
 
     // Verify it's interlude
     let item = (await repo.getAll())[0]
     expect(item?.mediaType).toBe('interlude')
 
     // Re-scan with fixed indexer that detects _outro pattern
-    await repo.upsertMedia({
-      path: '/interludes/penny_outro.mp4',
-      filename: 'penny_outro.mp4',
-      durationSeconds: 30,
-      isInterlude: false, // outro is not a generic interlude
-      mediaType: 'outro', // NEW: Detected as outro
-      dateStart: null,
-      dateEnd: null,
-    })
+    await repo.upsertMedia(
+      createInput({
+        path: '/interludes/penny_outro.mp4',
+        filename: 'penny_outro.mp4',
+        durationSeconds: 30,
+        isInterlude: false, // outro is not a generic interlude
+        mediaType: 'outro', // NEW: Detected as outro
+      })
+    )
 
     // Should now be outro (special types override)
     item = (await repo.getAll())[0]
@@ -196,26 +199,26 @@ describe('MediaRepository', () => {
 
   test('upsert offair overrides existing interlude', async () => {
     // Simulate: bedtime file was indexed as interlude
-    await repo.upsertMedia({
-      path: '/interludes/penny_bedtime.mp4',
-      filename: 'penny_bedtime.mp4',
-      durationSeconds: 30,
-      isInterlude: true,
-      mediaType: 'interlude',
-      dateStart: null,
-      dateEnd: null,
-    })
+    await repo.upsertMedia(
+      createInput({
+        path: '/interludes/penny_bedtime.mp4',
+        filename: 'penny_bedtime.mp4',
+        durationSeconds: 30,
+        isInterlude: true,
+        mediaType: 'interlude',
+      })
+    )
 
     // Re-scan detects _bedtime -> offair
-    await repo.upsertMedia({
-      path: '/interludes/penny_bedtime.mp4',
-      filename: 'penny_bedtime.mp4',
-      durationSeconds: 30,
-      isInterlude: false,
-      mediaType: 'offair',
-      dateStart: null,
-      dateEnd: null,
-    })
+    await repo.upsertMedia(
+      createInput({
+        path: '/interludes/penny_bedtime.mp4',
+        filename: 'penny_bedtime.mp4',
+        durationSeconds: 30,
+        isInterlude: false,
+        mediaType: 'offair',
+      })
+    )
 
     const item = (await repo.getAll())[0]
     expect(item?.mediaType).toBe('offair')
@@ -223,26 +226,26 @@ describe('MediaRepository', () => {
 
   test('upsert intro overrides existing interlude', async () => {
     // Simulate: intro file was indexed as interlude
-    await repo.upsertMedia({
-      path: '/interludes/penny_intro.mp4',
-      filename: 'penny_intro.mp4',
-      durationSeconds: 30,
-      isInterlude: true,
-      mediaType: 'interlude',
-      dateStart: null,
-      dateEnd: null,
-    })
+    await repo.upsertMedia(
+      createInput({
+        path: '/interludes/penny_intro.mp4',
+        filename: 'penny_intro.mp4',
+        durationSeconds: 30,
+        isInterlude: true,
+        mediaType: 'interlude',
+      })
+    )
 
     // Re-scan detects _intro
-    await repo.upsertMedia({
-      path: '/interludes/penny_intro.mp4',
-      filename: 'penny_intro.mp4',
-      durationSeconds: 30,
-      isInterlude: false,
-      mediaType: 'intro',
-      dateStart: null,
-      dateEnd: null,
-    })
+    await repo.upsertMedia(
+      createInput({
+        path: '/interludes/penny_intro.mp4',
+        filename: 'penny_intro.mp4',
+        durationSeconds: 30,
+        isInterlude: false,
+        mediaType: 'intro',
+      })
+    )
 
     const item = (await repo.getAll())[0]
     expect(item?.mediaType).toBe('intro')
