@@ -10,7 +10,9 @@ import { createServer } from './server'
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 1993
 
 async function main(): Promise<void> {
-  console.log('🍞 ToastTV starting...')
+  const profile = process.env.TOASTTV_PROFILE
+  const profileSuffix = profile ? ` [profile: ${profile}]` : ''
+  console.log(`🍞 ToastTV starting...${profileSuffix}`)
 
   const daemon = new ToastTVDaemon('./data/config.json')
 

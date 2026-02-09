@@ -37,8 +37,10 @@ src/
 | Component | Owns |
 |-----------|------|
 | `PlaybackService` | Playback loop, player control, **off-air state** |
-| `PlaylistEngine` | **Current video**, queue, shuffle, interludes |
+| `PlaylistEngine` | **Current video**, queue, shuffle, interludes, **safeMode filtering** |
 | `SessionManager` | Session state, timing, **daily quotas** |
+| `MediaIndexer` | File scanning, **compatibility checking** |
+| `HardwareDetectionService` | Device profile, codec support |
 | `MediaRepository` | Media items (DB) |
 | `ConfigRepository` | App config |
 
@@ -54,8 +56,8 @@ src/
 
 ```
 [USB/Folder] → MediaIndexer → SQLite
-                    ↓
-            PlaylistEngine → Queue
+                    ↓ (+ HardwareDetection)
+            PlaylistEngine → Queue (filtered by compatibility)
                     ↓
             PlaybackService → MPV → HDMI
 ```

@@ -294,11 +294,7 @@ export class MpvClient implements IMediaPlayer {
       console.error('Logo optimization failed, using original:', e)
     }
 
-    console.log(`[MpvClient] Setting logo via Lua OSD:`, {
-      config,
-      align,
-      finalPath,
-    })
+    // Logo configured via Lua OSD script
 
     try {
       // script-message show-logo <path> <align> <mx> <my> <opacity>

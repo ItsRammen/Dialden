@@ -45,6 +45,9 @@ export interface AppConfig {
     cecEnabled: boolean
     heartbeatIntervalMs: number
   }
+  playback: {
+    safeMode: boolean // Exclude incompatible files from queue (default: true)
+  }
 }
 
 export type DeepPartial<T> = {
@@ -87,6 +90,9 @@ const DEFAULT_CONFIG: AppConfig = {
   detection: {
     cecEnabled: true,
     heartbeatIntervalMs: 30000,
+  },
+  playback: {
+    safeMode: true,
   },
 }
 
@@ -213,6 +219,9 @@ export class ConfigRepository {
           s['detection.heartbeatIntervalMs'] ?? '30000',
           10
         ),
+      },
+      playback: {
+        safeMode: s['playback.safeMode'] !== 'false', // Default true
       },
     }
   }

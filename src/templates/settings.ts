@@ -11,6 +11,7 @@ import { renderLayout } from './layout'
 export interface SettingsProps {
   config: AppConfig
   mediaDirectory: string
+  hardwareProfileName?: string
 }
 
 export function renderSettings(props: SettingsProps): string {
@@ -151,6 +152,34 @@ export function renderSettings(props: SettingsProps): string {
               <label for="serverPort">Port</label>
               <input type="number" id="serverPort" name="serverPort" value="${config.server.port}" min="1" max="65535">
               <span class="hint">Default: 1993. Requires restart.</span>
+            </div>
+          </section>
+          
+          <!-- Playback Settings Card -->
+          <section class="settings-card">
+            <div class="card-header">
+              <h2>🎮 Playback</h2>
+            </div>
+            
+            <div class="form-group">
+              <div class="setting-row">
+                <div>
+                  <label for="safeMode">Safe Mode</label>
+                  <span class="hint">Exclude incompatible files from queue</span>
+                </div>
+                <label class="toggle">
+                  <input type="checkbox" id="safeMode" name="safeMode" value="true" ${config.playback.safeMode ? 'checked' : ''}>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+            
+            <div class="form-group" id="hardware-profile-section">
+              <label>Hardware Profile</label>
+              <div class="hardware-profile-display">
+                <span class="profile-badge">${props.hardwareProfileName ?? 'Unknown'}</span>
+                <span class="hint">Device capabilities are auto-detected</span>
+              </div>
             </div>
           </section>
         </div>

@@ -10,24 +10,28 @@ import type { ConfigService } from '../services/ConfigService'
 import type { AppConfig, DeepPartial } from '../repositories/ConfigRepository'
 import { renderSettings } from '../templates/settings'
 import type { MediaService } from '../services/MediaService'
+import type { IHardwareDetectionService } from '../services/HardwareDetectionService'
 
 interface SettingsControllerDeps {
   config: ConfigService
   media: MediaService
+  hardware?: IHardwareDetectionService
 }
 
 export function createSettingsController(deps: SettingsControllerDeps) {
-  const { config, media } = deps
+  const { config, media, hardware } = deps
   const controller = new Hono()
 
   // --- Pages ---
 
   controller.get('/settings', async (c) => {
     const currentConfig = await config.get()
+    const profile = hardware?.getProfile()
     return c.html(
       renderSettings({
         config: currentConfig,
         mediaDirectory: media.getMediaDirectory(),
+        hardwareProfileName: profile?.name,
       })
     )
   })
@@ -73,6 +77,9 @@ export function createSettingsController(deps: SettingsControllerDeps) {
         y: Number.isNaN(parseInt(body['logoY'] as string, 10))
           ? 8
           : parseInt(body['logoY'] as string, 10),
+      },
+      playback: {
+        safeMode: body['safeMode'] === 'true',
       },
     }
 

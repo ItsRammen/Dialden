@@ -25,3 +25,8 @@ data/media.db
 data/media.db-wal
 data/media.db-shm
 data/thumbnails/
+
+# User videos (only track demo content)
+media/videos/*
+!media/videos/caminandes_*.mp4
+!media/videos/LICENSE.md

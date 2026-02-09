@@ -5,7 +5,7 @@
  * Implementations can use SQLite, PostgreSQL, or any other storage.
  */
 
-import type { MediaItem, MediaType } from '../types'
+import type { MediaItem, MediaType, Compatibility } from '../types'
 
 /**
  * Input type for creating/updating media items.
@@ -135,4 +135,12 @@ export interface IMediaRepository {
    * Get all configuration settings as a key-value map
    */
   getAllSettings(): Promise<Record<string, string>>
+
+  /**
+   * Update compatibility for multiple items in a single transaction.
+   * Used when hardware profile changes.
+   */
+  updateCompatibilityBatch(
+    updates: Array<{ id: number; compatibility: Compatibility }>
+  ): Promise<number>
 }

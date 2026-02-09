@@ -30,6 +30,7 @@ const createVideo = (
   height: null,
   warning: null,
   mtime: null,
+  compatibility: 'compatible',
   ...override,
 })
 
@@ -63,6 +64,9 @@ describe('PlaylistEngine', () => {
       interlude: {
         enabled: true,
         frequency: 2,
+      },
+      playback: {
+        safeMode: false, // Disable for tests (mock videos have no compatibility set)
       },
     } as any)
 
@@ -110,6 +114,7 @@ describe('PlaylistEngine', () => {
     configRepo.get.mockResolvedValue({
       session: { limitMinutes: 60, introVideoId: 99 },
       interlude: { enabled: true, frequency: 2 },
+      playback: { safeMode: false },
     } as any)
 
     const first = await engine.startSession()
@@ -139,6 +144,7 @@ describe('PlaylistEngine', () => {
     configRepo.get.mockResolvedValue({
       session: { limitMinutes: 60 },
       interlude: { enabled: true, frequency: 2 },
+      playback: { safeMode: false },
     } as any)
 
     // Start session = video 1 (count 1)

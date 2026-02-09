@@ -15,10 +15,14 @@ import type {
   MediaConfig,
   MediaMetadata,
   MediaType,
+  Compatibility,
 } from '../types'
+import type { IHardwareDetectionService } from './HardwareDetectionService'
+import type { HardwareProfile } from '../config/hardwareProfiles'
 
 export class MediaIndexer {
   private scanInProgress = false
+  private hardwareProfile: HardwareProfile | null = null
 
   constructor(
     private readonly mediaConfig: MediaConfig,
@@ -26,8 +30,14 @@ export class MediaIndexer {
     private readonly repository: IMediaRepository,
     private readonly filesystem: IFileSystem,
     private readonly mediaProbe: IMediaProbe,
-    private readonly thumbnailClient?: IThumbnailClient
-  ) {}
+    private readonly thumbnailClient?: IThumbnailClient,
+    private readonly hardwareDetection?: IHardwareDetectionService
+  ) {
+    // Cache hardware profile for compatibility checking
+    if (this.hardwareDetection) {
+      this.hardwareProfile = this.hardwareDetection.getProfile()
+    }
+  }
 
   async scanAll(): Promise<number> {
     if (this.scanInProgress) {
@@ -67,6 +77,43 @@ export class MediaIndexer {
     } finally {
       this.scanInProgress = false
     }
+  }
+
+  /**
+   * Recalculate compatibility for all existing media without re-probing.
+   * Uses stored metadata (codec, height, fps, bitrate).
+   * Called when hardware profile changes.
+   */
+  async recalculateCompatibility(): Promise<number> {
+    if (!this.hardwareProfile) {
+      return 0 // No profile means all are 'compatible'
+    }
+
+    const allMedia = await this.repository.getAll()
+    const updates: Array<{ id: number; compatibility: Compatibility }> = []
+
+    for (const item of allMedia) {
+      const metadata: MediaMetadata = {
+        durationSeconds: item.durationSeconds,
+        codec: item.codec,
+        width: item.width,
+        height: item.height,
+        fps: null, // Not stored currently, use null
+        bitrateMbps: null, // Not stored currently, use null
+      }
+
+      const newCompatibility = this.checkCompatibility(metadata)
+      if (newCompatibility !== item.compatibility) {
+        updates.push({ id: item.id, compatibility: newCompatibility })
+      }
+    }
+
+    if (updates.length > 0) {
+      await this.repository.updateCompatibilityBatch(updates)
+      console.log(`Recalculated compatibility: ${updates.length} files updated`)
+    }
+
+    return updates.length
   }
 
   private async scanDirectory(
@@ -132,6 +179,7 @@ export class MediaIndexer {
       height: number | null
       warning: string | null
       mtime: number | null
+      compatibility: Compatibility
     }> = []
 
     // Add new + changed files
@@ -139,16 +187,19 @@ export class MediaIndexer {
       const filePath = filesToProbe[i]
       if (!filePath) continue // TypeScript guard
       const filename = getFilename(filePath)
-      const metadata = metadataResults[i] ?? {
+      const metadata: MediaMetadata = metadataResults[i] ?? {
         durationSeconds: 0,
         codec: null,
         width: null,
         height: null,
+        fps: null,
+        bitrateMbps: null,
       }
       const mediaType = this.detectMediaType(filename, isInterlude)
       const { start: dateStart, end: dateEnd } = this.detectDates(filename)
       const warning = this.generateWarning(metadata.codec)
       const mtime = this.filesystem.getMtime(filePath)
+      const compatibility = this.checkCompatibility(metadata)
 
       itemsToUpsert.push({
         path: filePath,
@@ -163,6 +214,7 @@ export class MediaIndexer {
         height: metadata.height,
         warning,
         mtime,
+        compatibility,
       })
 
       console.log(
@@ -220,6 +272,8 @@ export class MediaIndexer {
               codec: null,
               width: null,
               height: null,
+              fps: null,
+              bitrateMbps: null,
             }
           }
         })
@@ -244,6 +298,50 @@ export class MediaIndexer {
       return 'HEVC may not play smoothly on Raspberry Pi Zero 2 W'
     }
     return null
+  }
+
+  /**
+   * Check compatibility against detected hardware profile.
+   * Returns 'compatible', 'marginal', or 'incompatible'.
+   */
+  private checkCompatibility(metadata: MediaMetadata): Compatibility {
+    const profile = this.hardwareProfile
+    if (!profile) {
+      // No hardware detection available — assume compatible
+      return 'compatible'
+    }
+
+    const codec = metadata.codec?.toLowerCase() ?? ''
+    const height = metadata.height ?? 0
+    const fps = metadata.fps ?? 0
+    const bitrate = metadata.bitrateMbps ?? 0
+
+    // INCOMPATIBLE: Hard blocks - won't play
+    // H.265/HEVC on devices without hardware decode
+    if (
+      (codec === 'hevc' || codec === 'h265' || codec === 'h.265') &&
+      profile.codecs.h265 === 'none'
+    ) {
+      return 'incompatible'
+    }
+
+    // Resolution exceeds device max
+    if (height > profile.maxResolution) {
+      return 'incompatible'
+    }
+
+    // MARGINAL: Soft limits - may stutter
+    // 1080p60 on devices that only support 1080p30
+    if (height >= 1080 && fps > profile.maxFps1080p) {
+      return 'marginal'
+    }
+
+    // Bitrate exceeds recommended maximum
+    if (bitrate > 0 && bitrate > profile.maxBitrateMbps) {
+      return 'marginal'
+    }
+
+    return 'compatible'
   }
 
   /**
@@ -377,23 +475,27 @@ export class MediaIndexer {
       height: number | null
       warning: string | null
       mtime: number | null
+      compatibility: Compatibility
     }> = []
 
     for (let i = 0; i < newPaths.length; i++) {
       const filePath = newPaths[i]
       if (!filePath) continue
       const filename = getFilename(filePath)
-      const metadata = metadataResults[i] ?? {
+      const metadata: MediaMetadata = metadataResults[i] ?? {
         durationSeconds: 0,
         codec: null,
         width: null,
         height: null,
+        fps: null,
+        bitrateMbps: null,
       }
       const isInterlude = filePath.startsWith(this.interludeConfig.directory)
       const mediaType = this.detectMediaType(filename, isInterlude)
       const { start: dateStart, end: dateEnd } = this.detectDates(filename)
       const warning = this.generateWarning(metadata.codec)
       const mtime = this.filesystem.getMtime(filePath)
+      const compatibility = this.checkCompatibility(metadata)
 
       items.push({
         path: filePath,
@@ -408,6 +510,7 @@ export class MediaIndexer {
         height: metadata.height,
         warning,
         mtime,
+        compatibility,
       })
 
       console.log(

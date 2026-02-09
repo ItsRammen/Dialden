@@ -55,6 +55,7 @@ export class PlaylistEngine {
     resetHour: 6,
     introVideoId: null as number | null,
     outroVideoId: null as number | null,
+    safeMode: true,
   }
 
   constructor(
@@ -339,13 +340,19 @@ export class PlaylistEngine {
   async refreshCache(): Promise<void> {
     const all = await this.repository.getAll()
     // Exclude interludes, intro, and outro from regular videos (they are handled specially)
-    this.cachedVideos = all.filter(
+    let videos = all.filter(
       (m) =>
         !m.isInterlude &&
         m.mediaType !== 'intro' &&
         m.mediaType !== 'outro' &&
         m.mediaType !== 'offair'
     )
+
+    // Safe Mode: filter out incompatible files
+    if (this.cachedConfig.safeMode) {
+      videos = videos.filter((m) => m.compatibility !== 'incompatible')
+    }
+    this.cachedVideos = videos
     // Special videos (intro/outro) are cached for lookup but not shuffled
     this.cachedSpecialVideos = all.filter(
       (m) => m.mediaType === 'intro' || m.mediaType === 'outro'
@@ -374,6 +381,7 @@ export class PlaylistEngine {
       resetHour: appConfig.session.resetHour,
       introVideoId: appConfig.session.introVideoId,
       outroVideoId: appConfig.session.outroVideoId,
+      safeMode: appConfig.playback.safeMode,
     }
   }
 }

@@ -22,6 +22,7 @@ const createInput = (override?: Partial<MediaItemInput>): MediaItemInput => ({
   height: null,
   warning: null,
   mtime: null,
+  compatibility: 'compatible',
   ...override,
 })
 

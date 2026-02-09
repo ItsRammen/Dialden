@@ -23,6 +23,7 @@ import { SessionManager } from './services/SessionManager'
 import { ConfigService } from './services/ConfigService'
 import { PlaybackService } from './services/PlaybackService'
 import { TVDetectionService } from './services/TVDetectionService'
+import { HardwareDetectionService } from './services/HardwareDetectionService'
 import type { MediaItem, ToastTVConfig, IMediaPlayer } from './types'
 
 export class ToastTVDaemon {
@@ -37,6 +38,7 @@ export class ToastTVDaemon {
   private configService: ConfigService | null = null
   private detectionService: TVDetectionService | null = null
   private cecClient: CECClient | null = null
+  private hardwareService: HardwareDetectionService | null = null
 
   constructor(configPath = './data/config.json') {
     this.appConfig = new ConfigRepository(configPath)
@@ -100,6 +102,11 @@ export class ToastTVDaemon {
     return this.configService
   }
 
+  getHardwareService(): HardwareDetectionService {
+    if (!this.hardwareService) throw new Error('Daemon not initialized')
+    return this.hardwareService
+  }
+
   /**
    * Initialize components (DB, Services). Fast.
    * Call this before starting the web server.
@@ -141,13 +148,18 @@ export class ToastTVDaemon {
       directory: path.join(bootstrap.paths.media, 'interludes'),
     }
 
+    // Hardware detection for compatibility checking
+    this.hardwareService = new HardwareDetectionService()
+    this.hardwareService.detect() // Cache the profile on init
+
     this.indexer = new MediaIndexer(
       mediaConfig,
       interludeConfig,
       this.repository,
       filesystem,
       mediaProbe,
-      thumbnailClient
+      thumbnailClient,
+      this.hardwareService
     )
 
     this.engine = new PlaylistEngine(
@@ -177,7 +189,21 @@ export class ToastTVDaemon {
     // 5. Create ConfigService (needed for PlaybackService)
     this.configService = new ConfigService(this.appConfig)
 
-    // 6. Run scan in background (non-blocking)
+    // 6. Check if hardware profile changed - recalculate compatibility if so
+    if (this.hardwareService && this.repository) {
+      const currentProfile = this.hardwareService.detect().profileKey
+      const lastProfile = await this.repository.getSetting('last_profile_key')
+
+      if (lastProfile !== currentProfile) {
+        console.log(
+          `Hardware profile changed: ${lastProfile ?? 'none'} → ${currentProfile}`
+        )
+        await this.indexer.recalculateCompatibility()
+        await this.repository.setSetting('last_profile_key', currentProfile)
+      }
+    }
+
+    // 7. Run scan in background (non-blocking)
     // Dashboard may show stale/empty library briefly on first launch
     this.indexer
       .scanAll()

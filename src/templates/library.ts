@@ -227,12 +227,25 @@ export function renderMediaItem(
   }
   const itemClass = getItemClass(displayType)
 
+  // Compatibility badge for hardware issues
+  const getCompatibilityBadge = (): string => {
+    if (item.compatibility === 'incompatible') {
+      return '<span class="compat-badge compat-incompatible" title="Cannot play on this device">❌</span>'
+    }
+    if (item.compatibility === 'marginal') {
+      return '<span class="compat-badge compat-marginal" title="May stutter or drop frames">⚠️</span>'
+    }
+    return ''
+  }
+  const compatBadge = getCompatibilityBadge()
+
   if (view === 'grid') {
     return `
       <div class="media-card ${itemClass ? `${itemClass}-card` : ''}" id="media-${item.id}">
         <div class="media-card-thumb" style="background-image: url('${thumbnailUrl}')">
           <span class="media-card-duration">${formatTime(item.durationSeconds)}</span>
           ${status ? `<span class="status-pill ${status.class}">${status.label}</span>` : ''}
+          ${compatBadge}
           <span class="media-type-badge" id="badge-${item.id}">${MEDIA_TYPE_ICONS[displayType]}</span>
         </div>
         <div class="media-card-info">
@@ -252,6 +265,7 @@ export function renderMediaItem(
         <div class="media-thumb" style="background-image: url('${thumbnailUrl}')"></div>
         <span class="media-icon" id="badge-${item.id}">${MEDIA_TYPE_ICONS[displayType]}</span>
         <span class="media-name">${item.filename}</span>
+        ${compatBadge}
         ${status ? `<span class="status-pill ${status.class}">${status.label}</span>` : ''}
         <span class="media-duration">${formatTime(item.durationSeconds)}</span>
         ${renderTypeSelect(item, displayType)}

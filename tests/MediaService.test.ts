@@ -28,6 +28,7 @@ const createItem = (id: number, filename: string): MediaItem => ({
   height: null,
   warning: null,
   mtime: null,
+  compatibility: 'compatible',
 })
 
 describe('MediaService', () => {

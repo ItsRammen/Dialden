@@ -6,7 +6,7 @@
  */
 
 import { Database } from 'bun:sqlite'
-import type { MediaItem, MediaType } from '../types'
+import type { MediaItem, MediaType, Compatibility } from '../types'
 import type { IMediaRepository, MediaItemInput } from './IMediaRepository'
 
 // Base schema without media_type (for backwards compatibility)
@@ -78,6 +78,15 @@ export class MediaRepository implements IMediaRepository {
       console.log('Migrated database to include mtime column')
     }
 
+    // Hardware compatibility migration: add compatibility column
+    const hasCompatibility = columns.some((c) => c.name === 'compatibility')
+    if (!hasCompatibility) {
+      this.db.exec(
+        `ALTER TABLE media ADD COLUMN compatibility TEXT NOT NULL DEFAULT 'compatible'`
+      )
+      console.log('Migrated database to include compatibility column')
+    }
+
     // Now create index on media_type (column guaranteed to exist)
     this.db.exec(
       `CREATE INDEX IF NOT EXISTS idx_media_type ON media(media_type);`
@@ -128,7 +137,7 @@ export class MediaRepository implements IMediaRepository {
     if (!this.db) throw new Error('Repository not initialized')
 
     const stmt = this.db.prepare(`
-      SELECT id, path, filename, duration_seconds, is_interlude, media_type, date_start, date_end
+      SELECT id, path, filename, duration_seconds, is_interlude, media_type, date_start, date_end, codec, width, height, warning, mtime, compatibility
       FROM media WHERE media_type = 'video'
     `)
 
@@ -150,7 +159,7 @@ export class MediaRepository implements IMediaRepository {
     // Current date passed in is YYYY-MM-DD. We extract MM-DD.
 
     const stmt = this.db.prepare(`
-      SELECT id, path, filename, duration_seconds, is_interlude, media_type, date_start, date_end
+      SELECT id, path, filename, duration_seconds, is_interlude, media_type, date_start, date_end, codec, width, height, warning, mtime, compatibility
       FROM media
       WHERE media_type = 'interlude'
         AND (
@@ -176,7 +185,7 @@ export class MediaRepository implements IMediaRepository {
     if (!this.db) throw new Error('Repository not initialized')
 
     const stmt = this.db.prepare(`
-      SELECT id, path, filename, duration_seconds, is_interlude, media_type, date_start, date_end
+      SELECT id, path, filename, duration_seconds, is_interlude, media_type, date_start, date_end, codec, width, height, warning, mtime, compatibility
       FROM media ORDER BY filename
     `)
 
@@ -188,7 +197,7 @@ export class MediaRepository implements IMediaRepository {
     if (!this.db) throw new Error('Repository not initialized')
 
     const stmt = this.db.prepare(`
-      SELECT id, path, filename, duration_seconds, is_interlude, media_type, date_start, date_end
+      SELECT id, path, filename, duration_seconds, is_interlude, media_type, date_start, date_end, codec, width, height, warning, mtime, compatibility
       FROM media WHERE media_type = ?
     `)
 
@@ -279,7 +288,7 @@ export class MediaRepository implements IMediaRepository {
     if (!this.db) throw new Error('Repository not initialized')
 
     const stmt = this.db.prepare(`
-      SELECT id, path, filename, duration_seconds, is_interlude, media_type, date_start, date_end
+      SELECT id, path, filename, duration_seconds, is_interlude, media_type, date_start, date_end, codec, width, height, warning, mtime, compatibility
       FROM media WHERE id = ?
     `)
     const row = stmt.get(id) as Record<string, unknown> | null
@@ -290,7 +299,7 @@ export class MediaRepository implements IMediaRepository {
     if (!this.db) throw new Error('Repository not initialized')
 
     const stmt = this.db.prepare(`
-      SELECT id, path, filename, duration_seconds, is_interlude, media_type, date_start, date_end
+      SELECT id, path, filename, duration_seconds, is_interlude, media_type, date_start, date_end, codec, width, height, warning, mtime, compatibility
       FROM media WHERE path = ?
     `)
     const row = stmt.get(path) as Record<string, unknown> | null
@@ -312,6 +321,11 @@ export class MediaRepository implements IMediaRepository {
 
   private rowToMediaItem(row: Record<string, unknown>): MediaItem {
     const mediaType = (row.media_type as MediaType) ?? 'video'
+    const rawCompat = row.compatibility as string | undefined
+    const compatibility =
+      rawCompat === 'marginal' || rawCompat === 'incompatible'
+        ? rawCompat
+        : 'compatible'
     return {
       id: row.id as number,
       path: row.path as string,
@@ -326,6 +340,7 @@ export class MediaRepository implements IMediaRepository {
       height: (row.height as number) ?? null,
       warning: (row.warning as string) ?? null,
       mtime: (row.mtime as number) ?? null,
+      compatibility,
     }
   }
 
@@ -342,7 +357,7 @@ export class MediaRepository implements IMediaRepository {
       const chunk = paths.slice(i, i + CHUNK_SIZE)
       const placeholders = chunk.map(() => '?').join(',')
       const stmt = this.db.prepare(`
-        SELECT id, path, filename, duration_seconds, is_interlude, media_type, date_start, date_end
+        SELECT id, path, filename, duration_seconds, is_interlude, media_type, date_start, date_end, codec, width, height, warning, mtime, compatibility
         FROM media WHERE path IN (${placeholders})
       `)
       const rows = stmt.all(...chunk) as Array<Record<string, unknown>>
@@ -454,5 +469,35 @@ export class MediaRepository implements IMediaRepository {
       console.log(`Removed ${removed} stale entries from database`)
     }
     return removed
+  }
+
+  /**
+   * Update compatibility for multiple items in a single transaction.
+   * Used when hardware profile changes.
+   */
+  async updateCompatibilityBatch(
+    updates: Array<{ id: number; compatibility: Compatibility }>
+  ): Promise<number> {
+    if (!this.db) throw new Error('Repository not initialized')
+    if (updates.length === 0) return 0
+
+    const stmt = this.db.prepare(
+      'UPDATE media SET compatibility = ? WHERE id = ?'
+    )
+
+    let count = 0
+    this.db.exec('BEGIN TRANSACTION')
+    try {
+      for (const { id, compatibility } of updates) {
+        stmt.run(compatibility, id)
+        count++
+      }
+      this.db.exec('COMMIT')
+    } catch (e) {
+      this.db.exec('ROLLBACK')
+      throw e
+    }
+
+    return count
   }
 }

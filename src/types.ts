@@ -9,6 +9,8 @@
 
 export type MediaType = 'video' | 'interlude' | 'intro' | 'outro' | 'offair'
 
+export type Compatibility = 'compatible' | 'marginal' | 'incompatible'
+
 export interface MediaItem {
   readonly id: number
   readonly path: string
@@ -25,6 +27,8 @@ export interface MediaItem {
   readonly warning: string | null
   // Delta scanning (Phase 4)
   readonly mtime: number | null // Unix timestamp in ms
+  // Hardware compatibility
+  readonly compatibility: Compatibility
 }
 
 export interface PlaybackStatus {
@@ -129,6 +133,8 @@ export interface MediaMetadata {
   readonly codec: string | null
   readonly width: number | null
   readonly height: number | null
+  readonly fps: number | null
+  readonly bitrateMbps: number | null
 }
 
 export interface IDateTimeProvider {

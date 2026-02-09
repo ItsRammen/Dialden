@@ -28,6 +28,7 @@ const createMediaItemBuilder = (override?: Partial<MediaItem>): MediaItem => ({
   height: null,
   warning: null,
   mtime: null,
+  compatibility: 'compatible',
   ...override,
 })
 

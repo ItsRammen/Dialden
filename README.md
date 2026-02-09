@@ -78,6 +78,18 @@ make dev       # Start with watch mode
 make test      # Run tests
 ```
 
+### Testing Different Hardware Profiles
+
+Force a specific Pi profile to test media compatibility:
+
+```bash
+make start PROFILE=pi-zero-2w   # Test as Pi Zero 2 W (limited)
+make start PROFILE=pi-4         # Test as Pi 4 (full capability)
+make dev PROFILE=pi-zero-2w     # Dev mode with profile
+```
+
+Available profiles: `pi-zero-2w`, `pi-3`, `pi-4`, `pi-5`, `unknown`
+
 ### RPi Simulator Testing
 
 Test the install flow locally using a Raspberry Pi VM (or any ARM64 VM):

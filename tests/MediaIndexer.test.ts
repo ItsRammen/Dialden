@@ -50,6 +50,8 @@ describe('MediaIndexer', () => {
       codec: 'h264',
       width: 1920,
       height: 1080,
+      fps: 30,
+      bitrateMbps: 10,
     })
 
     indexer = new MediaIndexer(mediaConfig, interludeConfig, repo, fs, probe)

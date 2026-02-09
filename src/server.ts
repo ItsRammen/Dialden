@@ -62,6 +62,7 @@ export function createServer(daemon: ToastTVDaemon): ServerResult {
   const settingsController = createSettingsController({
     config: configService,
     media: mediaService,
+    hardware: daemon.getHardwareService(),
   })
 
   const dashboardController = createDashboardController({

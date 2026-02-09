@@ -331,6 +331,35 @@
   font-size: 0.875rem;
 }
 
+/* --- Compatibility Badges --- */
+.compat-badge {
+  font-size: 0.875rem;
+  cursor: help;
+}
+
+/* Grid view: position in top-left corner */
+.media-card-thumb .compat-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  background: rgba(0, 0, 0, 0.7);
+  padding: 0.125rem 0.375rem;
+  border-radius: 4px;
+}
+
+/* List view: inline with other elements */
+.media-item-main .compat-badge {
+  flex-shrink: 0;
+}
+
+.compat-incompatible {
+  color: #e74c3c;
+}
+
+.compat-marginal {
+  color: #f39c12;
+}
+
 /* --- Library Toolbar --- */
 .library-toolbar {
   display: flex;

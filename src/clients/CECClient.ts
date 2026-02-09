@@ -28,15 +28,28 @@ export class CECClient {
     // -d 8 gives full traffic, -d 1 gives human-readable but less complete
     const debugLevel = process.env.CEC_DEBUG === 'verbose' ? '8' : '8'
 
-    this.process = Bun.spawn(['cec-client', '-d', debugLevel], {
-      stdout: 'pipe',
-      stderr: 'inherit',
-    })
+    try {
+      this.process = Bun.spawn(['cec-client', '-d', debugLevel], {
+        stdout: 'pipe',
+        stderr: 'inherit',
+      })
 
-    this.running = true
+      this.running = true
 
-    // Read stdout line by line
-    this.readOutput()
+      // Read stdout line by line
+      this.readOutput()
+    } catch (error) {
+      // cec-client not available (e.g., on macOS or non-Pi Linux)
+      const err = error as { code?: string }
+      if (err.code === 'ENOENT') {
+        console.log(
+          'CEC: cec-client not found (HDMI-CEC unavailable on this system)'
+        )
+      } else {
+        console.log('CEC: Failed to start -', error)
+      }
+      this.running = false
+    }
   }
 
   async stop(): Promise<void> {

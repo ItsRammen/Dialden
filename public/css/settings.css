@@ -580,3 +580,38 @@ input[type="range"]::-webkit-slider-thumb {
     flex-direction: column;
   }
 }
+
+/* --- Setting Row (inline toggle) --- */
+.setting-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.setting-row > div {
+  flex: 1;
+}
+
+.setting-row > div > label {
+  margin-bottom: 0;
+}
+
+/* --- Hardware Profile Display --- */
+.hardware-profile-display {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.profile-badge {
+  display: inline-block;
+  padding: 0.375rem 0.75rem;
+  background: rgba(0, 206, 201, 0.15);
+  border: 1px solid var(--toast-teal);
+  border-radius: 6px;
+  font-size: 0.875rem;
+  color: var(--toast-teal);
+  font-weight: 500;
+  width: fit-content;
+}

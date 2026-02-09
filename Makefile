@@ -11,15 +11,18 @@ MPV_SOCKET := /tmp/toasttv-mpv.sock
 
 help:
 	@echo "ToastTV Commands:"
-	@echo "  make install      - Install Bun + dependencies (mpv, ffmpeg)"
-	@echo "  make start        - Start MPV + daemon"
-	@echo "  make dev          - Start with watch mode"
-	@echo "  make test         - Run unit tests"
-	@echo "  make typecheck    - Run TypeScript type checking"
-	@echo "  make mpv          - Start MPV daemon locally"
-	@echo "  make pack         - Build local release tarball"
-	@echo "  make serve-local  - Pack + start dev server for VM testing"
-	@echo "  make clean        - Remove build artifacts"
+	@echo "  make install        - Install Bun + dependencies (mpv, ffmpeg)"
+	@echo "  make start          - Start MPV + daemon"
+	@echo "  make dev            - Start with watch mode"
+	@echo "  make test           - Run unit tests"
+	@echo "  make typecheck      - Run TypeScript type checking"
+	@echo "  make mpv            - Start MPV daemon locally"
+	@echo "  make pack           - Build local release tarball"
+	@echo "  make serve-local    - Pack + start dev server for VM testing"
+	@echo "  make clean          - Remove build artifacts"
+	@echo ""
+	@echo "Options:"
+	@echo "  PROFILE=pi-zero-2w  - Force hardware profile (pi-zero-2w, pi-3, pi-4, pi-5, unknown)"
 
 install:
 	@# Install Bun if needed
@@ -64,10 +67,10 @@ mpv:
 	fi
 
 start: mpv
-	@$(BUN) run src/main.ts
+	@TOASTTV_PROFILE=$(PROFILE) $(BUN) run src/main.ts
 
 dev: mpv
-	@$(BUN) --watch run src/main.ts
+	@TOASTTV_PROFILE=$(PROFILE) $(BUN) --watch run src/main.ts
 
 test:
 	@$(BUN) test

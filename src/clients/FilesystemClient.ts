@@ -108,25 +108,55 @@ export class FFProbeClient implements IMediaProbe {
 
     try {
       const data = JSON.parse(output) as {
-        format?: { duration?: string }
+        format?: { duration?: string; bit_rate?: string }
         streams?: Array<{
           codec_name?: string
           width?: number
           height?: number
+          avg_frame_rate?: string
         }>
       }
 
       const duration = Math.floor(parseFloat(data.format?.duration ?? '0') || 0)
       const stream = data.streams?.[0]
 
+      // Parse frame rate (e.g., "30000/1001" or "30/1")
+      let fps: number | null = null
+      if (stream?.avg_frame_rate) {
+        const parts = stream.avg_frame_rate.split('/')
+        const num = parseFloat(parts[0] ?? '0')
+        const den = parseFloat(parts[1] ?? '1')
+        if (den > 0) {
+          fps = Math.round(num / den)
+        }
+      }
+
+      // Parse bitrate in Mbps
+      let bitrateMbps: number | null = null
+      if (data.format?.bit_rate) {
+        const bps = parseInt(data.format.bit_rate, 10)
+        if (!Number.isNaN(bps)) {
+          bitrateMbps = Math.round(bps / 1_000_000)
+        }
+      }
+
       return {
         durationSeconds: duration,
         codec: stream?.codec_name ?? null,
         width: stream?.width ?? null,
         height: stream?.height ?? null,
+        fps,
+        bitrateMbps,
       }
     } catch {
-      return { durationSeconds: 0, codec: null, width: null, height: null }
+      return {
+        durationSeconds: 0,
+        codec: null,
+        width: null,
+        height: null,
+        fps: null,
+        bitrateMbps: null,
+      }
     }
   }
 
