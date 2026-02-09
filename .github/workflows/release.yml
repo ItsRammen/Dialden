@@ -41,3 +41,14 @@ jobs:
             release/toasttv-*.tar.gz
             release/media.tar.gz
           generate_release_notes: true
+
+      - name: Update version files for auto-update
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          echo "$VERSION" > website/version.txt
+          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" package.json
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add website/version.txt package.json
+          git commit -m "chore: bump version to $VERSION" || exit 0
+          git push origin HEAD:main

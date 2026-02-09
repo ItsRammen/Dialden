@@ -309,14 +309,21 @@ if [[ -f "$USER_CONF" ]] && command -v aplay >/dev/null; then
     fi
 fi
 
-# Install Scripts (logo.lua)
+# Install Scripts (logo.lua, update.sh)
 if [[ -f "$INSTALL_DIR/toasttv/scripts/logo.lua" ]]; then
     cp $INSTALL_DIR/toasttv/scripts/logo.lua $INSTALL_DIR/scripts/
 fi
+if [[ -f "$INSTALL_DIR/toasttv/scripts/update.sh" ]]; then
+    cp $INSTALL_DIR/toasttv/scripts/update.sh $INSTALL_DIR/scripts/
+    chmod +x $INSTALL_DIR/scripts/update.sh
+fi
+
+# Write installed version
+echo "$VERSION" > $INSTALL_DIR/data/version.txt
 
 # Cleanup
 rm -rf $INSTALL_DIR/toasttv "$TMP_DIR"
-log "Application installed"
+log "Application installed ($VERSION)"
 
 # --- Configure Service ---
 step "Configuring service"
@@ -405,7 +412,32 @@ NoNewPrivileges=true
 WantedBy=multi-user.target
 SERVICE
 
-log "Service configured"
+# Auto-update timer (daily at 4am)
+cat > /etc/systemd/system/${SERVICE_NAME}-update.service << UPDATE_SVC
+[Unit]
+Description=ToastTV Auto-Update
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash $INSTALL_DIR/scripts/update.sh
+UPDATE_SVC
+
+cat > /etc/systemd/system/${SERVICE_NAME}-update.timer << UPDATE_TIMER
+[Unit]
+Description=ToastTV Daily Update Check
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+RandomizedDelaySec=1800
+
+[Install]
+WantedBy=timers.target
+UPDATE_TIMER
+
+systemctl enable ${SERVICE_NAME}-update.timer &>/dev/null 2>&1 || true
+log "Service configured (with auto-update timer)"
 
 # --- Set Permissions ---
 chown -R $SERVICE_NAME:$SERVICE_NAME $INSTALL_DIR

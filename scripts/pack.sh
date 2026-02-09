@@ -55,6 +55,7 @@ cp -r data "$RELEASE_DIR/"
 # Scripts
 mkdir -p "$RELEASE_DIR/scripts"
 cp scripts/install.sh "$RELEASE_DIR/scripts/"
+cp scripts/update.sh "$RELEASE_DIR/scripts/" 2>/dev/null || true
 cp scripts/logo.lua "$RELEASE_DIR/scripts/" 2>/dev/null || true
 
 # Docs
