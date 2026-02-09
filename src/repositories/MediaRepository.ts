@@ -61,6 +61,23 @@ export class MediaRepository implements IMediaRepository {
       console.log('Migrated database to include media_type column')
     }
 
+    // Phase 3 Migration: add extended metadata columns
+    const hasCodec = columns.some((c) => c.name === 'codec')
+    if (!hasCodec) {
+      this.db.exec(`ALTER TABLE media ADD COLUMN codec TEXT`)
+      this.db.exec(`ALTER TABLE media ADD COLUMN width INTEGER`)
+      this.db.exec(`ALTER TABLE media ADD COLUMN height INTEGER`)
+      this.db.exec(`ALTER TABLE media ADD COLUMN warning TEXT`)
+      console.log('Migrated database to include extended metadata columns')
+    }
+
+    // Phase 4 Migration: add mtime column
+    const hasMtime = columns.some((c) => c.name === 'mtime')
+    if (!hasMtime) {
+      this.db.exec(`ALTER TABLE media ADD COLUMN mtime INTEGER`)
+      console.log('Migrated database to include mtime column')
+    }
+
     // Now create index on media_type (column guaranteed to exist)
     this.db.exec(
       `CREATE INDEX IF NOT EXISTS idx_media_type ON media(media_type);`
@@ -304,6 +321,11 @@ export class MediaRepository implements IMediaRepository {
       mediaType,
       dateStart: (row.date_start as string) ?? null,
       dateEnd: (row.date_end as string) ?? null,
+      codec: (row.codec as string) ?? null,
+      width: (row.width as number) ?? null,
+      height: (row.height as number) ?? null,
+      warning: (row.warning as string) ?? null,
+      mtime: (row.mtime as number) ?? null,
     }
   }
 
@@ -338,8 +360,8 @@ export class MediaRepository implements IMediaRepository {
 
     // Use transaction for performance
     const stmt = this.db.prepare(`
-      INSERT INTO media (path, filename, duration_seconds, is_interlude, media_type, date_start, date_end)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO media (path, filename, duration_seconds, is_interlude, media_type, date_start, date_end, codec, width, height, warning, mtime)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(path) DO UPDATE SET
         filename = excluded.filename,
         duration_seconds = excluded.duration_seconds,
@@ -354,7 +376,12 @@ export class MediaRepository implements IMediaRepository {
           ELSE media.media_type 
         END,
         date_start = COALESCE(media.date_start, excluded.date_start),
-        date_end = COALESCE(media.date_end, excluded.date_end)
+        date_end = COALESCE(media.date_end, excluded.date_end),
+        codec = COALESCE(excluded.codec, media.codec),
+        width = COALESCE(excluded.width, media.width),
+        height = COALESCE(excluded.height, media.height),
+        warning = COALESCE(excluded.warning, media.warning),
+        mtime = COALESCE(excluded.mtime, media.mtime)
     `)
 
     const transaction = this.db.transaction(() => {
@@ -366,7 +393,12 @@ export class MediaRepository implements IMediaRepository {
           item.isInterlude ? 1 : 0,
           item.mediaType,
           item.dateStart,
-          item.dateEnd
+          item.dateEnd,
+          item.codec,
+          item.width,
+          item.height,
+          item.warning,
+          item.mtime
         )
       }
     })

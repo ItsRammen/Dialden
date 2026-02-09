@@ -10,8 +10,10 @@ import { getFilename } from '../clients/FilesystemClient'
 import type {
   IFileSystem,
   IMediaProbe,
+  IThumbnailClient,
   InterludeConfig,
   MediaConfig,
+  MediaMetadata,
   MediaType,
 } from '../types'
 
@@ -23,7 +25,8 @@ export class MediaIndexer {
     private readonly interludeConfig: InterludeConfig,
     private readonly repository: IMediaRepository,
     private readonly filesystem: IFileSystem,
-    private readonly mediaProbe: IMediaProbe
+    private readonly mediaProbe: IMediaProbe,
+    private readonly thumbnailClient?: IThumbnailClient
   ) {}
 
   async scanAll(): Promise<number> {
@@ -88,21 +91,32 @@ export class MediaIndexer {
     // 1. Batch lookup existing entries
     const existingMap = await this.repository.getByPaths(files)
 
-    // 2. Separate new files from existing ones
+    // 2. Separate new files from existing ones, and check mtime for delta scanning
     const newFiles: string[] = []
     const existingFiles: string[] = []
+    const changedFiles: string[] = [] // Files with changed mtime
 
     for (const filePath of files) {
-      if (existingMap.has(filePath)) {
-        existingFiles.push(filePath)
+      const existing = existingMap.get(filePath)
+      if (existing) {
+        // Check if file has changed (mtime comparison)
+        const currentMtime = this.filesystem.getMtime(filePath)
+        if (existing.mtime !== null && currentMtime === existing.mtime) {
+          // File unchanged, skip re-probing
+          existingFiles.push(filePath)
+        } else {
+          // File changed or mtime was never recorded
+          changedFiles.push(filePath)
+        }
       } else {
         newFiles.push(filePath)
       }
     }
 
-    // 3. Parallel probe new files with concurrency limit
+    // 3. Parallel probe new + changed files with concurrency limit
     const CONCURRENCY = 4 // Pi Zero 2 W has 4 cores
-    const durations = await this.probeParallel(newFiles, CONCURRENCY)
+    const filesToProbe = [...newFiles, ...changedFiles]
+    const metadataResults = await this.probeParallel(filesToProbe, CONCURRENCY)
 
     // 4. Build items for batch upsert
     const itemsToUpsert: Array<{
@@ -113,68 +127,100 @@ export class MediaIndexer {
       mediaType: MediaType
       dateStart: string | null
       dateEnd: string | null
+      codec: string | null
+      width: number | null
+      height: number | null
+      warning: string | null
+      mtime: number | null
     }> = []
 
-    // Add new files
-    for (let i = 0; i < newFiles.length; i++) {
-      const filePath = newFiles[i]
+    // Add new + changed files
+    for (let i = 0; i < filesToProbe.length; i++) {
+      const filePath = filesToProbe[i]
       if (!filePath) continue // TypeScript guard
       const filename = getFilename(filePath)
-      const duration = durations[i] ?? 0
+      const metadata = metadataResults[i] ?? {
+        durationSeconds: 0,
+        codec: null,
+        width: null,
+        height: null,
+      }
       const mediaType = this.detectMediaType(filename, isInterlude)
       const { start: dateStart, end: dateEnd } = this.detectDates(filename)
+      const warning = this.generateWarning(metadata.codec)
+      const mtime = this.filesystem.getMtime(filePath)
 
       itemsToUpsert.push({
         path: filePath,
         filename,
-        durationSeconds: duration,
+        durationSeconds: metadata.durationSeconds,
         isInterlude: mediaType === 'interlude',
         mediaType,
         dateStart,
         dateEnd,
+        codec: metadata.codec,
+        width: metadata.width,
+        height: metadata.height,
+        warning,
+        mtime,
       })
 
-      console.log(`Indexed: ${filename} (${duration}s) [${mediaType}]`)
+      console.log(
+        `Indexed: ${filename} (${metadata.durationSeconds}s) [${mediaType}]`
+      )
     }
 
-    // Add existing files (reuse duration, but still include in outPaths)
+    // Add unchanged existing files to outPaths only (no re-upsert needed)
     for (const filePath of existingFiles) {
-      const existing = existingMap.get(filePath)
-      if (existing) {
-        // No need to re-upsert existing files unless we want to update them
-        outPaths.push(filePath)
-      }
+      outPaths.push(filePath)
     }
 
     // 5. Batch upsert new files
     if (itemsToUpsert.length > 0) {
       await this.repository.upsertBatch(itemsToUpsert)
+
+      // 6. Generate thumbnails for newly indexed files (Phase 5)
+      if (this.thumbnailClient) {
+        const paths = itemsToUpsert.map((item) => item.path)
+        const insertedMap = await this.repository.getByPaths(paths)
+        const thumbnailItems = Array.from(insertedMap.values()).map((item) => ({
+          id: item.id,
+          path: item.path,
+        }))
+        await this.thumbnailClient.generateAll(thumbnailItems)
+      }
     }
 
     // Add new file paths to outPaths
-    outPaths.push(...newFiles)
+    outPaths.push(...filesToProbe)
 
     return files.length
   }
 
   /**
    * Probe multiple files in parallel with concurrency limit
+   * Returns full metadata including codec and resolution for HEVC detection
    */
   private async probeParallel(
     files: string[],
     concurrency: number
-  ): Promise<number[]> {
-    const results: number[] = []
+  ): Promise<MediaMetadata[]> {
+    const results: MediaMetadata[] = []
 
     for (let i = 0; i < files.length; i += concurrency) {
       const batch = files.slice(i, i + concurrency)
       const batchResults = await Promise.all(
         batch.map(async (filePath) => {
           try {
-            return await this.mediaProbe.getDuration(filePath)
+            return await this.mediaProbe.getMetadata(filePath)
           } catch (error) {
             console.error(`Failed to probe ${filePath}:`, error)
-            return 0
+            return {
+              durationSeconds: 0,
+              codec: null,
+              width: null,
+              height: null,
+            }
           }
         })
       )
@@ -182,6 +228,22 @@ export class MediaIndexer {
     }
 
     return results
+  }
+
+  /**
+   * Generate warning for incompatible codecs (e.g., HEVC on Pi Zero 2 W)
+   */
+  private generateWarning(codec: string | null): string | null {
+    if (!codec) return null
+    const lowerCodec = codec.toLowerCase()
+    if (
+      lowerCodec === 'hevc' ||
+      lowerCodec === 'h265' ||
+      lowerCodec === 'h.265'
+    ) {
+      return 'HEVC may not play smoothly on Raspberry Pi Zero 2 W'
+    }
+    return null
   }
 
   /**
@@ -300,7 +362,7 @@ export class MediaIndexer {
     if (newPaths.length === 0) return 0
 
     // Probe new files
-    const durations = await this.probeParallel(newPaths, 4)
+    const metadataResults = await this.probeParallel(newPaths, 4)
 
     const items: Array<{
       path: string
@@ -310,32 +372,62 @@ export class MediaIndexer {
       mediaType: MediaType
       dateStart: string | null
       dateEnd: string | null
+      codec: string | null
+      width: number | null
+      height: number | null
+      warning: string | null
+      mtime: number | null
     }> = []
 
     for (let i = 0; i < newPaths.length; i++) {
       const filePath = newPaths[i]
       if (!filePath) continue
       const filename = getFilename(filePath)
-      const duration = durations[i] ?? 0
+      const metadata = metadataResults[i] ?? {
+        durationSeconds: 0,
+        codec: null,
+        width: null,
+        height: null,
+      }
       const isInterlude = filePath.startsWith(this.interludeConfig.directory)
       const mediaType = this.detectMediaType(filename, isInterlude)
       const { start: dateStart, end: dateEnd } = this.detectDates(filename)
+      const warning = this.generateWarning(metadata.codec)
+      const mtime = this.filesystem.getMtime(filePath)
 
       items.push({
         path: filePath,
         filename,
-        durationSeconds: duration,
+        durationSeconds: metadata.durationSeconds,
         isInterlude: mediaType === 'interlude',
         mediaType,
         dateStart,
         dateEnd,
+        codec: metadata.codec,
+        width: metadata.width,
+        height: metadata.height,
+        warning,
+        mtime,
       })
 
-      console.log(`Indexed (watch): ${filename} (${duration}s) [${mediaType}]`)
+      console.log(
+        `Indexed (watch): ${filename} (${metadata.durationSeconds}s) [${mediaType}]`
+      )
     }
 
     if (items.length > 0) {
       await this.repository.upsertBatch(items)
+
+      // Generate thumbnails for newly indexed files (Phase 5)
+      if (this.thumbnailClient) {
+        const paths = items.map((item) => item.path)
+        const insertedMap = await this.repository.getByPaths(paths)
+        const thumbnailItems = Array.from(insertedMap.values()).map((item) => ({
+          id: item.id,
+          path: item.path,
+        }))
+        await this.thumbnailClient.generateAll(thumbnailItems)
+      }
     }
 
     return items.length

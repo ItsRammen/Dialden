@@ -5,9 +5,14 @@
  */
 
 import { Glob } from 'bun'
-import { existsSync, watch as fsWatch } from 'node:fs'
+import { existsSync, statSync, watch as fsWatch } from 'node:fs'
 import { basename, extname, join } from 'node:path'
-import type { FileWatcher, IFileSystem, IMediaProbe } from '../types'
+import type {
+  FileWatcher,
+  IFileSystem,
+  IMediaProbe,
+  MediaMetadata,
+} from '../types'
 
 export class FilesystemClient implements IFileSystem {
   listFiles(
@@ -40,6 +45,15 @@ export class FilesystemClient implements IFileSystem {
     return existsSync(path)
   }
 
+  getMtime(path: string): number | null {
+    try {
+      const stats = statSync(path)
+      return stats.mtimeMs
+    } catch {
+      return null
+    }
+  }
+
   /**
    * Watch a directory for file changes (stateless wrapper for fs.watch)
    */
@@ -67,14 +81,21 @@ export class FilesystemClient implements IFileSystem {
 
 export class FFProbeClient implements IMediaProbe {
   async getDuration(filePath: string): Promise<number> {
+    const metadata = await this.getMetadata(filePath)
+    return metadata.durationSeconds
+  }
+
+  async getMetadata(filePath: string): Promise<MediaMetadata> {
     const proc = Bun.spawn([
       'ffprobe',
       '-v',
       'error',
+      '-select_streams',
+      'v:0',
       '-show_entries',
-      'format=duration',
+      'format=duration:stream=codec_name,width,height',
       '-of',
-      'default=noprint_wrappers=1:nokey=1',
+      'json',
       filePath,
     ])
 
@@ -85,7 +106,28 @@ export class FFProbeClient implements IMediaProbe {
       throw new Error(`ffprobe failed for ${filePath}`)
     }
 
-    return Math.floor(parseFloat(output.trim()) || 0)
+    try {
+      const data = JSON.parse(output) as {
+        format?: { duration?: string }
+        streams?: Array<{
+          codec_name?: string
+          width?: number
+          height?: number
+        }>
+      }
+
+      const duration = Math.floor(parseFloat(data.format?.duration ?? '0') || 0)
+      const stream = data.streams?.[0]
+
+      return {
+        durationSeconds: duration,
+        codec: stream?.codec_name ?? null,
+        width: stream?.width ?? null,
+        height: stream?.height ?? null,
+      }
+    } catch {
+      return { durationSeconds: 0, codec: null, width: null, height: null }
+    }
   }
 
   static async checkAvailable(): Promise<boolean> {

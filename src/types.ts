@@ -18,6 +18,13 @@ export interface MediaItem {
   readonly mediaType: MediaType
   readonly dateStart: string | null
   readonly dateEnd: string | null
+  // Extended metadata (Phase 3)
+  readonly codec: string | null
+  readonly width: number | null
+  readonly height: number | null
+  readonly warning: string | null
+  // Delta scanning (Phase 4)
+  readonly mtime: number | null // Unix timestamp in ms
 }
 
 export interface PlaybackStatus {
@@ -95,6 +102,7 @@ export interface IFileSystem {
     excludePaths?: string[]
   ): string[]
   exists(path: string): boolean
+  getMtime(path: string): number | null // Unix timestamp in ms
   watch(
     directory: string,
     callback: (event: 'add' | 'change' | 'remove', path: string) => void
@@ -110,9 +118,27 @@ export interface FileWatcher {
 
 export interface IMediaProbe {
   getDuration(filePath: string): Promise<number>
+  getMetadata(filePath: string): Promise<MediaMetadata>
+}
+
+/**
+ * Metadata extracted from media files via ffprobe
+ */
+export interface MediaMetadata {
+  readonly durationSeconds: number
+  readonly codec: string | null
+  readonly width: number | null
+  readonly height: number | null
 }
 
 export interface IDateTimeProvider {
   now(): Date
   today(): string // YYYY-MM-DD
+}
+
+/**
+ * Thumbnail generation (Phase 5)
+ */
+export interface IThumbnailClient {
+  generateAll(items: ReadonlyArray<{ id: number; path: string }>): Promise<void>
 }

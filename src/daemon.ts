@@ -12,6 +12,7 @@ import { FilesystemClient } from './clients/FilesystemClient'
 import { FFProbeClient } from './clients/FilesystemClient'
 import { MpvClient } from './clients/MpvClient'
 import { CECClient, CEC_KEYS } from './clients/CECClient'
+import { thumbnailClient } from './clients/ThumbnailClient'
 
 import { MediaIndexer } from './services/MediaIndexer'
 import {
@@ -145,7 +146,8 @@ export class ToastTVDaemon {
       interludeConfig,
       this.repository,
       filesystem,
-      mediaProbe
+      mediaProbe,
+      thumbnailClient
     )
 
     this.engine = new PlaylistEngine(

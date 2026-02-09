@@ -43,7 +43,14 @@ describe('MediaIndexer', () => {
     repo.removeNotInPaths.mockResolvedValue(0)
     fs.exists.mockReturnValue(true)
     fs.listFiles.mockReturnValue([]) // Default to empty list
+    fs.getMtime.mockReturnValue(Date.now()) // Current timestamp
     probe.getDuration.mockResolvedValue(60)
+    probe.getMetadata.mockResolvedValue({
+      durationSeconds: 60,
+      codec: 'h264',
+      width: 1920,
+      height: 1080,
+    })
 
     indexer = new MediaIndexer(mediaConfig, interludeConfig, repo, fs, probe)
   })
