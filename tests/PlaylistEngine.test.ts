@@ -212,4 +212,42 @@ describe('PlaylistEngine', () => {
     const hasOffair = queue.some((m) => m.mediaType === 'offair')
     expect(hasOffair).toBe(false)
   })
+
+  // --- currentVideo Tracking Tests (for skip-to-offair fix) ---
+
+  test('getCurrentVideo() returns null before session starts', () => {
+    expect(engine.getCurrentVideo()).toBeNull()
+  })
+
+  test('getCurrentVideo() returns first video after startSession()', async () => {
+    const v1 = createVideo(1, { filename: 'first.mp4' })
+    repo.getAll.mockReturnValue(Promise.resolve([v1]))
+
+    await engine.startSession()
+
+    expect(engine.getCurrentVideo()?.filename).toBe('first.mp4')
+  })
+
+  test('getCurrentVideo() advances after getNextVideo()', async () => {
+    const v1 = createVideo(1, { filename: 'first.mp4' })
+    const v2 = createVideo(2, { filename: 'second.mp4' })
+    repo.getAll.mockReturnValue(Promise.resolve([v1, v2]))
+
+    await engine.startSession()
+    expect(engine.getCurrentVideo()?.filename).toBe('first.mp4')
+
+    await engine.getNextVideo()
+    expect(engine.getCurrentVideo()?.filename).toBe('second.mp4')
+  })
+
+  test('getCurrentVideo() returns null after endSession()', async () => {
+    const v1 = createVideo(1)
+    repo.getAll.mockReturnValue(Promise.resolve([v1]))
+
+    await engine.startSession()
+    expect(engine.getCurrentVideo()).not.toBeNull()
+
+    await engine.endSession()
+    expect(engine.getCurrentVideo()).toBeNull()
+  })
 })

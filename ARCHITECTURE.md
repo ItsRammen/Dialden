@@ -36,8 +36,8 @@ src/
 
 | Component | Owns |
 |-----------|------|
-| `PlaybackService` | Current video, playback loop, **off-air state** |
-| `PlaylistEngine` | Queue, shuffle, interludes |
+| `PlaybackService` | Playback loop, player control, **off-air state** |
+| `PlaylistEngine` | **Current video**, queue, shuffle, interludes |
 | `SessionManager` | Session state, timing, **daily quotas** |
 | `MediaRepository` | Media items (DB) |
 | `ConfigRepository` | App config |

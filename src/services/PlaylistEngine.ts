@@ -32,6 +32,9 @@ export class PlaylistEngine {
   // Queue buffer target for infinite sessions (maintain at least this many items)
   private static readonly QUEUE_BUFFER_SIZE = 5
 
+  // Current video being played (owned by Engine for single source of truth)
+  private currentVideo: MediaItem | null = null
+
   private queueState: QueueState = {
     queue: [],
     showsSinceInterlude: 0,
@@ -147,6 +150,7 @@ export class PlaylistEngine {
   async endSession(): Promise<MediaItem | null> {
     this.session.end()
     this.queueState.queue = []
+    this.currentVideo = null
     console.log('Session ended')
     return null
   }
@@ -177,13 +181,13 @@ export class PlaylistEngine {
   }
 
   getCurrentVideo(): MediaItem | null {
-    // Managed by daemon since engine only supplies "next"
-    return null
+    return this.currentVideo
   }
 
   private popNext(): MediaItem | null {
     const next = this.queueState.queue.shift()
     if (next) {
+      this.currentVideo = next // Track current video
       this.queueState.videosPlayed++
       if (!next.isInterlude) {
         this.queueState.showsSinceInterlude++
@@ -197,6 +201,7 @@ export class PlaylistEngine {
   }
 
   private resetQueueState(): void {
+    this.currentVideo = null
     this.queueState = {
       queue: [],
       showsSinceInterlude: 0,

@@ -21,7 +21,6 @@ export interface PlaybackServiceDeps {
 }
 
 export class PlaybackService {
-  private currentVideo: MediaItem | null = null
   private running = false
   private offAirMode = false
 
@@ -190,16 +189,6 @@ export class PlaybackService {
   }
 
   /**
-   * Play next video (used by playback loop)
-   */
-  async playNext(): Promise<void> {
-    const next = await this.engine.getNextVideo()
-    if (next) {
-      await this.playVideo(next)
-    }
-  }
-
-  /**
    * Pause playback
    */
   async pause(): Promise<void> {
@@ -265,7 +254,7 @@ export class PlaybackService {
    * Get currently playing video
    */
   getCurrentMedia(): MediaItem | null {
-    return this.currentVideo
+    return this.engine.getCurrentVideo()
   }
 
   getSessionInfo() {
@@ -275,7 +264,6 @@ export class PlaybackService {
   // --- Internal ---
 
   private async playVideo(video: MediaItem): Promise<void> {
-    this.currentVideo = video
     await this.player.play(video.path)
 
     // Refresh logo on each video (MPV clears overlays on track change)
@@ -355,7 +343,6 @@ export class PlaybackService {
     }
 
     this.offAirMode = true
-    this.currentVideo = mediaItem
     logger.info(`Entering off-air mode with: ${mediaItem.filename}`)
 
     // Play with loop enabled
@@ -437,10 +424,13 @@ export class PlaybackService {
         const status = await this.player.getStatus()
         disconnectedLogged = false // Connection active
 
+        // Get current video from Engine (single source of truth)
+        const currentVideo = this.engine.getCurrentVideo()
+
         // Detect Pause/Resume changes
         if (status.isPlaying !== lastIsPlaying) {
           // If we have a current video, broadcast the state change
-          if (this.currentVideo) {
+          if (currentVideo) {
             this.events?.broadcast({
               type: status.isPlaying ? 'playing' : 'paused',
             })
@@ -448,32 +438,7 @@ export class PlaybackService {
           lastIsPlaying = status.isPlaying
         }
 
-        // Calculate dynamic "late in video" threshold based on actual video duration
-        const expectedDuration = this.currentVideo?.durationSeconds ?? 30
-        const lateThreshold = Math.max(expectedDuration * 0.5, 3) // At least 50% through OR 3s minimum
-
-        // Detect track transition by comparing positions.
-        // A real transition = position went from "late" to "early" (position reset)
-        // OR: Player position exceeds our expected duration (Player auto-advanced)
-        const wasLateInVideo = lastPosition > lateThreshold
-        const nowEarlyInVideo = status.positionSeconds < 3
-        const positionReset =
-          wasLateInVideo && nowEarlyInVideo && status.isPlaying
-
-        // Also detect when player jumps beyond our expected video (it moved to next)
-        const playerBeyondExpected =
-          status.positionSeconds > expectedDuration + 5 && status.isPlaying
-
-        // Detect manual track change via player UI (filename mismatch)
-        const fileMismatch =
-          status.currentFile &&
-          this.currentVideo &&
-          status.isPlaying &&
-          !decodeURIComponent(status.currentFile).includes(
-            this.currentVideo.filename
-          )
-
-        const wasPlaying = this.currentVideo !== null
+        const wasPlaying = currentVideo !== null
 
         // If player stopped entirely (not playing, nothing enqueued), session may be over
         if (
@@ -496,22 +461,27 @@ export class PlaybackService {
           }
         }
 
-        // Transition detection: position reset OR player beyond expected OR file mismatch
-        if (
-          (positionReset || playerBeyondExpected || fileMismatch) &&
-          status.isPlaying
-        ) {
-          logger.debug(
-            'Loop',
-            `Track transition detected (reset=${positionReset}, beyond=${playerBeyondExpected}, mismatch=${fileMismatch})`
-          )
+        // FILE-BASED TRANSITION DETECTION
+        // Compare MPV's actual file vs Engine's tracked current video
+        const currentPath = currentVideo?.path ?? null
+        const playerPath = status.currentFile
+          ? decodeURIComponent(status.currentFile)
+          : null
 
-          // Advance our internal state
+        // Transition detected when MPV is playing a DIFFERENT file than Engine tracks
+        const fileChanged =
+          playerPath &&
+          currentPath &&
+          status.isPlaying &&
+          !playerPath.endsWith(currentPath)
+
+        if (fileChanged) {
+          logger.debug('Loop', `Track transition detected (file mismatch)`)
+
+          // Advance Engine state - this updates currentVideo inside Engine
           const next = await this.engine.getNextVideo()
 
           if (next) {
-            // Update internal state to match Player
-            this.currentVideo = next
             lastPosition = status.positionSeconds // Reset position tracking
             disconnectedLogged = false
 
@@ -572,8 +542,8 @@ export class PlaybackService {
           // No transition - just update tracking
           lastPosition = status.positionSeconds
         }
-      } catch (error: any) {
-        const msg = error?.message || String(error)
+      } catch (error: unknown) {
+        const msg = error instanceof Error ? error.message : String(error)
         const isPlayerError =
           msg.includes('Not connected') || msg.includes('ECONNREFUSED')
 

@@ -188,16 +188,22 @@ describe('PlaybackService', () => {
     )
   })
 
-  test('getCurrentMedia() returns current video after play', async () => {
+  test('getCurrentMedia() delegates to engine.getCurrentVideo()', async () => {
     const video = createMediaItemBuilder()
+
+    // Before session, engine returns null
+    engine.getCurrentVideo.mockReturnValue(null)
+    expect(service.getCurrentMedia()).toBeNull()
+
+    // After session start, engine tracks current video
     engine.startSession.mockResolvedValue(video)
     engine.peekQueue.mockReturnValue([])
-
-    expect(service.getCurrentMedia()).toBeNull()
+    engine.getCurrentVideo.mockReturnValue(video)
 
     await service.startSession()
 
     expect(service.getCurrentMedia()).toEqual(video)
+    expect(engine.getCurrentVideo).toHaveBeenCalled()
   })
 
   test('isSessionActive reflects engine state', () => {
