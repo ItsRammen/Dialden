@@ -11,7 +11,10 @@ export interface HardwareProfile {
     readonly h264: 'hardware' | 'software' | 'none'
     readonly h265: 'hardware' | 'software' | 'none'
   }
-  readonly maxResolution: 720 | 1080 | 2160
+  /** Max decode height for H.264 (0 = unsupported) */
+  readonly maxHeightH264: 0 | 720 | 1080 | 2160
+  /** Max decode height for H.265/HEVC (0 = unsupported) */
+  readonly maxHeightH265: 0 | 720 | 1080 | 2160
   readonly maxFps1080p: 30 | 60
   readonly maxBitrateMbps: number
 }
@@ -26,35 +29,40 @@ export const HARDWARE_PROFILES: Record<ProfileKey, HardwareProfile> = {
   'pi-zero-2w': {
     name: 'Raspberry Pi Zero 2 W',
     codecs: { h264: 'hardware', h265: 'none' },
-    maxResolution: 1080,
+    maxHeightH264: 1080,
+    maxHeightH265: 0,
     maxFps1080p: 30,
     maxBitrateMbps: 15,
   },
   'pi-3': {
     name: 'Raspberry Pi 3',
     codecs: { h264: 'hardware', h265: 'none' },
-    maxResolution: 1080,
+    maxHeightH264: 1080,
+    maxHeightH265: 0,
     maxFps1080p: 60,
     maxBitrateMbps: 20,
   },
   'pi-4': {
     name: 'Raspberry Pi 4',
     codecs: { h264: 'hardware', h265: 'hardware' },
-    maxResolution: 2160,
+    maxHeightH264: 1080,
+    maxHeightH265: 2160,
     maxFps1080p: 60,
     maxBitrateMbps: 50,
   },
   'pi-5': {
     name: 'Raspberry Pi 5',
-    codecs: { h264: 'hardware', h265: 'hardware' },
-    maxResolution: 2160,
+    codecs: { h264: 'software', h265: 'hardware' },
+    maxHeightH264: 2160,
+    maxHeightH265: 2160,
     maxFps1080p: 60,
     maxBitrateMbps: 80,
   },
   unknown: {
     name: 'Unknown Device',
     codecs: { h264: 'software', h265: 'none' },
-    maxResolution: 720,
+    maxHeightH264: 720,
+    maxHeightH265: 0,
     maxFps1080p: 30,
     maxBitrateMbps: 10,
   },

@@ -82,14 +82,16 @@ describe('HardwareProfiles', () => {
 
   it('should have correct limits for Pi Zero 2 W', () => {
     const profile = HARDWARE_PROFILES['pi-zero-2w']
-    expect(profile.maxResolution).toBe(1080)
+    expect(profile.maxHeightH264).toBe(1080)
+    expect(profile.maxHeightH265).toBe(0)
     expect(profile.maxFps1080p).toBe(30)
     expect(profile.codecs.h265).toBe('none')
   })
 
   it('should have correct limits for Pi 4', () => {
     const profile = HARDWARE_PROFILES['pi-4']
-    expect(profile.maxResolution).toBe(2160)
+    expect(profile.maxHeightH264).toBe(1080)
+    expect(profile.maxHeightH265).toBe(2160)
     expect(profile.maxFps1080p).toBe(60)
     expect(profile.codecs.h265).toBe('hardware')
   })
@@ -282,6 +284,37 @@ describe('MediaIndexer.checkCompatibility', () => {
     const result = indexer.checkCompatibility(metadata)
 
     expect(result).toBe('compatible')
+  })
+
+  it('should return incompatible for 4K H.264 on Pi 4 (H.264 capped at 1080p)', () => {
+    const repo = mock<IMediaRepository>()
+    const fs = mock<IFileSystem>()
+    const probe = mock<IMediaProbe>()
+    const hardware = mock<IHardwareDetectionService>()
+
+    hardware.getProfile.mockReturnValue(HARDWARE_PROFILES['pi-4'])
+
+    const indexer = new MediaIndexer(
+      mediaConfig,
+      interludeConfig,
+      repo,
+      fs,
+      probe,
+      undefined,
+      hardware
+    )
+
+    const metadata = createMetadataBuilder({
+      codec: 'h264',
+      height: 2160,
+      fps: 30,
+      bitrateMbps: 30,
+    })
+
+    // @ts-ignore - accessing private method for testing
+    const result = indexer.checkCompatibility(metadata)
+
+    expect(result).toBe('incompatible')
   })
 
   it('should return compatible when no hardware service is provided', () => {

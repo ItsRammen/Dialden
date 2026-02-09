@@ -317,16 +317,16 @@ export class MediaIndexer {
     const bitrate = metadata.bitrateMbps ?? 0
 
     // INCOMPATIBLE: Hard blocks - won't play
+    const isHevc = codec === 'hevc' || codec === 'h265' || codec === 'h.265'
+
     // H.265/HEVC on devices without hardware decode
-    if (
-      (codec === 'hevc' || codec === 'h265' || codec === 'h.265') &&
-      profile.codecs.h265 === 'none'
-    ) {
+    if (isHevc && profile.codecs.h265 === 'none') {
       return 'incompatible'
     }
 
-    // Resolution exceeds device max
-    if (height > profile.maxResolution) {
+    // Resolution exceeds codec-specific device max
+    const maxHeight = isHevc ? profile.maxHeightH265 : profile.maxHeightH264
+    if (maxHeight === 0 || height > maxHeight) {
       return 'incompatible'
     }
 
