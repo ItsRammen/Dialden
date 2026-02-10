@@ -62,7 +62,7 @@ mpv:
 		echo "MPV already running"; \
 	else \
 		echo "Starting MPV daemon..."; \
-		$(MPV) --idle --input-ipc-server=$(MPV_SOCKET) --script=scripts/logo.lua --no-terminal &>/dev/null & \
+		$(MPV) --idle --input-ipc-server=$(MPV_SOCKET) --script=scripts/logo.lua --script=scripts/tvguide.lua --no-terminal &>/dev/null & \
 		sleep 1; \
 	fi
 
@@ -98,9 +98,9 @@ tvsim:
 		exit 1; \
 	fi
 	@echo "Deploying TV simulation scripts to $(TVSIM_HOST)..."
-	@tar --no-xattrs -cf - -C scripts tv-sim.sh -C vm-testing mock-cec-client mock-udevadm 2>/dev/null | \
-		ssh $(TVSIM_HOST) 'cd ~ && tar --warning=no-timestamp -xf - && chmod +x tv-sim.sh mock-cec-client mock-udevadm && sudo ./tv-sim.sh setup'
+	@tar --no-xattrs -cf - -C scripts tv-sim.sh -C vm-testing mock-cec-client 2>/dev/null | \
+		ssh $(TVSIM_HOST) 'cd ~ && tar --warning=no-timestamp -xf - && chmod +x tv-sim.sh mock-cec-client && sudo ./tv-sim.sh setup'
 	@echo ""
-	@echo "✓ Deployed! On VM run: ./tv-sim.sh on|off|status"
+	@echo "✓ Deployed! On VM run: ./tv-sim.sh on|off|guide|status"
 
 

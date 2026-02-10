@@ -1,0 +1,450 @@
+# Testing Patterns and Best Practices
+
+## Overview
+This document outlines testing patterns and best practices for the toasttv project, focusing on unit testing services and repositories, mocking strategies, and test quality standards.
+
+## Core Testing Principles
+
+### 1. **Static Expected Values**
+- **NEVER use mock data for assertions**
+- **ALWAYS write expected values statically in expect methods**
+- This prevents false positives and ensures tests actually verify behavior
+
+```typescript
+// ❌ BAD: Using mock data for assertions
+const mockContact = { firstName: 'John', lastName: 'Doe' }
+await repository.createContact(mockContact)
+const result = await repository.getContact(contactId)
+expect(result?.firstName).toBe(mockContact.firstName) // Anti-pattern!
+
+// ✅ GOOD: Static expected values
+const mockContact = { firstName: 'John', lastName: 'Doe' }
+await repository.createContact(mockContact)
+const result = await repository.getContact(contactId)
+expect(result?.firstName).toBe('John') // Clear expectation
+expect(result?.lastName).toBe('Doe')   // Independent of mock data
+```
+
+### 2. **Independent Test Data**
+- **Each test should be self-contained**
+- **Don't reuse mock data between input and assertions**
+- **Use different data for different test scenarios**
+
+```typescript
+// ✅ GOOD: Independent test data
+it('should create contact with different data', async () => {
+  const inputData = { firstName: 'Alice', lastName: 'Smith' }
+  const contactId = await repository.createContact(inputData)
+  
+  const result = await repository.getContact(contactId)
+  expect(result?.firstName).toBe('Alice')  // Static expectation
+  expect(result?.lastName).toBe('Smith')   // Independent of inputData
+})
+```
+
+### 3. **Comprehensive Assertions**
+- **Test multiple properties, not just the input data**
+- **Verify side effects and state changes**
+- **Include edge cases and error conditions**
+
+```typescript
+// ✅ GOOD: Comprehensive assertions
+const result = await repository.getContact(contactId)
+expect(result?.firstName).toBe('John')
+expect(result?.lastName).toBe('Doe')
+expect(result?.contactInfo.email).toBe('john.doe@example.com')
+expect(result?.address.city).toBe('Berlin')
+expect(result?.status).toBe('initial')
+expect(result?.id).toBe(contactId)
+```
+
+## Mock Implementation Patterns
+
+### 1. **Use jest-mock-extended**
+- **ALWAYS use `jest-mock-extended` library for mocking**
+- **Use `mock<T>()` function to create typed mocks**
+- **NEVER create separate mock classes in production code**
+- **Keep mocking logic close to where it's used**
+
+```typescript
+import { mock } from 'jest-mock-extended'
+
+// ✅ GOOD: Using jest-mock-extended for repositories
+it('should throw error when user is not authenticated', async () => {
+  const mockRepo = mock<IContactsRepository>()
+  const service = new ContactsService(mockRepo)
+  const context = createContextBuilder({ userId: undefined })
+
+  await expect(service.getById(context, UUID.generate())).rejects.toThrow('Not authenticated')
+  expect(mockRepo.findById).not.toHaveBeenCalled()
+})
+```
+
+### 2. **Builder Functions for Test Data**
+- **ALWAYS use builder functions for creating test data**
+- **Builder functions accept optional overrides for flexibility**
+- **Keep builders at the top of test files**
+- **Use builders consistently across all tests**
+
+```typescript
+// ✅ GOOD: Builder function pattern
+const createAssetBuilder = (
+  override?: Partial<CreateAssetModel>
+): CreateAssetModel => ({
+  name: 'Test Asset',
+  addressLine1: 'Strassmannstraße 12',
+  addressLine2: '2. OG',
+  postcode: '12345',
+  city: 'Berlin',
+  country: 'Deutschland',
+  ...override,
+})
+
+it('should create an asset successfully', async () => {
+  const mockStorage = mock<IDataStorage>()
+  mockStorage.create.mockResolvedValue('asset-id-123')
+  mockStorage.fetchById.mockResolvedValueOnce({
+    ...createAssetBuilder(),
+    deletedAt: null,
+  })
+  
+  const repository = new AssetRepository(mockStorage)
+  const assetData = createAssetBuilder()
+  const assetId = await repository.createAsset(assetData)
+  
+  expect(assetId.toString()).not.toBeUndefined()
+})
+
+it('should get all assets with different names', async () => {
+  const mockStorage = mock<IDataStorage>()
+  mockStorage.fetch.mockResolvedValueOnce([
+    { ...createAssetBuilder(), deletedAt: null },
+    { ...createAssetBuilder({ name: 'Asset 2' }), deletedAt: null },
+    { ...createAssetBuilder({ name: 'Asset 3' }), deletedAt: null },
+  ])
+  
+  const repository = new AssetRepository(mockStorage)
+  const assets = await repository.getAssets()
+  
+  expect(assets).toHaveLength(3)
+  expect(assets[0]?.name).toBe('Test Asset')
+  expect(assets[1]?.name).toBe('Asset 2')
+  expect(assets[2]?.name).toBe('Asset 3')
+})
+```
+
+## Test Structure and Organization
+
+### 1. **Test Isolation and Independence**
+- **Each test should be completely self-contained**
+- **NEVER use beforeEach to create shared dependencies**
+- **Each test should create its own mock instances using `mock<T>()`**
+- **This prevents test interference and makes tests easier to understand**
+
+```typescript
+import { mock } from 'jest-mock-extended'
+
+// ✅ GOOD: Each test is self-contained
+describe('ContactRepository', () => {
+  it('should create a contact successfully', async () => {
+    const mockStorage = mock<IDataStorage>()
+    mockStorage.create.mockResolvedValue('test-id-123')
+    
+    const repository = new ContactRepository(mockStorage)
+    const contactId = await repository.createContact(contactData)
+    
+    expect(contactId).toBe('test-id-123')
+  })
+  
+  it('should update a contact successfully', async () => {
+    const mockStorage = mock<IDataStorage>()
+    mockStorage.update.mockResolvedValue()
+    
+    const repository = new ContactRepository(mockStorage)
+    await repository.updateContact('contact-id', updateData)
+    
+    expect(mockStorage.update).toHaveBeenCalledWith('contacts', 'contact-id', updateData)
+  })
+})
+
+// ❌ BAD: Shared dependencies via beforeEach
+describe('ContactRepository', () => {
+  let repository: ContactRepository
+  let mockStorage: jest.Mocked<IDataStorage>
+
+  beforeEach(() => {
+    mockStorage = mock<IDataStorage>()
+    repository = new ContactRepository(mockStorage)
+  })
+  
+  it('should create a contact successfully', async () => {
+    // Test depends on beforeEach variables - error-prone!
+  })
+})
+```
+
+### 2. **Describe Block Organization**
+- **Group related tests by method/functionality**
+- **Use descriptive test names**
+- **Keep shared data (like mock objects) at the top level only if they're truly static**
+- **Do NOT write multiple root-level describe statements in a test file.**
+  - All describe blocks should be nested under a single top-level describe for the module or feature.
+  - This ensures test output is organized, prevents test pollution, and makes test navigation easier.
+- **AVOID nested describe blocks - they make tests harder to read and navigate**
+  - Use flat test structure with descriptive test names instead
+  - Prefer `it('should [behavior] when [condition]')` over nested describes
+
+```typescript
+describe('ContactRepository', () => {
+  // Only truly static data at the top level
+  const mockContact: Omit<Contact, 'id'> = {
+    firstName: 'John',
+    lastName: 'Doe',
+    // ... other static properties
+  }
+
+  // ✅ GOOD: Flat structure with descriptive test names
+  it('should create a contact successfully', async () => {
+    // Test implementation
+  })
+
+  it('should update a contact when contact exists', async () => {
+    // Test implementation
+  })
+
+  it('should delete a contact when contact exists', async () => {
+    // Test implementation
+  })
+
+  // ❌ BAD: Nested describe blocks
+  // describe('createContact', () => {
+  //   it('should create a contact successfully', async () => {})
+  // })
+})
+```
+
+### 3. **Test Data Management**
+- **ALWAYS use builder functions for test data**
+- **Define builders at the top of test files**
+- **Use builder overrides for different test scenarios**
+- **Create fresh instances in each test**
+
+```typescript
+// ✅ GOOD: Builder function pattern
+const createContactBuilder = (
+  override?: Partial<CreateContactModel>
+): CreateContactModel => ({
+  firstName: 'John',
+  lastName: 'Doe',
+  contactInfo: {
+    email: 'john.doe@example.com',
+    phone: '+49 123 456789',
+  },
+  ...override,
+})
+
+// Usage in tests
+const contactData = createContactBuilder()
+const contactData2 = createContactBuilder({ firstName: 'Jane' })
+```
+
+### 4. **Error Testing Patterns**
+- **Test both expected and unexpected errors**
+- **Mock storage failures for error scenarios**
+- **Verify error messages include context**
+
+```typescript
+import { mock } from 'jest-mock-extended'
+
+it('should throw error when storage fails', async () => {
+  const mockStorage = mock<IDataStorage>()
+  mockStorage.create.mockRejectedValue(new Error('Storage error'))
+  
+  const repository = new ContactRepository(mockStorage)
+  const contactData = createContactBuilder()
+
+  await expect(repository.createContact(contactData)).rejects.toThrow(
+    'Failed to create contact: Storage error'
+  )
+})
+```
+
+## Dependency Injection Testing
+
+### 1. **Interface Testing**
+- **Test repository contract regardless of storage implementation**
+- **Use `mock<T>()` for dependency injection testing**
+- **Verify that repository methods call storage correctly**
+
+```typescript
+import { mock } from 'jest-mock-extended'
+
+it('should use the injected storage implementation', async () => {
+  const mockStorage = mock<IDataStorage>()
+  mockStorage.create.mockResolvedValue('test-id-123')
+  
+  const repository = new ContactRepository(mockStorage)
+  const contactData = createContactBuilder()
+  const contactId = await repository.createContact(contactData)
+
+  expect(contactId).toBe('test-id-123')
+  expect(mockStorage.create).toHaveBeenCalledWith('contacts', contactData)
+})
+```
+
+## Test Quality Standards
+
+### 1. **Test Independence**
+- **Each test should run in isolation**
+- **No shared state between tests**
+- **Proper setup and teardown**
+
+### 2. **Descriptive Test Names**
+- **Use clear, descriptive test names**
+- **Follow the pattern: "should [expected behavior] when [condition]"`
+- **Make test purpose obvious**
+
+```typescript
+it('should return empty array when no contacts exist', async () => {
+  // Test implementation
+})
+
+it('should update contact successfully when contact exists', async () => {
+  // Test implementation
+})
+```
+
+### 3. **Comprehensive Coverage**
+- **Test happy path scenarios**
+- **Test error conditions**
+- **Test edge cases**
+- **Test boundary conditions**
+
+### 4. **Fast and Reliable**
+- **Use inline mocks for speed**
+- **Avoid external dependencies**
+- **Ensure tests are deterministic**
+
+## Anti-Patterns to Avoid
+
+### 1. **Mock Data Reuse**
+```typescript
+// ❌ BAD: Reusing mock data for assertions
+expect(result?.firstName).toBe(mockContact.firstName)
+```
+
+### 2. **Separate Mock Classes**
+```typescript
+// ❌ BAD: Creating mock classes in production code
+export class MockDataStorage implements IDataStorage {
+  // Mock implementation - this should not exist
+}
+
+// ✅ GOOD: Use jest-mock-extended
+import { mock } from 'jest-mock-extended'
+const mockStorage = mock<IDataStorage>()
+```
+
+### 3. **Manual Mock Setup**
+```typescript
+// ❌ BAD: Manual mock setup
+const mockStorage: jest.Mocked<IDataStorage> = {
+  create: jest.fn(),
+  update: jest.fn(),
+  delete: jest.fn(),
+  fetch: jest.fn(),
+  fetchById: jest.fn(),
+}
+
+// ✅ GOOD: Use jest-mock-extended
+import { mock } from 'jest-mock-extended'
+const mockStorage = mock<IDataStorage>()
+```
+
+### 4. **Testing with Real Dependencies**
+```typescript
+// ❌ BAD: Using real storage in unit tests
+const repository = new ContactRepository(new FirebaseDataStorage())
+
+// ✅ GOOD: Using jest-mock-extended for unit tests
+import { mock } from 'jest-mock-extended'
+const mockStorage = mock<IDataStorage>()
+const repository = new ContactRepository(mockStorage)
+```
+
+### 5. **Shared Dependencies via beforeEach**
+```typescript
+// ❌ BAD: Shared dependencies that can cause test interference
+describe('ContactRepository', () => {
+  let repository: ContactRepository
+  let mockStorage: jest.Mocked<IDataStorage>
+
+  beforeEach(() => {
+    mockStorage = mock<IDataStorage>()
+    repository = new ContactRepository(mockStorage)
+  })
+  
+  it('test 1', () => {
+    // Depends on beforeEach variables - potential interference!
+  })
+})
+
+// ✅ GOOD: Each test is self-contained
+import { mock } from 'jest-mock-extended'
+
+describe('ContactRepository', () => {
+  it('test 1', () => {
+    const mockStorage = mock<IDataStorage>()
+    const repository = new ContactRepository(mockStorage)
+    // Test is completely independent
+  })
+  
+  it('test 2', () => {
+    const mockStorage = mock<IDataStorage>()
+    const repository = new ContactRepository(mockStorage)
+    // Test is completely independent
+  })
+})
+```
+
+## Repository Testing Best Practices
+
+### 1. **Test Repository Interface, Not Implementation**
+- **Focus on testing the repository contract**
+- **Verify that repository methods call storage correctly**
+- **Test error handling and edge cases**
+
+### 2. **Mock Storage Methods Individually**
+- **Mock only the methods needed for each test**
+- **Use specific mock configurations for different scenarios**
+- **Verify method calls with correct parameters**
+
+### 3. **Test Error Scenarios**
+- **Mock storage failures**
+- **Test error message formatting**
+- **Verify error propagation**
+
+### 4. **Keep Tests Focused**
+- **One assertion per test when possible**
+- **Test one behavior at a time**
+- **Use descriptive test names**
+
+## Benefits of jest-mock-extended
+
+1. **Type Safety**: Full TypeScript support with proper typing
+2. **Simplicity**: No separate mock classes to maintain
+3. **Focus**: Mocking logic is close to where it's used
+4. **Flexibility**: Easy to configure mocks per test
+5. **Performance**: Fast test execution with no external dependencies
+6. **Maintainability**: Less code to maintain and understand
+7. **Production Code Purity**: No test code mixed with production code
+
+## Summary
+
+- **ALWAYS use `jest-mock-extended` with `mock<T>()` for all mocking**
+- **ALWAYS use builder functions for test data creation**
+- **NEVER create separate mock classes in production code**
+- **Keep mock setup simple and focused**
+- **Test repository interface, not implementation details**
+- **Use static expected values in assertions**
+- **Keep tests independent and focused** 

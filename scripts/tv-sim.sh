@@ -33,6 +33,7 @@ show_help() {
     echo "  setup        Install mock cec-client (requires sudo)"
     echo "  on           Simulate TV power on"
     echo "  off          Simulate TV standby"
+    echo "  guide        Simulate TV guide (UP key)"
     echo "  status       Show current simulated state"
     echo ""
 }
@@ -95,6 +96,15 @@ cmd_off() {
     log "TV OFF (standby) event sent"
 }
 
+cmd_guide() {
+    info "Simulating TV GUIDE (UP key)..."
+
+    # CEC User Control Pressed: UP (0x01)
+    echo ">> 01:44:01" >> "$CEC_TRIGGER"
+
+    log "Guide overlay trigger sent"
+}
+
 cmd_status() {
     echo ""
     echo "TV Simulator Status"
@@ -120,6 +130,7 @@ case "${1:-}" in
     setup)      cmd_setup ;;
     on)         cmd_on ;;
     off)        cmd_off ;;
+    guide)      cmd_guide ;;
     status)     cmd_status ;;
     *)          show_help ;;
 esac

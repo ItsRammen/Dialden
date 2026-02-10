@@ -57,6 +57,7 @@ mkdir -p "$RELEASE_DIR/scripts"
 cp scripts/install.sh "$RELEASE_DIR/scripts/"
 cp scripts/update.sh "$RELEASE_DIR/scripts/" 2>/dev/null || true
 cp scripts/logo.lua "$RELEASE_DIR/scripts/" 2>/dev/null || true
+cp scripts/tvguide.lua "$RELEASE_DIR/scripts/" 2>/dev/null || true
 
 # Docs
 cp README.md "$RELEASE_DIR/"
@@ -66,10 +67,10 @@ echo "[pack] Creating app tarball..."
 cd "$DIST_DIR"
 COPYFILE_DISABLE=1 tar --no-xattrs --exclude='.DS_Store' -czf "toasttv-${VERSION}.tar.gz" toasttv/
 
-echo "[pack] Creating media tarball..."
+echo "[pack] Creating media tarball (tracked files only)..."
 cd "$PROJECT_ROOT"
-# Pack media folder directly (produces media/videos/...)
-COPYFILE_DISABLE=1 tar --no-xattrs --exclude='.DS_Store' -czf "$DIST_DIR/media.tar.gz" media/
+# Only include git-tracked media files (respects .gitignore)
+git ls-files media/ | COPYFILE_DISABLE=1 tar --no-xattrs -czf "$DIST_DIR/media.tar.gz" -T -
 
 echo "[pack] ✅ Created:"
 echo "  - App:   $DIST_DIR/toasttv-${VERSION}.tar.gz"

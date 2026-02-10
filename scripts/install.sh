@@ -309,9 +309,12 @@ if [[ -f "$USER_CONF" ]] && command -v aplay >/dev/null; then
     fi
 fi
 
-# Install Scripts (logo.lua, update.sh)
+# Install Scripts (logo.lua, tvguide.lua, update.sh)
 if [[ -f "$INSTALL_DIR/toasttv/scripts/logo.lua" ]]; then
     cp $INSTALL_DIR/toasttv/scripts/logo.lua $INSTALL_DIR/scripts/
+fi
+if [[ -f "$INSTALL_DIR/toasttv/scripts/tvguide.lua" ]]; then
+    cp $INSTALL_DIR/toasttv/scripts/tvguide.lua $INSTALL_DIR/scripts/
 fi
 if [[ -f "$INSTALL_DIR/toasttv/scripts/update.sh" ]]; then
     cp $INSTALL_DIR/toasttv/scripts/update.sh $INSTALL_DIR/scripts/
@@ -349,7 +352,7 @@ fi
 # 1. Start MPV in background
 rm -f $MPV_SOCKET
 echo "Starting MPV daemon..."
-mpv --idle --input-ipc-server=$MPV_SOCKET --include=$INSTALL_DIR/data/mpv.conf --script=$INSTALL_DIR/scripts/logo.lua --no-terminal > /tmp/mpv.log 2>&1 &
+mpv --idle --input-ipc-server=$MPV_SOCKET --include=$INSTALL_DIR/data/mpv.conf --script=$INSTALL_DIR/scripts/logo.lua --script=$INSTALL_DIR/scripts/tvguide.lua --no-terminal > /tmp/mpv.log 2>&1 &
 MPV_PID=$!
 
 # Wait for socket

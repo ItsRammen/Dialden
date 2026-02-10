@@ -6,11 +6,17 @@
  */
 
 import type { PlaylistEngine } from './PlaylistEngine'
-import type { MediaItem, PlaybackStatus, IMediaPlayer } from '../types'
+import type {
+  MediaItem,
+  PlaybackStatus,
+  IMediaPlayer,
+  GuideData,
+} from '../types'
 import type { DashboardEventService } from './DashboardEventService'
 import type { ConfigService } from './ConfigService'
 import type { IMediaRepository } from '../repositories/IMediaRepository'
 import { logger } from '../utils/logger'
+import { cleanFilename } from '../utils/cleanFilename'
 
 export interface PlaybackServiceDeps {
   player: IMediaPlayer
@@ -78,6 +84,34 @@ export class PlaybackService {
    */
   get isQuotaSkipped(): boolean {
     return this.engine.isQuotaSkipped()
+  }
+
+  /**
+   * Package current playback state for the TV guide overlay.
+   * Returns a plain data object — no IPC or player coupling.
+   */
+  async getGuideData(): Promise<GuideData> {
+    const current = this.engine.getCurrentVideo()
+    const queue = this.engine.peekQueue(1)
+    const nextItem = queue[0]
+    const session = this.engine.sessionInfo
+    const status = await this.player.getStatus()
+
+    const sessionMinutes =
+      session.limitMinutes === 0
+        ? -1
+        : Math.max(0, Math.floor(session.remainingMs / 60000))
+
+    return {
+      now: current ? cleanFilename(current.filename) : '—',
+      nowPosition: status.positionSeconds,
+      nowDuration: status.durationSeconds,
+      next: nextItem ? cleanFilename(nextItem.filename) : null,
+      nextDuration: nextItem ? nextItem.durationSeconds : 0,
+      sessionMinutes,
+      isOffAir: this.offAirMode,
+      resetHour: session.resetHour,
+    }
   }
 
   /**

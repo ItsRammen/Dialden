@@ -304,6 +304,14 @@ export class ToastTVDaemon {
           }
         })
 
+        cec.onKeyPress(CEC_KEYS.UP, () => {
+          console.log('CEC: UP - showing TV guide')
+          void (async () => {
+            const data = await playback.getGuideData()
+            await this.player?.showGuide?.(data)
+          })()
+        })
+
         await cec.start()
         console.log('CEC listener started')
       } catch (e) {

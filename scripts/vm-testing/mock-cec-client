@@ -1,0 +1,43 @@
+#!/bin/bash
+#
+# Mock cec-client for VM testing
+#
+# Simulates cec-client by:
+# 1. Tailing /tmp/toasttv-cec-trigger for simulated CEC events
+# 2. Responding to "pow 0" queries with /tmp/toasttv-power-state
+#
+# Events are written to the trigger file by tv-sim.sh
+
+CEC_TRIGGER="/tmp/toasttv-cec-trigger"
+POWER_STATE="/tmp/toasttv-power-state"
+
+# Truncate trigger file to prevent replaying old events on restart
+> "$CEC_TRIGGER"
+
+# Handle single-shot mode (e.g., echo "pow 0" | cec-client -s -d 1)
+if [[ "$*" == *"-s"* ]]; then
+    # Read stdin for commands
+    while IFS= read -r cmd; do
+        if [[ "$cmd" == "pow 0" ]]; then
+            STATE="unknown"
+            if [[ -f "$POWER_STATE" ]]; then
+                STATE=$(cat "$POWER_STATE")
+            fi
+            echo "power status: $STATE"
+        fi
+    done
+    exit 0
+fi
+
+# Long-running mode: tail the trigger file and echo events
+echo "CEC bus information"
+echo "==================="
+echo "device #0: TV"
+echo "address:   0.0.0.0"
+echo "active source: no"
+echo "power status: unknown"
+echo ""
+echo "waiting for input"
+
+# Tail the trigger file for new CEC events
+tail -f "$CEC_TRIGGER" 2>/dev/null

@@ -81,6 +81,19 @@ export interface ToastTVConfig {
   readonly logo: LogoConfig
 }
 
+// --- TV Guide Overlay ---
+
+export interface GuideData {
+  readonly now: string
+  readonly nowPosition: number
+  readonly nowDuration: number
+  readonly next: string | null
+  readonly nextDuration: number
+  readonly sessionMinutes: number // -1 = unlimited
+  readonly isOffAir: boolean
+  readonly resetHour: number
+}
+
 // --- Interfaces for DI ---
 
 export interface IMediaPlayer {
@@ -97,6 +110,8 @@ export interface IMediaPlayer {
   setLoop(enabled: boolean): Promise<void>
   getStatus(): Promise<PlaybackStatus>
   updateLogo(config: LogoConfig): Promise<void>
+  /** Optional: show TV guide overlay (MPV-specific) */
+  showGuide?(data: GuideData): Promise<void>
 }
 
 export interface IFileSystem {

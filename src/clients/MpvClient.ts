@@ -5,6 +5,7 @@ import type {
   PlaybackStatus,
   PlayerConfig,
   LogoConfig,
+  GuideData,
 } from '../types'
 
 /**
@@ -212,6 +213,18 @@ export class MpvClient implements IMediaPlayer {
         positionSeconds: 0,
         durationSeconds: 0,
       }
+    }
+  }
+
+  /**
+   * Show TV guide overlay via tvguide.lua script.
+   * MPV-specific — not part of IMediaPlayer interface.
+   */
+  async showGuide(data: GuideData): Promise<void> {
+    try {
+      await this.send(['script-message', 'show-guide', JSON.stringify(data)])
+    } catch (e) {
+      console.error('Failed to show TV guide overlay:', e)
     }
   }
 
