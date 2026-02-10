@@ -107,10 +107,13 @@ export class EventsController {
       position: status?.positionSeconds ?? 0,
       isPlaying: status?.isPlaying ?? false,
       sessionRemainingMs: remainingMs,
+      sessionStartedAt: session.startedAt?.toISOString() ?? null,
+      sessionLimitMs: limitMs,
       queue: queue.map((v) => ({
         id: v.id,
         filename: v.filename,
         isInterlude: v.isInterlude,
+        durationSeconds: v.durationSeconds,
       })),
     }
 

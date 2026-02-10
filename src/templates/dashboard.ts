@@ -1,8 +1,12 @@
 /**
  * Dashboard Template
  *
- * Main dashboard with unified hero card showing playback and controls.
- * Uses SSE for real-time updates - client owns the progress timer.
+ * Broadcast monitor with three-zone layout:
+ * - Fixed top: session status bar
+ * - Scrollable middle: now playing + queue
+ * - Fixed bottom: playback controls
+ *
+ * Uses SSE for real-time updates — client owns the progress timer.
  */
 
 import { renderLayout } from './layout'
@@ -12,60 +16,72 @@ export function renderDashboard(): string {
     'Dashboard',
     `
     <div class="dashboard">
-      <!-- Main Dashboard Container - Updated via SSE -->
-      <section class="hero-card" id="dashboard-hero">
-        <!-- Initial Loading State - Will be replaced by SSE sync -->
-        <div class="loading" id="loading-state">
-          <div style="font-size: 2rem; margin-bottom: 1rem;">📺</div>
-          Connecting to TV...
+      <!-- Zone 1: Fixed Status Bar -->
+      <div class="status-bar" id="status-bar">
+        <div class="status-bar-left">
+          <span class="status-badge" id="status-badge">
+            <span class="status-dot" id="status-dot"></span>
+            <span id="status-text">CONNECTING</span>
+          </span>
         </div>
-        
-        <!-- TV Off State (hidden initially) -->
-        <div id="tv-off-state" style="display: none;">
-          <div class="tv-off-state">
-            <!-- SMPTE Color Bars -->
-            <div class="smpte-bars">
-              <div class="smpte-row smpte-main">
-                <div style="background: #c0c0c0; flex: 1;"></div>
-                <div style="background: #c0c000; flex: 1;"></div>
-                <div style="background: #00c0c0; flex: 1;"></div>
-                <div style="background: #00c000; flex: 1;"></div>
-                <div style="background: #c000c0; flex: 1;"></div>
-                <div style="background: #c00000; flex: 1;"></div>
-                <div style="background: #0000c0; flex: 1;"></div>
-              </div>
-              <div class="smpte-row smpte-mid">
-                <div style="background: #0000c0; flex: 1;"></div>
-                <div style="background: #131313; flex: 1;"></div>
-                <div style="background: #c000c0; flex: 1;"></div>
-                <div style="background: #131313; flex: 1;"></div>
-                <div style="background: #00c0c0; flex: 1;"></div>
-                <div style="background: #131313; flex: 1;"></div>
-                <div style="background: #c0c0c0; flex: 1;"></div>
-              </div>
-              <div class="smpte-row smpte-bottom">
-                <div style="background: #00214c; flex: 1.5;"></div>
-                <div style="background: #fff; flex: 1.5;"></div>
-                <div style="background: #32006a; flex: 1.5;"></div>
-                <div style="background: #131313; flex: 4;"></div>
-                <div style="background: #090909; flex: 0.5;"></div>
-                <div style="background: #1d1d1d; flex: 0.5;"></div>
-              </div>
-              <div class="smpte-overlay"></div>
+        <div class="status-bar-right">
+          <span class="session-remaining" id="session-remaining">--:--</span>
+        </div>
+        <div class="session-progress" id="session-progress">
+          <div class="session-progress-fill" id="session-progress-fill" style="width: 0%"></div>
+        </div>
+      </div>
+
+      <!-- Zone 2: Scrollable Content -->
+      <div class="dashboard-content" id="dashboard-content">
+        <!-- Loading State -->
+        <div class="state-card" id="loading-state">
+          <div class="state-icon">📺</div>
+          <div class="state-message">Connecting to TV...</div>
+        </div>
+
+        <!-- TV Off State -->
+        <div class="state-card" id="tv-off-state" style="display: none;">
+          <div class="smpte-bars">
+            <div class="smpte-row smpte-main">
+              <div style="background: #c0c0c0; flex: 1;"></div>
+              <div style="background: #c0c000; flex: 1;"></div>
+              <div style="background: #00c0c0; flex: 1;"></div>
+              <div style="background: #00c000; flex: 1;"></div>
+              <div style="background: #c000c0; flex: 1;"></div>
+              <div style="background: #c00000; flex: 1;"></div>
+              <div style="background: #0000c0; flex: 1;"></div>
             </div>
-            
-            <div class="tv-off-content">
-              <button class="btn btn-primary hero-btn-power" style="font-size: 1.25rem; padding: 0.875rem 2rem;"
-                      hx-post="/api/session/start"
-                      hx-swap="none">
-                ⏻ POWER ON
-              </button>
+            <div class="smpte-row smpte-mid">
+              <div style="background: #0000c0; flex: 1;"></div>
+              <div style="background: #131313; flex: 1;"></div>
+              <div style="background: #c000c0; flex: 1;"></div>
+              <div style="background: #131313; flex: 1;"></div>
+              <div style="background: #00c0c0; flex: 1;"></div>
+              <div style="background: #131313; flex: 1;"></div>
+              <div style="background: #c0c0c0; flex: 1;"></div>
             </div>
+            <div class="smpte-row smpte-bottom">
+              <div style="background: #00214c; flex: 1.5;"></div>
+              <div style="background: #fff; flex: 1.5;"></div>
+              <div style="background: #32006a; flex: 1.5;"></div>
+              <div style="background: #131313; flex: 4;"></div>
+              <div style="background: #090909; flex: 0.5;"></div>
+              <div style="background: #1d1d1d; flex: 0.5;"></div>
+            </div>
+            <div class="smpte-overlay"></div>
+          </div>
+          <div class="state-actions">
+            <button class="btn btn-primary btn-large"
+                    hx-post="/api/session/start"
+                    hx-swap="none">
+              ⏻ POWER ON
+            </button>
           </div>
         </div>
-        
-        <!-- Off-Air State (quota exhausted) -->
-        <div id="off-air-state" style="display: none;">
+
+        <!-- Off-Air State -->
+        <div class="state-card" id="off-air-state" style="display: none;">
           <div class="off-air-card">
             <div class="off-air-icon">🌙</div>
             <h2 class="off-air-title">OFF AIR</h2>
@@ -79,74 +95,58 @@ export function renderDashboard(): string {
             <p class="off-air-reset">Limit resumes at <span id="reset-hour">6:00</span></p>
           </div>
         </div>
-        
-        <!-- TV On State (hidden initially) -->
+
+        <!-- TV On State: Now Playing + Queue -->
         <div id="tv-on-state" style="display: none;">
-          <div class="now-playing-hero">
-            <!-- Session Timer Bar -->
-            <div class="session-bar" id="session-bar">
-              <div class="session-bar-fill" id="session-fill" style="width: 0%"></div>
-              <div class="session-bar-content">
-                <span class="session-label">Broadcast Ends In</span>
-                <span class="session-time" id="session-time">--:--</span>
-              </div>
+          <!-- Now Playing Card -->
+          <div class="now-playing-card">
+            <div class="now-playing-thumb" id="now-playing-thumb">
+              <img id="now-playing-img" alt="" loading="lazy">
             </div>
-
-            <!-- Main TV Content -->
-            <div class="tv-preview">
-              <div class="tv-status" id="status-badge">
-                <span class="tv-status-icon" id="status-icon">▶</span>
-                <span id="status-text">ON AIR</span>
-              </div>
-              
-              <div class="tv-content">
-                <h2 class="tv-title" id="track-title">Loading...</h2>
-                <div class="tv-progress">
-                  <div class="tv-progress-bar">
-                    <div class="tv-progress-fill" id="progress-fill" style="width: 0%"></div>
-                  </div>
-                  <div class="tv-time" id="time-display">0:00 / 0:00</div>
+            <div class="now-playing-info">
+              <h2 class="now-playing-title" id="track-title">Loading...</h2>
+              <div class="now-playing-progress">
+                <div class="progress-bar">
+                  <div class="progress-fill" id="progress-fill" style="width: 0%"></div>
                 </div>
+                <div class="progress-time" id="time-display">0:00 / 0:00</div>
               </div>
-            </div>
-
-            <!-- Controls -->
-            <div class="hero-controls">
-              <button class="hero-btn" id="play-pause-btn" hx-post="/api/pause" hx-swap="none" title="Pause">
-                <svg viewBox="0 0 24 24" fill="currentColor" id="play-pause-icon">
-                  <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>
-                </svg>
-              </button>
-
-              <button class="hero-btn" hx-post="/api/skip" hx-swap="none" title="Skip">
-                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
-              </button>
-              
-              <div style="width: 1px; background: rgba(255,255,255,0.2); margin: 0 0.5rem;"></div>
-
-              <button class="hero-btn hero-btn-shuffle" hx-post="/api/session/shuffle" hx-swap="none" title="Shuffle Queue">
-                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></svg>
-              </button>
-
-              <button class="hero-btn hero-btn-power" hx-post="/api/session/stop" hx-confirm="End broadcast?" hx-swap="none" title="Power Off">
-                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 3h-2v10h2V3zm4.83 2.17l-1.42 1.42C17.99 7.86 19 9.81 19 12c0 3.87-3.13 7-7 7s-7-3.13-7-7c0-2.19 1.01-4.14 2.58-5.42L6.17 5.17C4.23 6.82 3 9.26 3 12c0 4.97 4.03 9 9 9s9-4.03 9-9c0-2.74-1.23-5.18-3.17-6.83z"/></svg>
-              </button>
-            </div>
-
-            <!-- Up Next -->
-            <div class="up-next" id="up-next-section" style="display: none;">
-              <details open>
-                <summary class="up-next-summary">
-                  <span class="up-next-label">UP NEXT</span>
-                  <span class="up-next-title" id="up-next-title"></span>
-                  <span class="up-next-arrow">▼</span>
-                </summary>
-                <div class="up-next-list" id="up-next-list"></div>
-              </details>
             </div>
           </div>
+
+          <!-- Coming Up Section -->
+          <div class="queue-section" id="queue-section" style="display: none;">
+            <div class="queue-header">
+              <span class="queue-label">COMING UP</span>
+              <span class="queue-total" id="queue-total"></span>
+            </div>
+            <div class="queue-list" id="queue-list"></div>
+          </div>
         </div>
-      </section>
+      </div>
+
+      <!-- Zone 3: Fixed Controls Bar -->
+      <div class="controls-bar" id="controls-bar" style="display: none;">
+        <button class="ctrl-btn" id="play-pause-btn" hx-post="/api/pause" hx-swap="none" title="Pause">
+          <svg viewBox="0 0 24 24" fill="currentColor" id="play-pause-icon">
+            <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>
+          </svg>
+        </button>
+
+        <button class="ctrl-btn" hx-post="/api/skip" hx-swap="none" title="Skip">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+        </button>
+
+        <div class="ctrl-divider"></div>
+
+        <button class="ctrl-btn ctrl-secondary" hx-post="/api/session/shuffle" hx-swap="none" title="Shuffle Queue">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></svg>
+        </button>
+
+        <button class="ctrl-btn ctrl-danger" hx-post="/api/session/stop" hx-confirm="End broadcast?" hx-swap="none" title="Power Off">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 3h-2v10h2V3zm4.83 2.17l-1.42 1.42C17.99 7.86 19 9.81 19 12c0 3.87-3.13 7-7 7s-7-3.13-7-7c0-2.19 1.01-4.14 2.58-5.42L6.17 5.17C4.23 6.82 3 9.26 3 12c0 4.97 4.03 9 9 9s9-4.03 9-9c0-2.74-1.23-5.18-3.17-6.83z"/></svg>
+        </button>
+      </div>
     </div>
     
     <!-- Toast Container for Notifications -->
@@ -154,41 +154,53 @@ export function renderDashboard(): string {
     
     <!-- SSE Client Script -->
     <script>
+    ${getDashboardScript()}
+    </script>
+  `
+  )
+}
+
+function getDashboardScript(): string {
+  return `
     (function() {
       'use strict';
       
       // --- State ---
-      let position = 0;
-      let duration = 0;
-      let isPlaying = false;
-      let trackId = null;
-      let sessionRemainingMs = 0;
-      let sessionLimitMs = 0;
-      let timer = null;
-      let sessionTimer = null;
+      var position = 0;
+      var duration = 0;
+      var isPlaying = false;
+      var trackId = null;
+      var sessionRemainingMs = 0;
+      var sessionLimitMs = 0;
+      var sessionStartedAt = null;
+      var timer = null;
+      var sessionTimer = null;
       
       // --- DOM Elements ---
-      const loadingState = document.getElementById('loading-state');
-      const tvOffState = document.getElementById('tv-off-state');
-      const tvOnState = document.getElementById('tv-on-state');
-      const statusBadge = document.getElementById('status-badge');
-      const statusIcon = document.getElementById('status-icon');
-      const statusText = document.getElementById('status-text');
-      const trackTitle = document.getElementById('track-title');
-      const progressFill = document.getElementById('progress-fill');
-      const timeDisplay = document.getElementById('time-display');
-      const sessionBar = document.getElementById('session-bar');
-      const sessionFill = document.getElementById('session-fill');
-      const sessionTime = document.getElementById('session-time');
-      const sessionLabel = document.querySelector('.session-label'); // Add selector for label
-      const playPauseIcon = document.getElementById('play-pause-icon');
-      const upNextSection = document.getElementById('up-next-section');
-      const upNextTitle = document.getElementById('up-next-title');
-      const upNextList = document.getElementById('up-next-list');
-      const offAirState = document.getElementById('off-air-state');
-      const resetHourEl = document.getElementById('reset-hour');
+      var loadingState = document.getElementById('loading-state');
+      var tvOffState = document.getElementById('tv-off-state');
+      var tvOnState = document.getElementById('tv-on-state');
+      var offAirState = document.getElementById('off-air-state');
+      var statusBar = document.getElementById('status-bar');
+      var statusBadge = document.getElementById('status-badge');
+      var statusDot = document.getElementById('status-dot');
+      var statusText = document.getElementById('status-text');
+      var sessionRemaining = document.getElementById('session-remaining');
+      var sessionProgressFill = document.getElementById('session-progress-fill');
+      var sessionProgress = document.getElementById('session-progress');
+      var trackTitle = document.getElementById('track-title');
+      var progressFill = document.getElementById('progress-fill');
+      var timeDisplay = document.getElementById('time-display');
+      var nowPlayingThumb = document.getElementById('now-playing-thumb');
+      var nowPlayingImg = document.getElementById('now-playing-img');
+      var playPauseIcon = document.getElementById('play-pause-icon');
+      var queueSection = document.getElementById('queue-section');
+      var queueList = document.getElementById('queue-list');
+      var queueTotal = document.getElementById('queue-total');
+      var controlsBar = document.getElementById('controls-bar');
+      var resetHourEl = document.getElementById('reset-hour');
       
-      // --- Debug logging helper ---
+      // --- Helpers ---
       function ts() {
         return new Date().toISOString().slice(11, 23);
       }
@@ -196,9 +208,30 @@ export function renderDashboard(): string {
         console.log('[' + ts() + '] ' + category + ': ' + msg);
       }
       
+      function cleanFilename(filename) {
+        if (!filename) return '';
+        return filename
+          .replace(/\\.[^.]+$/, '')
+          .replace(/_/g, ' ');
+      }
+      
+      function formatTime(secs) {
+        var m = Math.floor(secs / 60);
+        var s = Math.floor(secs % 60);
+        return m + ':' + (s < 10 ? '0' : '') + s;
+      }
+      
+      function formatDuration(secs) {
+        var m = Math.floor(secs / 60);
+        var s = Math.floor(secs % 60);
+        if (m === 0) return s + 's';
+        if (s === 0) return m + 'm';
+        return m + ':' + (s < 10 ? '0' : '') + s;
+      }
+      
       // --- SSE Connection ---
-      let eventSource = null;
-      let reconnectAttempts = 0;
+      var eventSource = null;
+      var reconnectAttempts = 0;
       
       function connect() {
         eventSource = new EventSource('/events/dashboard');
@@ -210,7 +243,7 @@ export function renderDashboard(): string {
         
         eventSource.onmessage = function(e) {
           try {
-            const event = JSON.parse(e.data);
+            var event = JSON.parse(e.data);
             handleEvent(event);
           } catch (err) {
             console.error('SSE parse error:', err);
@@ -220,13 +253,13 @@ export function renderDashboard(): string {
         eventSource.onerror = function() {
           eventSource.close();
           reconnectAttempts++;
-          const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+          var delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
           log('SSE', 'reconnecting in ' + delay + 'ms');
           setTimeout(connect, delay);
         };
       }
       
-      // --- Event Handlers ---
+      // --- Event Router ---
       function handleEvent(event) {
         log('SSE', 'received: ' + event.type + ' ' + (event.filename || event.trackId || ''));
         switch (event.type) {
@@ -240,7 +273,7 @@ export function renderDashboard(): string {
             handlePaused();
             break;
           case 'playing':
-          case 'resume': // Added 'resume' to trigger handlePlaying
+          case 'resume':
             handlePlaying();
             break;
           case 'sessionStart':
@@ -255,12 +288,11 @@ export function renderDashboard(): string {
         }
       }
       
+      // --- Event Handlers ---
       function handleSync(event) {
         log('SSE', 'sync: pos=' + event.position + ' dur=' + event.duration + ' playing=' + event.isPlaying + ' offAir=' + event.isOffAir);
-        // Hide loading
         loadingState.style.display = 'none';
         
-        // Check for off-air mode first
         if (event.isOffAir) {
           showOffAir(event.resetHour);
           return;
@@ -271,24 +303,23 @@ export function renderDashboard(): string {
           return;
         }
         
-        // Show TV on
         showTvOn();
         
-        // Set initial state
         trackId = event.trackId;
         position = event.position;
         duration = event.duration;
         isPlaying = event.isPlaying;
         sessionRemainingMs = event.sessionRemainingMs;
+        sessionLimitMs = event.sessionLimitMs || 0;
+        sessionStartedAt = event.sessionStartedAt;
         
-        // Update UI
-        trackTitle.textContent = event.filename || 'No video';
+        trackTitle.textContent = cleanFilename(event.filename) || 'No video';
+        updateThumbnail(event.trackId);
         updateProgressBar();
         updateStatusBadge();
-        updateSessionTimer();
+        updateSessionDisplay();
         handleQueueUpdate(event);
         
-        // Start timers
         if (isPlaying) {
           startTimer();
           startSessionTimer();
@@ -305,11 +336,11 @@ export function renderDashboard(): string {
         duration = event.duration;
         isPlaying = true;
         
-        trackTitle.textContent = event.filename;
+        trackTitle.textContent = cleanFilename(event.filename);
+        updateThumbnail(event.trackId);
         updateProgressBar();
         updateStatusBadge();
         startTimer();
-        // Update queue if present
         if (event.queue) {
           handleQueueUpdate(event);
         }
@@ -333,7 +364,6 @@ export function renderDashboard(): string {
         sessionRemainingMs = event.sessionRemainingMs;
         showTvOn();
         startSessionTimer();
-        // Update queue if present
         if (event.queue) {
           handleQueueUpdate(event);
         }
@@ -347,98 +377,125 @@ export function renderDashboard(): string {
       
       function handleQueueUpdate(event) {
         if (!event.queue || event.queue.length === 0) {
-          upNextSection.style.display = 'none';
+          queueSection.style.display = 'none';
           return;
         }
         
-        upNextSection.style.display = 'block';
-        upNextTitle.textContent = event.queue[0].filename;
-        upNextList.innerHTML = event.queue.map((item, i) => 
-          '<div class="up-next-item' + (item.isInterlude ? ' interlude' : '') + '">' +
-            '<span class="up-next-index">' + (i + 1) + '</span>' +
-            '<span class="up-next-item-title">' + item.filename + '</span>' +
-          '</div>'
-        ).join('');
+        queueSection.style.display = 'block';
+        
+        var totalSeconds = 0;
+        var html = '';
+        for (var i = 0; i < event.queue.length; i++) {
+          var item = event.queue[i];
+          totalSeconds += item.durationSeconds || 0;
+          html += '<div class="queue-item' + (item.isInterlude ? ' queue-interlude' : '') + '">' +
+            '<div class="queue-thumb" style="background-image: url(\\'/thumbnails/' + item.id + '.jpg\\')"></div>' +
+            '<div class="queue-item-info">' +
+              '<span class="queue-item-title">' + cleanFilename(item.filename) + '</span>' +
+              '<span class="queue-item-duration">' + formatDuration(item.durationSeconds || 0) + '</span>' +
+            '</div>' +
+          '</div>';
+        }
+        
+        queueList.innerHTML = html;
+        queueTotal.textContent = event.queue.length + ' video' + (event.queue.length !== 1 ? 's' : '') + ' · ' + formatDuration(totalSeconds);
       }
       
-      // --- UI Updates ---
+      // --- UI State Transitions ---
       function showTvOff() {
+        loadingState.style.display = 'none';
         tvOffState.style.display = 'block';
         tvOnState.style.display = 'none';
         offAirState.style.display = 'none';
-        loadingState.style.display = 'none';
+        controlsBar.style.display = 'none';
+        statusBar.className = 'status-bar off';
+        statusDot.className = 'status-dot off';
+        statusText.textContent = 'OFF';
+        sessionRemaining.textContent = '';
+        sessionProgressFill.style.width = '0%';
       }
       
       function showTvOn() {
+        loadingState.style.display = 'none';
         tvOffState.style.display = 'none';
         tvOnState.style.display = 'block';
         offAirState.style.display = 'none';
-        loadingState.style.display = 'none';
+        controlsBar.style.display = 'flex';
       }
       
       function showOffAir(resetHour) {
+        loadingState.style.display = 'none';
         tvOffState.style.display = 'none';
         tvOnState.style.display = 'none';
         offAirState.style.display = 'block';
-        loadingState.style.display = 'none';
+        controlsBar.style.display = 'none';
+        statusBar.className = 'status-bar off-air';
+        statusDot.className = 'status-dot off-air';
+        statusText.textContent = 'OFF AIR';
+        sessionRemaining.textContent = '';
+        sessionProgressFill.style.width = '100%';
         if (resetHourEl) resetHourEl.textContent = resetHour + ':00';
+      }
+      
+      // --- UI Updates ---
+      function updateThumbnail(id) {
+        if (id && nowPlayingImg) {
+          nowPlayingImg.src = '/thumbnails/' + id + '.jpg';
+          nowPlayingImg.alt = 'Now playing';
+        }
       }
       
       function updateStatusBadge() {
         if (isPlaying) {
-          statusBadge.className = 'tv-status playing';
-          statusIcon.textContent = '▶';
+          statusBar.className = 'status-bar live';
+          statusDot.className = 'status-dot live';
           statusText.textContent = 'ON AIR';
           playPauseIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>';
         } else {
-          statusBadge.className = 'tv-status paused';
-          statusIcon.textContent = '⏸';
+          statusBar.className = 'status-bar paused';
+          statusDot.className = 'status-dot paused';
           statusText.textContent = 'PAUSED';
           playPauseIcon.innerHTML = '<path d="M8 5v14l11-7z"/>';
         }
       }
       
       function updateProgressBar() {
-        const pct = duration > 0 ? (position / duration) * 100 : 0;
+        var pct = duration > 0 ? (position / duration) * 100 : 0;
         progressFill.style.width = Math.min(100, pct) + '%';
         timeDisplay.textContent = formatTime(position) + ' / ' + formatTime(duration);
       }
       
-      function updateSessionTimer() {
-        if (sessionRemainingMs <= 0) {
-          if (sessionLabel) sessionLabel.textContent = 'Broadcast';
-          sessionTime.textContent = 'Ending Soon';
-          sessionFill.style.width = '100%';
-          sessionBar.className = 'session-bar critical';
+      function updateSessionDisplay() {
+        if (sessionRemainingMs <= 0 && sessionLimitMs > 0) {
+          sessionRemaining.textContent = 'Ending Soon';
+          sessionProgressFill.style.width = '100%';
+          sessionProgress.className = 'session-progress critical';
           return;
         }
-
-        if (sessionLabel) sessionLabel.textContent = 'Broadcast Ends In';
-        const mins = Math.floor(sessionRemainingMs / 60000);
-        const secs = Math.floor((sessionRemainingMs % 60000) / 1000);
-        sessionTime.textContent = mins + ':' + secs.toString().padStart(2, '0');
         
-        // Update fill (assumes 30 min limit if not specified)
-        if (sessionLimitMs > 0) {
-          const elapsed = sessionLimitMs - sessionRemainingMs;
-          const pct = Math.min(100, (elapsed / sessionLimitMs) * 100);
-          sessionFill.style.width = pct + '%';
+        if (sessionLimitMs <= 0) {
+          // Unlimited session
+          sessionRemaining.textContent = '∞';
+          sessionProgressFill.style.width = '0%';
+          sessionProgress.className = 'session-progress';
+          return;
         }
         
-        // Warning/critical states
+        var mins = Math.floor(sessionRemainingMs / 60000);
+        var secs = Math.floor((sessionRemainingMs % 60000) / 1000);
+        sessionRemaining.textContent = mins + ':' + (secs < 10 ? '0' : '') + secs + ' left';
+        
+        var elapsed = sessionLimitMs - sessionRemainingMs;
+        var pct = Math.min(100, (elapsed / sessionLimitMs) * 100);
+        sessionProgressFill.style.width = pct + '%';
+        
         if (mins < 5) {
-          sessionBar.className = 'session-bar critical';
+          sessionProgress.className = 'session-progress critical';
         } else if (mins < 10) {
-          sessionBar.className = 'session-bar warning';
+          sessionProgress.className = 'session-progress warning';
         } else {
-          sessionBar.className = 'session-bar';
+          sessionProgress.className = 'session-progress';
         }
-      }
-      
-      function formatTime(secs) {
-        const m = Math.floor(secs / 60);
-        const s = Math.floor(secs % 60);
-        return m + ':' + s.toString().padStart(2, '0');
       }
       
       // --- Timers ---
@@ -464,7 +521,7 @@ export function renderDashboard(): string {
         sessionTimer = setInterval(function() {
           if (sessionRemainingMs > 0) {
             sessionRemainingMs -= 1000;
-            updateSessionTimer();
+            updateSessionDisplay();
           }
         }, 1000);
       }
@@ -479,7 +536,5 @@ export function renderDashboard(): string {
       // --- Start ---
       connect();
     })();
-    </script>
   `
-  )
 }

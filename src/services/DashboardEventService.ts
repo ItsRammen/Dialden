@@ -7,6 +7,13 @@
 
 import { logger } from '../utils/logger'
 
+export interface QueueItem {
+  id: number
+  filename: string
+  isInterlude: boolean
+  durationSeconds: number
+}
+
 export interface SyncEvent {
   type: 'sync'
   sessionActive: boolean
@@ -18,7 +25,9 @@ export interface SyncEvent {
   position: number
   isPlaying: boolean
   sessionRemainingMs: number
-  queue: Array<{ id: number; filename: string; isInterlude: boolean }>
+  sessionStartedAt: string | null
+  sessionLimitMs: number
+  queue: QueueItem[]
 }
 
 export interface TrackStartEvent {
@@ -26,7 +35,7 @@ export interface TrackStartEvent {
   trackId: number
   filename: string
   duration: number
-  queue: Array<{ id: number; filename: string; isInterlude: boolean }>
+  queue: QueueItem[]
 }
 
 export interface PausedEvent {
@@ -40,7 +49,7 @@ export interface PlayingEvent {
 export interface SessionStartEvent {
   type: 'sessionStart'
   sessionRemainingMs: number
-  queue: Array<{ id: number; filename: string; isInterlude: boolean }>
+  queue: QueueItem[]
 }
 
 export interface SessionEndEvent {
@@ -49,7 +58,7 @@ export interface SessionEndEvent {
 
 export interface QueueUpdateEvent {
   type: 'queueUpdate'
-  queue: Array<{ id: number; filename: string; isInterlude: boolean }>
+  queue: QueueItem[]
 }
 
 export type DashboardEvent =
@@ -99,8 +108,7 @@ export class DashboardEventService {
   broadcast(event: DashboardEvent): void {
     if (this.clients.size === 0) return
 
-    const detail =
-      event.type === 'trackStart' ? (event as TrackStartEvent).filename : ''
+    const detail = event.type === 'trackStart' ? event.filename : ''
     logger.debug('SSE', `broadcast: ${event.type} ${detail}`)
     const data = this.formatSSE(event)
 

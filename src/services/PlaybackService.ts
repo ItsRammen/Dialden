@@ -103,6 +103,7 @@ export class PlaybackService {
             id: v.id,
             filename: v.filename,
             isInterlude: v.isInterlude,
+            durationSeconds: v.durationSeconds,
           })),
         })
 
@@ -122,6 +123,7 @@ export class PlaybackService {
           id: v.id,
           filename: v.filename,
           isInterlude: v.isInterlude,
+          durationSeconds: v.durationSeconds,
         })),
       })
     }
@@ -155,6 +157,7 @@ export class PlaybackService {
       id: v.id,
       filename: v.filename,
       isInterlude: v.isInterlude,
+      durationSeconds: v.durationSeconds,
     }))
     this.events?.broadcast({
       type: 'sessionStart',
@@ -246,6 +249,7 @@ export class PlaybackService {
       id: v.id,
       filename: v.filename,
       isInterlude: v.isInterlude,
+      durationSeconds: v.durationSeconds,
     }))
     this.events?.broadcast({ type: 'queueUpdate', queue })
   }
@@ -287,6 +291,7 @@ export class PlaybackService {
       id: v.id,
       filename: v.filename,
       isInterlude: v.isInterlude,
+      durationSeconds: v.durationSeconds,
     }))
     this.events?.broadcast({
       type: 'trackStart',
@@ -361,6 +366,8 @@ export class PlaybackService {
       position: 0,
       isPlaying: true,
       sessionRemainingMs: 0,
+      sessionStartedAt: null,
+      sessionLimitMs: 0,
       queue: [],
     })
   }
@@ -490,6 +497,7 @@ export class PlaybackService {
               id: v.id,
               filename: v.filename,
               isInterlude: v.isInterlude,
+              durationSeconds: v.durationSeconds,
             }))
             this.events?.broadcast({
               type: 'trackStart',
