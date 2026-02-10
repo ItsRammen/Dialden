@@ -22,10 +22,10 @@ Once installed, your station needs content:
 
 ## Broadcast Control Center
 
-The dashboard puts you in the director's chair:
+The mobile-first dashboard puts you in the director's chair from any device:
 
 ### Library Management
-Upload videos, categorize content, and toggle interludes instantly.
+Upload videos, categorize content, and toggle interludes. Videos are automatically checked against your Pi's hardware capabilities. Incompatible files are flagged before they hit the playlist.
 
 <img src="docs/library.png" alt="Library Management" width="100%">
 
@@ -50,10 +50,17 @@ ToastTV listens for HDMI-CEC commands from your TV remote:
 |--------|--------|
 | **SELECT / OK** | Start playback or toggle pause |
 | **RIGHT →** | Skip to next video |
-| **PLAY** | Start playback |
-| **PAUSE** | Pause video |
+| **UP ↑** | Toggle TV guide |
+| **PLAY ▶** | Start playback |
+| **PAUSE ⏸** | Pause video |
 
 > **Note**: CEC support varies by TV. Arrow keys and SELECT typically work best.
+
+### TV Guide Overlay
+
+Press **UP** on your remote for a retro Now/Next display, see what's playing, what's coming up, and how much screen time is left.
+
+<img src="docs/tvguide.png" alt="TV Guide Overlay" width="100%">
 
 ### Starter Content
 
@@ -115,6 +122,7 @@ TVSIM_HOST=dietpi@192.168.x.x make tvsim
 # On VM: simulate TV events
 ./tv-sim.sh on          # TV power on
 ./tv-sim.sh off         # TV standby
+./tv-sim.sh guide       # Toggle TV guide
 ./tv-sim.sh hdmi-plug   # HDMI cable connected
 ./tv-sim.sh hdmi-unplug # HDMI disconnected
 ./tv-sim.sh status      # Show current state
