@@ -20,6 +20,19 @@ const CACHE_TTL_MS = 60 * 60 * 1000 // 1 hour
 const UPDATE_SCRIPT = '/opt/toasttv/scripts/update.sh'
 const UPDATE_LOG_PATH = './data/update.log'
 
+/** Returns true if `remote` is a strictly newer semver than `current`. */
+function isNewerVersion(remote: string, current: string): boolean {
+  const r = remote.split('.').map(Number)
+  const c = current.split('.').map(Number)
+  for (let i = 0; i < 3; i++) {
+    const rv = r[i] ?? 0
+    const cv = c[i] ?? 0
+    if (rv > cv) return true
+    if (rv < cv) return false
+  }
+  return false
+}
+
 export interface UpdateInfo {
   readonly currentVersion: string
   readonly latestVersion: string | null
@@ -52,7 +65,7 @@ export class UpdateService {
       return this.cachedInfo // Return stale cache (or null) on failure
     }
 
-    const updateAvailable = latestVersion !== currentVersion
+    const updateAvailable = isNewerVersion(latestVersion, currentVersion)
 
     this.cachedInfo = { currentVersion, latestVersion, updateAvailable }
     this.lastCheckAt = now
