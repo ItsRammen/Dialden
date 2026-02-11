@@ -28,6 +28,11 @@ export function renderLayout(
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${title} - Toast TV</title>
   <link rel="stylesheet" href="/style.css">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/app-icon.png">
+  <meta name="theme-color" content="#e94560">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <script src="https://unpkg.com/htmx.org@1.9.10"></script>
 </head>
 <body>
