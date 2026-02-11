@@ -60,3 +60,8 @@ jobs:
           git add website/version.txt package.json
           git diff --cached --quiet || git commit -m "chore: bump version to $VERSION"
           git push origin main
+
+      - name: Trigger Pages deploy
+        run: gh workflow run pages.yml
+        env:
+          GH_TOKEN: ${{ github.token }}
