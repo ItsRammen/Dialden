@@ -11,7 +11,7 @@
 
 import { renderLayout } from './layout'
 
-export function renderDashboard(): string {
+export function renderDashboard(updateAvailable?: boolean): string {
   return renderLayout(
     'Dashboard',
     `
@@ -156,7 +156,8 @@ export function renderDashboard(): string {
     <script>
     ${getDashboardScript()}
     </script>
-  `
+  `,
+    { updateAvailable }
   )
 }
 

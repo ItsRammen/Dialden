@@ -30,6 +30,7 @@ export function createServer(daemon: ToastTVDaemon): ServerResult {
   // --- Get Services from Daemon ---
   const configService = daemon.getConfigService()
   const playbackService = daemon.getPlaybackService()
+  const updateService = daemon.getUpdateService()
   const thumbnailClient = new ThumbnailClient()
   const dashboardEventService = new DashboardEventService()
 
@@ -63,6 +64,7 @@ export function createServer(daemon: ToastTVDaemon): ServerResult {
     config: configService,
     media: mediaService,
     hardware: daemon.getHardwareService(),
+    update: updateService,
   })
 
   const dashboardController = createDashboardController({
@@ -86,7 +88,8 @@ export function createServer(daemon: ToastTVDaemon): ServerResult {
 
   // --- Dashboard (home page) ---
   app.get('/', (c) => {
-    return c.html(renderDashboard())
+    const updateInfo = updateService.getUpdateInfo()
+    return c.html(renderDashboard(updateInfo?.updateAvailable))
   })
 
   return { app, playbackService }

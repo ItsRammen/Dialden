@@ -1,7 +1,7 @@
 /**
  * Settings Controller
  *
- * Handles settings page and configuration API endpoints.
+ * Handles settings page, configuration API, and update endpoints.
  */
 
 import { Hono } from 'hono'
@@ -11,15 +11,17 @@ import type { AppConfig, DeepPartial } from '../repositories/ConfigRepository'
 import { renderSettings } from '../templates/settings'
 import type { MediaService } from '../services/MediaService'
 import type { IHardwareDetectionService } from '../services/HardwareDetectionService'
+import type { UpdateService } from '../services/UpdateService'
 
 interface SettingsControllerDeps {
   config: ConfigService
   media: MediaService
   hardware?: IHardwareDetectionService
+  update: UpdateService
 }
 
 export function createSettingsController(deps: SettingsControllerDeps) {
-  const { config, media, hardware } = deps
+  const { config, media, hardware, update } = deps
   const controller = new Hono()
 
   // --- Pages ---
@@ -27,11 +29,15 @@ export function createSettingsController(deps: SettingsControllerDeps) {
   controller.get('/settings', async (c) => {
     const currentConfig = await config.get()
     const profile = hardware?.getProfile()
+    const updateInfo = update.getUpdateInfo()
     return c.html(
       renderSettings({
         config: currentConfig,
         mediaDirectory: media.getMediaDirectory(),
         hardwareProfileName: profile?.name,
+        updateAvailable: updateInfo?.updateAvailable,
+        currentVersion: updateInfo?.currentVersion,
+        latestVersion: updateInfo?.latestVersion,
       })
     )
   })
@@ -58,7 +64,6 @@ export function createSettingsController(deps: SettingsControllerDeps) {
       session: {
         limitMinutes: sessionLimit ? parseInt(sessionLimit, 10) : 0,
         resetHour: parseInt(resetHour, 10) || 6,
-        // offAirAssetId is set via Library page, not Settings
       },
       interlude: {
         enabled: body['interludeEnabled'] === 'true',
@@ -96,14 +101,9 @@ export function createSettingsController(deps: SettingsControllerDeps) {
       return c.html(html`<div class="toast warning">No file uploaded</div>`)
     }
 
-    // Move file I/O to service layer
     const logoPath = await media.uploadLogo(file)
-
-    // Update config with logo path
     await config.update({ logo: { imagePath: logoPath } })
 
-    // Return updated logo section with OOB toast
-    // Cache bust the logo URL to show new image
     const cacheBust = Date.now()
     return c.html(`
       <div class="form-group" id="logo-upload-section">
@@ -146,6 +146,90 @@ export function createSettingsController(deps: SettingsControllerDeps) {
     } catch {
       return c.notFound()
     }
+  })
+
+  // --- Update Endpoints ---
+
+  // Check for updates - returns HTML fragment
+  controller.get('/api/update/check', async (c) => {
+    const info = await update.checkForUpdate()
+
+    if (!info) {
+      return c.html(`
+        <div class="update-result">
+          <span class="update-status">⚠️ Could not check for updates</span>
+        </div>
+      `)
+    }
+
+    if (info.updateAvailable) {
+      return c.html(`
+        <div class="update-result update-available">
+          <span class="update-status">🎉 Update available: ${info.latestVersion}</span>
+          <button type="button" class="btn btn-primary" id="update-apply-btn"
+                  onclick="startUpdate()">
+            Update to ${info.latestVersion}
+          </button>
+        </div>
+      `)
+    }
+
+    return c.html(`
+      <div class="update-result">
+        <span class="update-status">✅ You're up to date (${info.currentVersion})</span>
+      </div>
+    `)
+  })
+
+  // Apply update - SSE stream of update script output
+  controller.post('/api/update/apply', (c) => {
+    if (update.isUpdating) {
+      return c.json({ error: 'Update already in progress' }, 409)
+    }
+
+    const stream = new ReadableStream({
+      start: (controller) => {
+        const encoder = new TextEncoder()
+
+        const writeLine = (line: string) => {
+          try {
+            controller.enqueue(
+              encoder.encode(`data: ${JSON.stringify({ line })}\n\n`)
+            )
+          } catch {
+            // Stream closed
+          }
+        }
+
+        const close = () => {
+          try {
+            writeLine('__DONE__')
+            controller.close()
+          } catch {
+            // Already closed
+          }
+        }
+
+        update.triggerUpdate(writeLine, close)
+      },
+    })
+
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      },
+    })
+  })
+
+  // Get update log (post-restart retrieval)
+  controller.get('/api/update/log', (c) => {
+    const log = update.getUpdateLog()
+    if (!log) {
+      return c.notFound()
+    }
+    return c.text(log)
   })
 
   return controller

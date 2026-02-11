@@ -9,20 +9,24 @@ import { mock, type MockProxy } from 'jest-mock-extended'
 import { createSettingsController } from '../src/controllers/SettingsController'
 import type { ConfigService } from '../src/services/ConfigService'
 import type { MediaService } from '../src/services/MediaService'
+import type { UpdateService } from '../src/services/UpdateService'
 import { Hono } from 'hono'
 
 describe('SettingsController', () => {
   let configService: MockProxy<ConfigService>
   let mediaService: MockProxy<MediaService>
+  let updateService: MockProxy<UpdateService>
   let app: Hono
 
   beforeEach(() => {
     configService = mock<ConfigService>()
     mediaService = mock<MediaService>()
+    updateService = mock<UpdateService>()
 
     const controller = createSettingsController({
       config: configService,
       media: mediaService,
+      update: updateService,
     })
 
     app = new Hono()

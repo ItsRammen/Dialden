@@ -615,3 +615,188 @@ input[type="range"]::-webkit-slider-thumb {
   font-weight: 500;
   width: fit-content;
 }
+
+/* --- Update Terminal Modal --- */
+
+.update-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: modalFadeIn 0.2s ease-out;
+}
+
+@keyframes modalFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.update-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(4px);
+}
+
+.update-modal-content {
+  position: relative;
+  width: 90vw;
+  max-width: 800px;
+  max-height: 80vh;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 2px solid rgba(0, 255, 65, 0.2);
+  box-shadow: 0 0 40px rgba(0, 255, 65, 0.1);
+  display: flex;
+  flex-direction: column;
+}
+
+.terminal-header {
+  background: #1a1a1a;
+  padding: 0.5rem 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.terminal-close {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  transition: all 0.15s;
+}
+
+.terminal-close:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.terminal-title {
+  font-size: 0.75rem;
+  font-family: "Fira Code", monospace;
+  color: var(--toast-green);
+  letter-spacing: 0.05em;
+}
+
+.terminal-body {
+  background: #0a0a0a;
+  padding: 1rem;
+  font-family: "Fira Code", "Cascadia Code", monospace;
+  font-size: 0.8rem;
+  line-height: 1.6;
+  color: #00ff41;
+  flex: 1;
+  min-height: 300px;
+  max-height: 70vh;
+  overflow-y: auto;
+  position: relative;
+}
+
+/* CRT scanline effect */
+.terminal-body::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.15) 2px,
+    rgba(0, 0, 0, 0.15) 4px
+  );
+}
+
+.terminal-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+  animation: termFadeIn 0.15s ease-out;
+}
+
+@keyframes termFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.terminal-cursor {
+  display: inline-block;
+  animation: termBlink 1s step-end infinite;
+  color: #00ff41;
+}
+
+.terminal-cursor.blink-fast {
+  animation: termBlink 0.4s step-end infinite;
+}
+
+@keyframes termBlink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+/* Scrollbar styling for terminal */
+.terminal-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.terminal-body::-webkit-scrollbar-track {
+  background: #0a0a0a;
+}
+
+.terminal-body::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 3px;
+}
+
+/* --- About Section --- */
+
+.version-display {
+  font-family: "Fira Code", monospace;
+  font-size: 1.1rem;
+  color: var(--toast-text);
+  letter-spacing: 0.05em;
+}
+
+.update-result {
+  padding: 0.75rem 0;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.update-result.update-available {
+  padding: 1rem;
+  background: rgba(0, 255, 65, 0.05);
+  border: 1px solid rgba(0, 255, 65, 0.15);
+  border-radius: 8px;
+  margin: 0.5rem 0;
+}
+
+.update-status {
+  font-size: 0.9rem;
+}

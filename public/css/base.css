@@ -237,6 +237,37 @@ code {
   font-family: "Fira Code", monospace;
 }
 
+/* --- App Footer --- */
+.app-footer {
+  text-align: center;
+  padding: 1.5rem 1rem 1rem;
+  font-size: 0.7rem;
+  font-family: "Fira Code", monospace;
+  color: rgba(255, 255, 255, 0.25);
+  letter-spacing: 0.05em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+}
+
+.update-dot {
+  color: var(--toast-green);
+  text-decoration: none;
+  font-size: 0.6rem;
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
 /* --- Base Responsive --- */
 @media (max-width: 768px) {
   .navbar {

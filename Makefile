@@ -1,6 +1,6 @@
 # ToastTV Makefile
 
-.PHONY: install start dev test typecheck clean help mpv pack serve-local
+.PHONY: install start dev test typecheck clean help mpv pack serve-local test-update
 
 # Auto-detect bun
 BUN := $(shell command -v bun 2>/dev/null || echo "$$HOME/.bun/bin/bun")
@@ -88,6 +88,10 @@ pack:
 
 serve-local: pack
 	@$(BUN) run scripts/dev-server.ts
+
+# Test update UI locally (fakes a newer version + dummy update script)
+test-update:
+	DEV_LATEST_VERSION=99.0.0 DEV_UPDATE_SCRIPT=./scripts/fake-update.sh $(BUN) run src/main.ts
 
 # Deploy TV simulation scripts to VM for black-box testing
 # Usage: TVSIM_HOST=dietpi@192.168.x.x make tvsim

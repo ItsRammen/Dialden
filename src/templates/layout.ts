@@ -4,7 +4,23 @@
  * Base HTML layout with navbar, toast container, and auto-dismiss script.
  */
 
-export function renderLayout(title: string, content: string): string {
+import packageJson from '../../package.json'
+
+const appVersion: string = packageJson.version
+
+interface LayoutOptions {
+  updateAvailable?: boolean
+}
+
+export function renderLayout(
+  title: string,
+  content: string,
+  options?: LayoutOptions
+): string {
+  const updateDot = options?.updateAvailable
+    ? '<a href="/settings#about" class="update-dot" title="Update available">●</a>'
+    : ''
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -29,6 +45,9 @@ export function renderLayout(title: string, content: string): string {
   <main class="container">
     ${content}
   </main>
+  <footer class="app-footer">
+    <span>${appVersion}</span>${updateDot}
+  </footer>
   <div id="toast-container"></div>
   <script>
     // Auto-dismiss toasts after 3 seconds

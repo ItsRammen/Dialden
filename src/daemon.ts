@@ -24,6 +24,8 @@ import { ConfigService } from './services/ConfigService'
 import { PlaybackService } from './services/PlaybackService'
 import { TVDetectionService } from './services/TVDetectionService'
 import { HardwareDetectionService } from './services/HardwareDetectionService'
+import { UpdateService } from './services/UpdateService'
+import { UpdateClient } from './clients/UpdateClient'
 import type { MediaItem, ToastTVConfig, IMediaPlayer } from './types'
 
 export class ToastTVDaemon {
@@ -39,6 +41,7 @@ export class ToastTVDaemon {
   private detectionService: TVDetectionService | null = null
   private cecClient: CECClient | null = null
   private hardwareService: HardwareDetectionService | null = null
+  private updateService: UpdateService | null = null
 
   constructor(configPath = './data/config.json') {
     this.appConfig = new ConfigRepository(configPath)
@@ -105,6 +108,13 @@ export class ToastTVDaemon {
   getHardwareService(): HardwareDetectionService {
     if (!this.hardwareService) throw new Error('Daemon not initialized')
     return this.hardwareService
+  }
+
+  getUpdateService(): UpdateService {
+    if (!this.updateService) {
+      this.updateService = new UpdateService(new UpdateClient())
+    }
+    return this.updateService
   }
 
   /**
@@ -254,6 +264,13 @@ export class ToastTVDaemon {
 
     this.running = true
     console.log('ToastTV daemon fully operational')
+
+    // Check for updates in background (non-blocking)
+    this.getUpdateService()
+      .checkForUpdate()
+      .catch(() => {
+        // Silently ignore - update check is best-effort
+      })
   }
 
   private async initializeDetection(config: AppConfig): Promise<void> {

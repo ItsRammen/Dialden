@@ -442,6 +442,11 @@ UPDATE_TIMER
 systemctl enable ${SERVICE_NAME}-update.timer &>/dev/null 2>&1 || true
 log "Service configured (with auto-update timer)"
 
+# Allow web UI to trigger updates without password
+echo "toasttv ALL=(root) NOPASSWD: $INSTALL_DIR/scripts/update.sh" > /etc/sudoers.d/toasttv-update
+chmod 440 /etc/sudoers.d/toasttv-update
+log "Sudoers rule configured for web updates"
+
 # --- Set Permissions ---
 chown -R $SERVICE_NAME:$SERVICE_NAME $INSTALL_DIR
 

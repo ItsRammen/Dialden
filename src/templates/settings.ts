@@ -12,6 +12,9 @@ export interface SettingsProps {
   config: AppConfig
   mediaDirectory: string
   hardwareProfileName?: string
+  updateAvailable?: boolean
+  currentVersion?: string
+  latestVersion?: string | null
 }
 
 export function renderSettings(props: SettingsProps): string {
@@ -182,6 +185,39 @@ export function renderSettings(props: SettingsProps): string {
               </div>
             </div>
           </section>
+          <!-- About Section -->
+          <section class="settings-card" id="about">
+            <div class="card-header">
+              <h2>📡 About</h2>
+            </div>
+            
+            <div class="form-group">
+              <label>Version</label>
+              <span class="version-display">${props.currentVersion ?? 'unknown'}</span>
+            </div>
+            
+            <div id="update-result">
+              ${
+                props.updateAvailable
+                  ? `<div class="update-result update-available">
+                      <span class="update-status">🎉 Update available: ${props.latestVersion}</span>
+                      <button type="button" class="btn btn-primary" id="update-apply-btn"
+                              onclick="startUpdate()">
+                        Update to ${props.latestVersion}
+                      </button>
+                    </div>`
+                  : ''
+              }
+            </div>
+            
+            <button type="button" class="btn btn-secondary"
+                    hx-get="/api/update/check"
+                    hx-target="#update-result"
+                    hx-swap="innerHTML">
+              🔍 Check for Updates
+            </button>
+
+          </section>
         </div>
         
         <div class="form-actions-sticky">
@@ -191,11 +227,29 @@ export function renderSettings(props: SettingsProps): string {
         </div>
       </form>
     </div>
+
+    <!-- Update Terminal Modal -->
+    <div id="update-modal" class="update-modal" style="display: none;">
+      <div class="update-modal-backdrop" onclick="closeUpdateModal()"></div>
+      <div class="update-modal-content">
+        <div class="terminal-header">
+          <span class="terminal-title">⬤ ToastTV Update</span>
+          <button class="terminal-close" id="terminal-close-btn" onclick="closeUpdateModal()">✕</button>
+        </div>
+        <div class="terminal-body" id="terminal-body">
+          <div id="terminal-output"></div>
+          <span class="terminal-cursor">█</span>
+        </div>
+      </div>
+    </div>
     
+    <link rel="stylesheet" href="/css/settings.css">
     <script>
       ${getSettingsScript()}
+      ${getUpdateScript()}
     </script>
-  `
+  `,
+    { updateAvailable: props.updateAvailable }
   )
 }
 
@@ -357,6 +411,118 @@ function getSettingsScript(): string {
       logo.style.bottom = (position === '6' || position === '8') ? y : 'auto';
       logo.style.left = (position === '0' || position === '6') ? x : 'auto';
       logo.style.right = (position === '2' || position === '8') ? x : 'auto';
+    }
+  `
+}
+
+function getUpdateScript(): string {
+  // Inline JS for the update terminal — uses fetch + ReadableStream to process SSE
+  return `
+    function startUpdate() {
+      var modal = document.getElementById('update-modal');
+      var output = document.getElementById('terminal-output');
+      var body = document.getElementById('terminal-body');
+      var applyBtn = document.getElementById('update-apply-btn');
+      var closeBtn = document.getElementById('terminal-close-btn');
+
+      if (!modal || !output) return;
+
+      modal.style.display = 'flex';
+      if (applyBtn) applyBtn.disabled = true;
+      if (closeBtn) closeBtn.style.display = 'none';
+      output.innerHTML = '';
+
+      function addLine(text) {
+        var line = document.createElement('div');
+        line.className = 'terminal-line';
+        line.textContent = text;
+        output.appendChild(line);
+        body.scrollTop = body.scrollHeight;
+      }
+
+      fetch('/api/update/apply', { method: 'POST' })
+        .then(function(response) {
+          if (!response.ok) {
+            addLine('> Error: ' + response.statusText);
+            return;
+          }
+
+          var reader = response.body.getReader();
+          var decoder = new TextDecoder();
+          var buffer = '';
+
+          function read() {
+            reader.read().then(function(result) {
+              if (result.done) {
+                startPolling();
+                return;
+              }
+
+              buffer += decoder.decode(result.value, { stream: true });
+              var parts = buffer.split('\\n\\n');
+              buffer = parts.pop() || '';
+
+              for (var i = 0; i < parts.length; i++) {
+                var part = parts[i].trim();
+                if (!part.startsWith('data: ')) continue;
+                try {
+                  var data = JSON.parse(part.slice(6));
+                  if (data.line === '__DONE__') {
+                    startPolling();
+                    return;
+                  }
+                  addLine(data.line);
+                } catch(e) {}
+              }
+
+              read();
+            }).catch(function() {
+              startPolling();
+            });
+          }
+
+          read();
+        })
+        .catch(function() {
+          addLine('> Connection lost');
+          startPolling();
+        });
+
+      function startPolling() {
+        addLine('> Restarting... waiting for server');
+        var cursor = document.querySelector('.terminal-cursor');
+        if (cursor) cursor.classList.add('blink-fast');
+
+        var pollInterval = setInterval(function() {
+          fetch('/api/update/check')
+            .then(function(r) {
+              if (r.ok) {
+                clearInterval(pollInterval);
+                fetch('/api/update/log')
+                  .then(function(r) { return r.ok ? r.text() : null; })
+                  .then(function(logText) {
+                    if (logText) {
+                      output.innerHTML = '';
+                      var lines = logText.split('\\n');
+                      for (var i = 0; i < lines.length; i++) {
+                        if (lines[i].trim()) addLine(lines[i]);
+                      }
+                    }
+                    addLine('> Server is back online!');
+                    addLine('> Refreshing in 3s...');
+                    if (cursor) cursor.classList.remove('blink-fast');
+                    setTimeout(function() { location.reload(); }, 3000);
+                  });
+              }
+            })
+            .catch(function() {});
+        }, 2000);
+      }
+    }
+
+    function closeUpdateModal() {
+      var modal = document.getElementById('update-modal');
+      if (modal) modal.style.display = 'none';
     }
   `
 }
