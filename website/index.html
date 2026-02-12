@@ -302,6 +302,8 @@
         <!-- Install via ToastTV.eu -->
         curl -sL toasttv.eu/install.sh | sudo bash
       </div>
+      <br>
+      <span id="app-version" style="font-family: 'Fira Code', monospace; font-size: 0.75rem; opacity: 0.5;"></span>
 
     </div>
   </header>
@@ -384,6 +386,12 @@
       by <a href="https://yves.vg">yvg</a>
     </p>
   </footer>
+
+  <script>
+    fetch('version.txt').then(function(r) { return r.ok ? r.text() : null; }).then(function(v) {
+      if (v) document.getElementById('app-version').textContent = v.trim();
+    });
+  </script>
 
 </body>
 </html>
