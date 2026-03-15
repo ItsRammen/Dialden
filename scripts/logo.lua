@@ -69,9 +69,8 @@ local function apply_logo()
     local pos_x, pos_y = calc_position(cfg, osd_w, osd_h)
 
     -- Apply overlay directly from pre-computed raw BGRA — no subprocess needed
-    -- fmt=0 means BGRA with premultiplied alpha
     mp.commandv("overlay-add", overlay_id, pos_x, pos_y, cfg.rawPath,
-                0, 0, cfg.width, cfg.height, cfg.width * 4)
+                0, "bgra", cfg.width, cfg.height, cfg.width * 4)
 
     logo_visible = true
     mp.msg.info("Logo overlay applied at " .. pos_x .. "," .. pos_y ..
