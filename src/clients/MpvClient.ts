@@ -228,147 +228,98 @@ export class MpvClient implements IMediaPlayer {
     }
   }
 
+  /**
+   * Pre-compute the logo overlay and write config to disk.
+   * Lua reads from /tmp/toasttv-logo.json on each file-loaded event,
+   * so zero subprocesses are spawned during playback transitions.
+   */
   async updateLogo(config: LogoConfig): Promise<void> {
-    // 1. Remove existing logo filter if any
-    try {
-      await this.send(['vf', 'remove', '@logo'])
-    } catch (e) {
-      // Filter might not exist, ignore error
+    const fs = require('node:fs')
+    const CONFIG_PATH = '/tmp/toasttv-logo.json'
+    const RAW_PATH = '/tmp/toasttv-logo.raw'
+
+    if (!config.filePath) {
+      // Remove logo config so Lua stops applying it
+      try { fs.unlinkSync(CONFIG_PATH) } catch { /* ignore */ }
+      try { fs.unlinkSync(RAW_PATH) } catch { /* ignore */ }
+      try {
+        await this.send(['script-message', 'reload-logo'])
+      } catch { /* Lua may not be loaded yet */ }
+      return
     }
 
-    if (!config.filePath) return
+    const absPath = path.resolve(config.filePath)
+    if (!fs.existsSync(absPath)) {
+      console.warn(`[MpvClient] Logo file not found: ${absPath}`)
+      return
+    }
 
-    // 2. Calculate values
-    // Opacity: 0-255 -> 0.0-1.0
-    const alpha = (config.opacity / 255).toFixed(2)
-
-    // Position Mapping
-    // margin_x / margin_y from config
     const mx = config.x || 0
     const my = config.y || 0
+    const position = config.position ?? 2 // Default: top-right
 
-    // 3. Map Position to Numpad Alignment for Lua Script
-    // 7 8 9
-    // 4 5 6
-    // 1 2 3
-    let align = 9 // Default Top-Right
-
-    switch (config.position) {
-      case 0:
-        align = 5
-        break // Center
-      case 1:
-        align = 4
-        break // Left -> Mid-Left
-      case 2:
-        align = 6
-        break // Right -> Mid-Right
-      case 4:
-        align = 8
-        break // Top -> Top-Center
-      case 8:
-        align = 2
-        break // Bottom -> Bot-Center
-      case 5:
-        align = 7
-        break // Top-Left
-      case 6:
-        align = 9
-        break // Top-Right
-      case 9:
-        align = 1
-        break // Bot-Left
-      case 10:
-        align = 3
-        break // Bot-Right
-      default:
-        align = 9
-        break // Top-Right
-    }
-
-    // Escaping path for mpv/ffmpeg
-    // MUST use absolute path for movie filter to be safe
-    // Also remove ./ prefix if present just in case before resolve, though resolve handles it
-    const absPath = path.resolve(config.filePath)
-    // Let's stick to ' escaping for now.
-
-    // Use optimized path if possible, fallback to original
-    let finalPath = absPath
+    // 1. Get source dimensions via ffprobe
+    let width = 0
+    let height = 0
     try {
-      if (absPath) {
-        // Optimization still useful to cap size even for OSD!
-        // Large images in OSD can suck memory/bandwidth.
-        finalPath = await this.ensureOptimizedLogo(absPath)
-        // Lua script expects normal path, strict escaping might not be needed as much?
-        // But let's be safe. Lua uses it in \1img().
-        finalPath = finalPath.replace(/\\/g, '/') // Ensure forward slashes for Lua/MPV
-      }
-    } catch (e) {
-      console.error('Logo optimization failed, using original:', e)
-    }
-
-    // Logo configured via Lua OSD script
-
-    try {
-      // script-message show-logo <path> <align> <mx> <my> <opacity>
-      // MPV requires all args to be strings
-      await this.send([
-        'script-message',
-        'show-logo',
-        finalPath,
-        String(align),
-        String(mx),
-        String(my),
-        String(config.opacity),
+      const probe = Bun.spawn([
+        'ffprobe', '-v', 'error', '-select_streams', 'v:0',
+        '-show_entries', 'stream=width,height', '-of', 'csv=p=0',
+        absPath,
       ])
+      const probeOut = await new Response(probe.stdout).text()
+      await probe.exited
+      const parts = probeOut.trim().split(',')
+      width = parseInt(parts[0] ?? '0', 10)
+      height = parseInt(parts[1] ?? '0', 10)
     } catch (e) {
-      console.error('Failed to set logo overlay:', e)
+      console.error('[MpvClient] ffprobe failed for logo:', e)
+      return
     }
-  }
 
-  /**
-   * Pre-scales the logo to a fixed height (120px) to avoid expensive
-   * real-time scaling filters in MPV (which kill HW decoding on Pi).
-   */
-  private async ensureOptimizedLogo(sourcePath: string): Promise<string> {
-    const ext = path.extname(sourcePath)
-    const base = path.basename(sourcePath, ext)
-    const fs = require('node:fs') // Lazy load
+    if (width === 0 || height === 0) {
+      console.warn('[MpvClient] Could not determine logo dimensions')
+      return
+    }
 
-    // Save to /tmp to avoid file permission/persistence issues?
-    // Or save next to original if writable. Let's try /tmp for safety and speed.
-    const destPath = `/tmp/${base}-optimized.png`
+    // 2. Cap height at 120px, preserve aspect ratio
+    const maxHeight = 120
+    if (height > maxHeight) {
+      width = Math.round(width * (maxHeight / height))
+      height = maxHeight
+    }
 
-    // If source is missing, throw
-    if (!fs.existsSync(sourcePath)) return sourcePath
-
+    // 3. Convert to raw BGRA in one shot (scale + pixel format)
     try {
-      // ffmpeg -y -i source -vf "scale=iw*min(1\,120/ih):-1" dest
-      // Caps height at 120px, but allows smaller logos (like 80px) to pass through untouched.
       const proc = Bun.spawn([
-        'ffmpeg',
-        '-y',
-        '-v',
-        'error',
-        '-i',
-        sourcePath,
-        '-vf',
-        'scale=iw*min(1\\,120/ih):-1',
-        destPath,
+        'ffmpeg', '-y', '-v', 'error', '-i', absPath,
+        '-vf', `scale=${width}:${height}`,
+        '-pix_fmt', 'bgra', '-f', 'rawvideo',
+        RAW_PATH,
       ])
-
       await proc.exited
-
-      if (proc.exitCode === 0) {
-        console.log(`[MpvClient] Logo optimized to ${destPath}`)
-        return destPath
-      } else {
-        console.warn(`[MpvClient] FFmpeg failed with code ${proc.exitCode}`)
-        return sourcePath
+      if (proc.exitCode !== 0) {
+        console.warn(`[MpvClient] ffmpeg raw conversion failed (code ${proc.exitCode})`)
+        return
       }
     } catch (e) {
-      console.warn('[MpvClient] Failed to spawn ffmpeg:', e)
-      return sourcePath
+      console.error('[MpvClient] Failed to convert logo to raw BGRA:', e)
+      return
+    }
+
+    // 4. Write config JSON for Lua to read
+    // Position values match the settings grid:
+    //   0 = Top-Left, 2 = Top-Right, 6 = Bottom-Left, 8 = Bottom-Right
+    const logoConfig = { rawPath: RAW_PATH, width, height, marginX: mx, marginY: my, position }
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(logoConfig))
+    console.log(`[MpvClient] Logo prepared: ${width}x${height} pos=${position} → ${RAW_PATH}`)
+
+    // 5. Tell Lua to reload (may race with script loading on startup — that's OK,
+    //    file-loaded will pick up the JSON file when the first video plays)
+    try {
+      await this.send(['script-message', 'reload-logo'])
+    } catch {
+      // Lua may not be loaded yet on startup — safe to ignore
     }
   }
 }
