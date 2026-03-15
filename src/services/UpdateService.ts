@@ -125,7 +125,7 @@ export class UpdateService {
 
     try {
       const devScript = process.env['DEV_UPDATE_SCRIPT']
-      const cmd = devScript ? [devScript] : ['sudo', UPDATE_SCRIPT]
+      const cmd = devScript ? [devScript] : [UPDATE_SCRIPT]
 
       const proc = spawn(cmd, {
         stdout: 'pipe',
