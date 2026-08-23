@@ -159,8 +159,8 @@ export class PlaybackService {
         // Pre-queue second video for gapless playback
         const secondVideo = this.engine.peekQueue(1)[0]
         if (secondVideo) {
-          await this.player.enqueue(secondVideo.path)
-          logger.info(`Pre-queued: ${secondVideo.filename}`)
+          const queued = await this.enqueueCurrentlyPlayable(secondVideo.id)
+          if (queued) logger.info(`Pre-queued: ${queued.filename}`)
         }
       }
     } else {
@@ -297,9 +297,7 @@ export class PlaybackService {
       await this.player.clear()
       const candidate = this.engine.peekQueue(1)[0]
       if (!candidate) return
-      const current = await this.media.getById(candidate.id)
-      if (!current || current.playbackEnabled === false) return
-      await this.player.enqueue(current.path)
+      await this.enqueueCurrentlyPlayable(candidate.id)
     } catch (error) {
       logger.warn(`Unable to reconcile player prequeue: ${String(error)}`)
     }
@@ -342,7 +340,8 @@ export class PlaybackService {
   // --- Internal ---
 
   private async playVideo(video: MediaItem): Promise<void> {
-    await this.player.play(video.path)
+    const current = await this.playCurrentlyPlayable(video.id)
+    if (!current) return
 
     // Logo is re-applied by Lua's file-loaded handler reading /tmp/toasttv-logo.json
 
@@ -355,9 +354,9 @@ export class PlaybackService {
     }))
     this.events?.broadcast({
       type: 'trackStart',
-      trackId: video.id,
-      filename: video.filename,
-      duration: video.durationSeconds,
+      trackId: current.id,
+      filename: current.filename,
+      duration: current.durationSeconds,
       queue,
     })
 
@@ -366,17 +365,16 @@ export class PlaybackService {
     // otherwise player will stop after this one.
     const nextInQueue = this.engine.peekQueue(1)[0]
     if (nextInQueue) {
-      await this.player.enqueue(nextInQueue.path)
-      logger.info(`Pre-queued (manual play): ${nextInQueue.filename}`)
+      const queued = await this.enqueueCurrentlyPlayable(nextInQueue.id)
+      if (queued) logger.info(`Pre-queued (manual play): ${queued.filename}`)
     } else {
       // If no more videos, try to enqueue off-air loop?
       const appConfig = await this.config.get()
       if (appConfig.session.offAirAssetId) {
-        const offAirMedia = await this.media.getById(
+        const offAirMedia = await this.enqueueCurrentlyPlayable(
           appConfig.session.offAirAssetId
         )
-        if (offAirMedia && offAirMedia.playbackEnabled !== false) {
-          await this.player.enqueue(offAirMedia.path)
+        if (offAirMedia) {
           logger.info(
             `Pre-queued off-air (manual play): ${offAirMedia.filename}`
           )
@@ -400,8 +398,8 @@ export class PlaybackService {
       return
     }
 
-    const mediaItem = await this.media.getById(offAirAssetId)
-    if (!mediaItem || mediaItem.playbackEnabled === false) {
+    const mediaItem = await this.playCurrentlyPlayable(offAirAssetId)
+    if (!mediaItem) {
       logger.warn(`Off-air asset ID ${offAirAssetId} is unavailable or blocked`)
       await this.player.stop()
       return
@@ -410,8 +408,7 @@ export class PlaybackService {
     this.offAirMode = true
     logger.info(`Entering off-air mode with: ${mediaItem.filename}`)
 
-    // Play with loop enabled
-    await this.player.play(mediaItem.path)
+    // Playback was authorized against the current repository row above.
     await this.player.setLoop(true)
 
     // Broadcast off-air state to frontend
@@ -579,17 +576,16 @@ export class PlaybackService {
             // PRE-QUEUE: Immediately enqueue the following video
             const upcoming = this.engine.peekQueue(1)[0]
             if (upcoming) {
-              await this.player.enqueue(upcoming.path)
-              logger.info(`Pre-queued: ${upcoming.filename}`)
+              const queued = await this.enqueueCurrentlyPlayable(upcoming.id)
+              if (queued) logger.info(`Pre-queued: ${queued.filename}`)
             } else {
               // No more videos - enqueue off-air if available
               const appConfig = await this.config.get()
               if (appConfig.session.offAirAssetId) {
-                const offAirMedia = await this.media.getById(
+                const offAirMedia = await this.enqueueCurrentlyPlayable(
                   appConfig.session.offAirAssetId
                 )
-                if (offAirMedia && offAirMedia.playbackEnabled !== false) {
-                  await this.player.enqueue(offAirMedia.path)
+                if (offAirMedia) {
                   logger.info(`Pre-queued off-air: ${offAirMedia.filename}`)
                 }
               }
@@ -623,5 +619,66 @@ export class PlaybackService {
 
       await Bun.sleep(500)
     }
+  }
+
+  /**
+   * Resolve an engine/config media ID through the current repository row at
+   * the final player boundary. Cached queue objects are never authorization
+   * records and their absolute paths are never sent to MPV.
+   */
+  private async resolveCurrentlyPlayable(
+    mediaId: number
+  ): Promise<MediaItem | null> {
+    if (
+      !this.localPlaybackEnabled ||
+      !Number.isSafeInteger(mediaId) ||
+      mediaId <= 0
+    ) {
+      return null
+    }
+
+    try {
+      const current = await this.media.getById(mediaId)
+      if (
+        !current ||
+        current.id !== mediaId ||
+        typeof current.path !== 'string' ||
+        current.path.trim().length === 0 ||
+        current.rootAvailable !== true ||
+        current.playbackEnabled !== true ||
+        current.mediaType !== 'video' ||
+        current.isInterlude !== false ||
+        typeof current.durationSeconds !== 'number' ||
+        !Number.isFinite(current.durationSeconds) ||
+        current.durationSeconds <= 0
+      ) {
+        logger.warn(`Refusing local playback for ineligible media ID ${mediaId}`)
+        return null
+      }
+      return current
+    } catch (error) {
+      logger.warn(
+        `Unable to authorize local playback for media ID ${mediaId}: ${String(error)}`
+      )
+      return null
+    }
+  }
+
+  private async playCurrentlyPlayable(
+    mediaId: number
+  ): Promise<MediaItem | null> {
+    const current = await this.resolveCurrentlyPlayable(mediaId)
+    if (!current) return null
+    await this.player.play(current.path)
+    return current
+  }
+
+  private async enqueueCurrentlyPlayable(
+    mediaId: number
+  ): Promise<MediaItem | null> {
+    const current = await this.resolveCurrentlyPlayable(mediaId)
+    if (!current) return null
+    await this.player.enqueue(current.path)
+    return current
   }
 }

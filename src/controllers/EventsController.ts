@@ -11,11 +11,15 @@ import type {
   SyncEvent,
 } from '../services/DashboardEventService'
 import { logger } from '../utils/logger'
+import type { MediaIndexer } from '../services/MediaIndexer'
+import type { MetadataEnrichmentService } from '../services/metadata/MetadataEnrichmentService'
 
 export class EventsController {
   constructor(
     private readonly playback: PlaybackService,
-    private readonly events: DashboardEventService
+    private readonly events: DashboardEventService,
+    private readonly indexer?: Pick<MediaIndexer, 'getScanState'>,
+    private readonly metadata?: Pick<MetadataEnrichmentService, 'getState'>
   ) {}
 
   /**
@@ -115,6 +119,8 @@ export class EventsController {
         isInterlude: v.isInterlude,
         durationSeconds: v.durationSeconds,
       })),
+      libraryScan: this.indexer?.getScanState(),
+      metadata: this.metadata?.getState(),
     }
 
     logger.debug(

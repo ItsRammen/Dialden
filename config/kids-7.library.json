@@ -3,7 +3,12 @@
   "profile": {
     "id": "kids-7",
     "name": "Kids 7",
-    "age": 7
+    "age": 7,
+    "rules": {
+      "allow": ["G", "TV-Y", "TV-Y7", "TV-G"],
+      "review": ["PG", "TV-PG"],
+      "block": ["PG-13", "TV-14", "R", "TV-MA", "NC-17"]
+    }
   },
   "channels": [
     {

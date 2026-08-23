@@ -11,8 +11,19 @@ import type {
   MediaType,
   Compatibility,
   LibraryKind,
+  CollectionListOptions,
+  CollectionMetadataUpdate,
+  CollectionUpsertInput,
+  LibrarySummary,
+  MediaCollection,
+  MetadataCandidateRecord,
+  MetadataMatchStatus,
+  MetadataRatingStatus,
+  OverrideDecision,
+  PolicyDecision,
 } from '../types'
 import type { IMediaRepository, MediaItemInput } from './IMediaRepository'
+import { resolveEffectiveDecision } from '../policy/PolicyEngine'
 
 // Base schema without media_type (for backwards compatibility)
 const BASE_SCHEMA = `
@@ -26,9 +37,13 @@ CREATE TABLE IF NOT EXISTS media (
   relative_path TEXT NOT NULL,
   library_kind TEXT NOT NULL DEFAULT 'other',
   collection_title TEXT NOT NULL,
-  policy_enabled INTEGER NOT NULL DEFAULT 1,
+  policy_enabled INTEGER NOT NULL DEFAULT 0,
   playback_override INTEGER,
   root_available INTEGER NOT NULL DEFAULT 1,
+  collection_id INTEGER,
+  season_number INTEGER,
+  episode_number INTEGER,
+  episode_title TEXT,
   date_start TEXT,
   date_end TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
@@ -37,12 +52,82 @@ CREATE TABLE IF NOT EXISTS media (
 CREATE INDEX IF NOT EXISTS idx_media_interlude ON media(is_interlude);
 `
 
+const COLLECTION_SCHEMA = `
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version INTEGER PRIMARY KEY,
+  applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS media_collections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  root_id TEXT NOT NULL,
+  library_kind TEXT NOT NULL,
+  identity_key TEXT NOT NULL,
+  source_title TEXT NOT NULL,
+  parsed_title TEXT NOT NULL,
+  year INTEGER,
+  present INTEGER NOT NULL DEFAULT 1,
+  last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  metadata_provider TEXT,
+  metadata_external_id TEXT,
+  metadata_status TEXT NOT NULL DEFAULT 'pending',
+  metadata_locked INTEGER NOT NULL DEFAULT 0,
+  metadata_title TEXT,
+  metadata_original_title TEXT,
+  metadata_year INTEGER,
+  overview TEXT,
+  poster_path TEXT,
+  backdrop_path TEXT,
+  genres_json TEXT NOT NULL DEFAULT '[]',
+  certification TEXT,
+  certification_region TEXT,
+  rating_status TEXT NOT NULL DEFAULT 'missing',
+  match_confidence REAL,
+  metadata_candidates_json TEXT NOT NULL DEFAULT '[]',
+  metadata_error TEXT,
+  metadata_matched_at TEXT,
+  metadata_refreshed_at TEXT,
+  policy_decision TEXT NOT NULL DEFAULT 'review'
+    CHECK (policy_decision IN ('allow', 'review', 'block')),
+  policy_reason TEXT NOT NULL DEFAULT 'metadata_pending',
+  policy_profile_id TEXT NOT NULL DEFAULT 'kids-7',
+  policy_version INTEGER NOT NULL DEFAULT 1,
+  policy_evaluated_at TEXT,
+  parent_override TEXT
+    CHECK (parent_override IS NULL OR parent_override IN ('allow', 'block')),
+  override_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(root_id, library_kind, identity_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_collections_kind_title
+  ON media_collections(library_kind, parsed_title);
+CREATE INDEX IF NOT EXISTS idx_collections_review
+  ON media_collections(present, policy_decision, parent_override);
+CREATE INDEX IF NOT EXISTS idx_collections_metadata
+  ON media_collections(present, metadata_status, metadata_locked);
+`
+
 const MEDIA_COLUMNS = `
   id, path, filename, duration_seconds, is_interlude, media_type,
   date_start, date_end, codec, width, height, warning, mtime, compatibility,
   root_id, relative_path, library_kind, collection_title,
-  policy_enabled, playback_override, root_available
+  policy_enabled, playback_override, root_available,
+  collection_id, season_number, episode_number, episode_title
 `
+
+/** One fail-closed expression shared by every collection query/projection. */
+const COLLECTION_EFFECTIVE_DECISION_SQL = `CASE
+  WHEN collection.parent_override IS NULL THEN CASE
+    WHEN collection.policy_decision IN ('allow', 'review', 'block')
+      THEN collection.policy_decision
+    ELSE 'review'
+  END
+  WHEN collection.parent_override IN ('allow', 'block')
+    THEN collection.parent_override
+  ELSE 'review'
+END`
 
 const MEDIA_UPSERT_UPDATE = `
   filename = excluded.filename,
@@ -69,7 +154,11 @@ const MEDIA_UPSERT_UPDATE = `
   relative_path = excluded.relative_path,
   library_kind = excluded.library_kind,
   collection_title = excluded.collection_title,
-  policy_enabled = excluded.policy_enabled
+  policy_enabled = excluded.policy_enabled,
+  collection_id = excluded.collection_id,
+  season_number = excluded.season_number,
+  episode_number = excluded.episode_number,
+  episode_title = excluded.episode_title
 `
 
 const MEDIA_UPSERT_SQL = `
@@ -77,14 +166,52 @@ const MEDIA_UPSERT_SQL = `
     path, filename, duration_seconds, is_interlude, media_type,
     date_start, date_end, codec, width, height, warning, mtime, compatibility,
     root_id, relative_path, library_kind, collection_title,
-    policy_enabled, playback_override, root_available
+    policy_enabled, playback_override, root_available,
+    collection_id, season_number, episode_number, episode_title
   )
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(path) DO UPDATE SET
     ${MEDIA_UPSERT_UPDATE}
   ON CONFLICT(root_id, relative_path) DO UPDATE SET
     path = excluded.path,
     ${MEDIA_UPSERT_UPDATE}
+`
+
+const COLLECTION_AGGREGATE_SELECT = `
+  SELECT
+    collection.*,
+    COUNT(media.id) AS file_count,
+    COUNT(DISTINCT CASE
+      WHEN media.season_number IS NOT NULL THEN media.season_number
+    END) AS season_count,
+    COALESCE(SUM(CASE
+      WHEN collection.library_kind = 'tv' AND media.media_type = 'video' THEN 1
+      ELSE 0
+    END), 0) AS episode_count,
+    COALESCE(SUM(CASE
+      WHEN media.duration_seconds > 0 AND media.warning IS NULL THEN 1
+      ELSE 0
+    END), 0) AS ready_file_count,
+    COALESCE(SUM(CASE
+      WHEN media.id IS NOT NULL
+        AND (media.duration_seconds <= 0 OR media.warning IS NOT NULL) THEN 1
+      ELSE 0
+    END), 0) AS failed_file_count,
+    COALESCE(SUM(CASE
+      WHEN media.playback_override IS NOT NULL THEN 1
+      ELSE 0
+    END), 0) AS legacy_override_count,
+    COALESCE(SUM(CASE
+      WHEN media.media_type = 'video'
+        AND media.is_interlude = 0
+        AND media.root_available = 1
+        AND media.duration_seconds > 0
+        AND COALESCE(media.playback_override, media.policy_enabled) = 1
+      THEN 1 ELSE 0
+    END), 0) AS schedule_eligible_count,
+    COALESCE(MAX(media.root_available), 0) AS root_available
+  FROM media_collections AS collection
+  LEFT JOIN media ON media.collection_id = collection.id
 `
 
 export class MediaRepository implements IMediaRepository {
@@ -105,6 +232,7 @@ export class MediaRepository implements IMediaRepository {
       value TEXT NOT NULL
     );
     `)
+    this.db.exec(COLLECTION_SCHEMA)
 
     // Migration: add media_type column if missing
     const columns = this.db.prepare('PRAGMA table_info(media)').all() as Array<{
@@ -179,7 +307,7 @@ export class MediaRepository implements IMediaRepository {
     const hasPolicyEnabled = columns.some((c) => c.name === 'policy_enabled')
     if (!hasPolicyEnabled) {
       this.db.exec(
-        `ALTER TABLE media ADD COLUMN policy_enabled INTEGER NOT NULL DEFAULT 1`
+        `ALTER TABLE media ADD COLUMN policy_enabled INTEGER NOT NULL DEFAULT 0`
       )
     }
     const hasPlaybackOverride = columns.some(
@@ -195,6 +323,75 @@ export class MediaRepository implements IMediaRepository {
       )
     }
 
+    // Collection catalog migration. This deliberately initializes automatic
+    // policy to review and preserves existing per-file playback_override rows
+    // without broadening them to an entire collection.
+    const collectionMigration = this.db
+      .prepare('SELECT version FROM schema_migrations WHERE version = 1')
+      .get() as { version: number } | null
+    if (!collectionMigration) {
+      const currentColumns = this.db
+        .prepare('PRAGMA table_info(media)')
+        .all() as Array<{ name: string }>
+      const hasColumn = (name: string) =>
+        currentColumns.some((column) => column.name === name)
+      const transaction = this.db.transaction(() => {
+        if (!hasColumn('collection_id')) {
+          this.db!.exec(`ALTER TABLE media ADD COLUMN collection_id INTEGER`)
+        }
+        if (!hasColumn('season_number')) {
+          this.db!.exec(`ALTER TABLE media ADD COLUMN season_number INTEGER`)
+        }
+        if (!hasColumn('episode_number')) {
+          this.db!.exec(`ALTER TABLE media ADD COLUMN episode_number INTEGER`)
+        }
+        if (!hasColumn('episode_title')) {
+          this.db!.exec(`ALTER TABLE media ADD COLUMN episode_title TEXT`)
+        }
+
+        this.db!.exec(`
+          INSERT OR IGNORE INTO media_collections (
+            root_id, library_kind, identity_key, source_title, parsed_title,
+            year, policy_decision, policy_reason
+          )
+          SELECT
+            root_id,
+            library_kind,
+            lower(trim(collection_title)),
+            collection_title,
+            trim(collection_title),
+            NULL,
+            'review',
+            'migration_requires_review'
+          FROM media
+          WHERE collection_title IS NOT NULL AND trim(collection_title) <> ''
+          GROUP BY root_id, library_kind, lower(trim(collection_title))
+        `)
+        this.db!.exec(`
+          UPDATE media
+          SET collection_id = (
+            SELECT collection.id
+            FROM media_collections AS collection
+            WHERE collection.root_id = media.root_id
+              AND collection.library_kind = media.library_kind
+              AND collection.identity_key = lower(trim(media.collection_title))
+          )
+          WHERE collection_id IS NULL
+        `)
+        this.db!.prepare(
+          `INSERT INTO schema_migrations (version) VALUES (1)`
+        ).run()
+      })
+      transaction()
+    }
+
+    this.sanitizeAndGuardCollectionOverrides()
+
+    this.db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_media_collection ON media(collection_id);`
+    )
+    this.syncAllCollectionEligibility()
+
     // Now create index on media_type (column guaranteed to exist)
     this.db.exec(
       `CREATE INDEX IF NOT EXISTS idx_media_type ON media(media_type);`
@@ -207,6 +404,38 @@ export class MediaRepository implements IMediaRepository {
     )
 
     console.log(`Initialized media database at ${this.dbPath}`)
+  }
+
+  private sanitizeAndGuardCollectionOverrides(): void {
+    if (!this.db) throw new Error('Repository not initialized')
+    // Old/corrupt override values must never fall through to a stored allow.
+    // Convert them into an explicit review decision before installing guards.
+    this.db.exec(`
+      UPDATE media_collections
+      SET parent_override = NULL,
+          override_at = NULL,
+          policy_decision = 'review',
+          policy_reason = 'invalid_parent_override',
+          updated_at = CURRENT_TIMESTAMP
+      WHERE parent_override IS NOT NULL
+        AND parent_override NOT IN ('allow', 'block');
+
+      CREATE TRIGGER IF NOT EXISTS validate_collection_parent_override_insert
+      BEFORE INSERT ON media_collections
+      WHEN NEW.parent_override IS NOT NULL
+        AND NEW.parent_override NOT IN ('allow', 'block')
+      BEGIN
+        SELECT RAISE(ABORT, 'invalid collection parent override');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS validate_collection_parent_override_update
+      BEFORE UPDATE OF parent_override ON media_collections
+      WHEN NEW.parent_override IS NOT NULL
+        AND NEW.parent_override NOT IN ('allow', 'block')
+      BEGIN
+        SELECT RAISE(ABORT, 'invalid collection parent override');
+      END;
+    `)
   }
 
   async getSetting(key: string): Promise<string | null> {
@@ -326,6 +555,391 @@ export class MediaRepository implements IMediaRepository {
     return row ? this.rowToMediaItem(row) : null
   }
 
+  async upsertCollections(
+    collections: readonly CollectionUpsertInput[]
+  ): Promise<MediaCollection[]> {
+    if (!this.db) throw new Error('Repository not initialized')
+    if (collections.length === 0) return []
+
+    const upsert = this.db.prepare(`
+      INSERT INTO media_collections (
+        root_id, library_kind, identity_key, source_title, parsed_title, year,
+        present, last_seen_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ON CONFLICT(root_id, library_kind, identity_key) DO UPDATE SET
+        source_title = excluded.source_title,
+        parsed_title = excluded.parsed_title,
+        year = excluded.year,
+        present = 1,
+        last_seen_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP
+    `)
+    const selectId = this.db.prepare(`
+      SELECT id FROM media_collections
+      WHERE root_id = ? AND library_kind = ? AND identity_key = ?
+    `)
+    const ids: number[] = []
+    const transaction = this.db.transaction(() => {
+      for (const collection of collections) {
+        upsert.run(
+          collection.rootId,
+          collection.libraryKind,
+          collection.identityKey,
+          collection.sourceTitle,
+          collection.parsedTitle,
+          collection.year
+        )
+        const row = selectId.get(
+          collection.rootId,
+          collection.libraryKind,
+          collection.identityKey
+        ) as { id: number } | null
+        if (!row) throw new Error('Collection upsert did not return an identity')
+        ids.push(row.id)
+      }
+    })
+    transaction()
+
+    const uniqueIds = [...new Set(ids)]
+    const placeholders = uniqueIds.map(() => '?').join(',')
+    const rows = this.db
+      .prepare(`
+        ${COLLECTION_AGGREGATE_SELECT}
+        WHERE collection.id IN (${placeholders})
+        GROUP BY collection.id
+      `)
+      .all(...uniqueIds) as Array<Record<string, unknown>>
+    const byId = new Map(
+      rows.map((row) => {
+        const collection = this.rowToMediaCollection(row)
+        return [collection.id, collection] as const
+      })
+    )
+    return ids.map((id) => {
+      const collection = byId.get(id)
+      if (!collection) throw new Error(`Collection ${id} disappeared after upsert`)
+      return collection
+    })
+  }
+
+  async reconcileCollections(
+    rootId: string,
+    presentIdentityKeys: readonly string[]
+  ): Promise<number> {
+    if (!this.db) throw new Error('Repository not initialized')
+
+    const uniqueKeys = [...new Set(presentIdentityKeys)]
+    let retired = 0
+    const transaction = this.db.transaction(() => {
+      retired = this.db!
+        .prepare(
+          `UPDATE media_collections
+           SET present = 0, updated_at = CURRENT_TIMESTAMP
+           WHERE root_id = ? AND present = 1`
+        )
+        .run(rootId).changes
+
+      const restore = this.db!.prepare(`
+        UPDATE media_collections
+        SET present = 1, last_seen_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE root_id = ? AND identity_key = ?
+      `)
+      for (const identityKey of uniqueKeys) restore.run(rootId, identityKey)
+    })
+    transaction()
+    return retired
+  }
+
+  async getCollections(
+    options: CollectionListOptions = {}
+  ): Promise<MediaCollection[]> {
+    if (!this.db) throw new Error('Repository not initialized')
+
+    const clauses: string[] = []
+    const values: Array<string | number> = []
+    if (options.presentOnly !== false) clauses.push('collection.present = 1')
+    if (options.kind) {
+      clauses.push('collection.library_kind = ?')
+      values.push(options.kind)
+    }
+    if (options.effectiveDecision) {
+      clauses.push(`${COLLECTION_EFFECTIVE_DECISION_SQL} = ?`)
+      values.push(options.effectiveDecision)
+    }
+    if (options.metadataStatus) {
+      clauses.push('collection.metadata_status = ?')
+      values.push(options.metadataStatus)
+    }
+    if (options.metadataReview) {
+      clauses.push(`(
+        collection.metadata_status IN (
+          'ambiguous', 'unmatched', 'error', 'not_configured'
+        ) OR (
+          collection.metadata_status IN ('matched', 'manual')
+          AND collection.rating_status <> 'resolved'
+        )
+      )`)
+    }
+    const search = options.search?.trim()
+    if (search) {
+      clauses.push(`(
+        collection.source_title LIKE ? COLLATE NOCASE OR
+        collection.parsed_title LIKE ? COLLATE NOCASE OR
+        collection.metadata_title LIKE ? COLLATE NOCASE OR
+        EXISTS (
+          SELECT 1 FROM media AS searchable_media
+          WHERE searchable_media.collection_id = collection.id
+            AND (
+              searchable_media.filename LIKE ? COLLATE NOCASE OR
+              searchable_media.episode_title LIKE ? COLLATE NOCASE
+            )
+        )
+      )`)
+      const pattern = `%${search}%`
+      values.push(pattern, pattern, pattern, pattern, pattern)
+    }
+
+    const limit = Math.max(1, Math.min(250, Math.trunc(options.limit ?? 100)))
+    const offset = Math.max(0, Math.trunc(options.offset ?? 0))
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
+    const rows = this.db
+      .prepare(`
+        ${COLLECTION_AGGREGATE_SELECT}
+        ${where}
+        GROUP BY collection.id
+        ORDER BY COALESCE(collection.metadata_title, collection.parsed_title)
+          COLLATE NOCASE, collection.id
+        LIMIT ? OFFSET ?
+      `)
+      .all(...values, limit, offset) as Array<Record<string, unknown>>
+    return rows.map((row) => this.rowToMediaCollection(row))
+  }
+
+  async getCollectionById(id: number): Promise<MediaCollection | null> {
+    if (!this.db) throw new Error('Repository not initialized')
+    const row = this.db
+      .prepare(`
+        ${COLLECTION_AGGREGATE_SELECT}
+        WHERE collection.id = ?
+        GROUP BY collection.id
+      `)
+      .get(id) as Record<string, unknown> | null
+    return row ? this.rowToMediaCollection(row) : null
+  }
+
+  async getCollectionMedia(id: number): Promise<MediaItem[]> {
+    if (!this.db) throw new Error('Repository not initialized')
+    const rows = this.db
+      .prepare(`
+        SELECT ${MEDIA_COLUMNS}
+        FROM media
+        WHERE collection_id = ?
+        ORDER BY COALESCE(season_number, -1), COALESCE(episode_number, -1),
+          filename COLLATE NOCASE
+      `)
+      .all(id) as Array<Record<string, unknown>>
+    return rows.map((row) => this.rowToMediaItem(row))
+  }
+
+  async getLibrarySummary(): Promise<LibrarySummary> {
+    if (!this.db) throw new Error('Repository not initialized')
+    const collections = this.db.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN library_kind = 'tv' THEN 1 ELSE 0 END), 0)
+          AS tv_collections,
+        COALESCE(SUM(CASE WHEN library_kind = 'movie' THEN 1 ELSE 0 END), 0)
+          AS movie_collections,
+        COALESCE(SUM(CASE WHEN effective_decision = 'allow' THEN 1 ELSE 0 END), 0)
+          AS approved_collections,
+        COALESCE(SUM(CASE WHEN effective_decision = 'review' THEN 1 ELSE 0 END), 0)
+          AS review_collections,
+        COALESCE(SUM(CASE WHEN effective_decision = 'block' THEN 1 ELSE 0 END), 0)
+          AS blocked_collections,
+        COALESCE(SUM(CASE
+          WHEN metadata_status IN ('ambiguous', 'unmatched', 'error') THEN 1
+          ELSE 0 END), 0) AS unmatched_collections,
+        COALESCE(SUM(CASE
+          WHEN metadata_status IN ('pending', 'not_configured') THEN 1
+          ELSE 0 END), 0) AS metadata_pending_collections,
+        COALESCE(SUM(CASE
+          WHEN metadata_status IN ('matched', 'manual') THEN 1
+          ELSE 0 END), 0) AS metadata_matched_collections,
+        COALESCE(SUM(CASE
+          WHEN metadata_status IN ('ambiguous', 'unmatched', 'error', 'not_configured')
+            OR (metadata_status IN ('matched', 'manual') AND rating_status <> 'resolved')
+          THEN 1 ELSE 0 END), 0) AS metadata_review_collections
+      FROM (
+        SELECT library_kind, metadata_status, rating_status,
+          ${COLLECTION_EFFECTIVE_DECISION_SQL} AS effective_decision
+        FROM media_collections AS collection
+        WHERE present = 1
+      )
+    `).get() as Record<string, number>
+    const media = this.db.prepare(`
+      SELECT
+        COUNT(*) AS total_files,
+        COALESCE(SUM(CASE
+          WHEN library_kind = 'tv' AND media_type = 'video' THEN 1 ELSE 0 END
+        ), 0) AS tv_episodes,
+        COALESCE(SUM(CASE WHEN media_type = 'interlude' THEN 1 ELSE 0 END), 0)
+          AS interlude_files,
+        COALESCE(SUM(CASE
+          WHEN duration_seconds <= 0 OR warning IS NOT NULL THEN 1 ELSE 0 END
+        ), 0) AS probe_failed_files
+      FROM media
+    `).get() as Record<string, number>
+
+    return {
+      tvCollections: Number(collections.tv_collections ?? 0),
+      tvEpisodes: Number(media.tv_episodes ?? 0),
+      movieCollections: Number(collections.movie_collections ?? 0),
+      interludeFiles: Number(media.interlude_files ?? 0),
+      totalFiles: Number(media.total_files ?? 0),
+      approvedCollections: Number(collections.approved_collections ?? 0),
+      reviewCollections: Number(collections.review_collections ?? 0),
+      blockedCollections: Number(collections.blocked_collections ?? 0),
+      unmatchedCollections: Number(collections.unmatched_collections ?? 0),
+      metadataPendingCollections: Number(
+        collections.metadata_pending_collections ?? 0
+      ),
+      metadataMatchedCollections: Number(
+        collections.metadata_matched_collections ?? 0
+      ),
+      metadataReviewCollections: Number(
+        collections.metadata_review_collections ?? 0
+      ),
+      probeFailedFiles: Number(media.probe_failed_files ?? 0),
+    }
+  }
+
+  async updateCollectionPolicy(
+    id: number,
+    decision: PolicyDecision,
+    reason: string,
+    profileId = 'kids-7'
+  ): Promise<boolean> {
+    if (!this.db) throw new Error('Repository not initialized')
+    if (!this.isPolicyDecision(decision)) return false
+    const result = this.db
+      .prepare(`
+        UPDATE media_collections
+        SET policy_decision = ?, policy_reason = ?, policy_profile_id = ?,
+            policy_version = policy_version + 1,
+            policy_evaluated_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `)
+      .run(decision, reason, profileId, id)
+    if (result.changes > 0) this.syncCollectionEligibility(id)
+    return result.changes > 0
+  }
+
+  async updateCollectionOverride(
+    id: number,
+    decision: OverrideDecision
+  ): Promise<boolean> {
+    if (!this.db) throw new Error('Repository not initialized')
+    if (decision !== null && decision !== 'allow' && decision !== 'block') {
+      return false
+    }
+    const result = this.db
+      .prepare(`
+        UPDATE media_collections
+        SET parent_override = ?,
+            override_at = CASE WHEN ? IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `)
+      .run(decision, decision, id)
+    if (result.changes > 0) this.syncCollectionEligibility(id)
+    return result.changes > 0
+  }
+
+  async updateCollectionMetadata(
+    id: number,
+    metadata: CollectionMetadataUpdate
+  ): Promise<boolean> {
+    if (!this.db) throw new Error('Repository not initialized')
+
+    const assignments = [
+      'metadata_provider = ?',
+      'metadata_external_id = ?',
+      'metadata_status = ?',
+      'metadata_refreshed_at = CURRENT_TIMESTAMP',
+      'updated_at = CURRENT_TIMESTAMP',
+    ]
+    const values: Array<string | number | null> = [
+      metadata.provider,
+      metadata.externalId,
+      metadata.status,
+    ]
+    const scalar = (value: unknown): string | number | null =>
+      typeof value === 'string' || typeof value === 'number' ? value : null
+    const optional: Array<
+      [
+        keyof CollectionMetadataUpdate,
+        string,
+        (value: unknown) => string | number | null,
+      ]
+    > = [
+      ['locked', 'metadata_locked', (value) => (value ? 1 : 0)],
+      ['title', 'metadata_title', scalar],
+      ['originalTitle', 'metadata_original_title', scalar],
+      ['year', 'metadata_year', scalar],
+      ['overview', 'overview', scalar],
+      ['posterPath', 'poster_path', scalar],
+      ['backdropPath', 'backdrop_path', scalar],
+      ['genres', 'genres_json', (value) => JSON.stringify(value ?? [])],
+      ['certification', 'certification', scalar],
+      ['certificationRegion', 'certification_region', scalar],
+      ['ratingStatus', 'rating_status', scalar],
+      ['matchConfidence', 'match_confidence', scalar],
+      [
+        'candidates',
+        'metadata_candidates_json',
+        (value) => JSON.stringify(value ?? []),
+      ],
+      ['error', 'metadata_error', scalar],
+      ['matchedAt', 'metadata_matched_at', scalar],
+    ]
+    for (const [key, column, serialize] of optional) {
+      if (Object.prototype.hasOwnProperty.call(metadata, key)) {
+        assignments.push(`${column} = ?`)
+        values.push(serialize(metadata[key]))
+      }
+    }
+    values.push(id)
+    const result = this.db
+      .prepare(
+        `UPDATE media_collections SET ${assignments.join(', ')} WHERE id = ?`
+      )
+      .run(...values)
+    return result.changes > 0
+  }
+
+  async getCollectionsNeedingMetadata(limit = 25): Promise<MediaCollection[]> {
+    if (!this.db) throw new Error('Repository not initialized')
+    const boundedLimit = Math.max(1, Math.min(5000, Math.trunc(limit)))
+    const rows = this.db
+      .prepare(`
+        ${COLLECTION_AGGREGATE_SELECT}
+        WHERE collection.present = 1
+          AND collection.metadata_status IN ('pending', 'error', 'not_configured')
+          AND (
+            collection.metadata_locked = 0
+            OR collection.metadata_external_id IS NOT NULL
+          )
+        GROUP BY collection.id
+        ORDER BY
+          CASE collection.metadata_status WHEN 'pending' THEN 0 ELSE 1 END,
+          collection.updated_at, collection.id
+        LIMIT ?
+      `)
+      .all(boundedLimit) as Array<Record<string, unknown>>
+    return rows.map((row) => this.rowToMediaCollection(row))
+  }
+
   async upsertMedia(item: MediaItemInput): Promise<void> {
     if (!this.db) throw new Error('Repository not initialized')
 
@@ -360,13 +974,17 @@ export class MediaRepository implements IMediaRepository {
       item.relativePath ?? item.path,
       item.libraryKind ?? 'other',
       item.collectionTitle ?? item.filename,
-      (item.policyEnabled ?? true) ? 1 : 0,
+      item.policyEnabled === true ? 1 : 0,
       item.playbackOverride === null || item.playbackOverride === undefined
         ? null
         : item.playbackOverride
           ? 1
           : 0,
-        (item.rootAvailable ?? true) ? 1 : 0
+        (item.rootAvailable ?? true) ? 1 : 0,
+        item.collectionId ?? null,
+        item.seasonNumber ?? null,
+        item.episodeNumber ?? null,
+        item.episodeTitle ?? null
       )
     })
     transaction()
@@ -496,41 +1114,14 @@ export class MediaRepository implements IMediaRepository {
         changed += this.db!
           .prepare('UPDATE media SET root_available = 0 WHERE root_id = ?')
           .run(root.id).changes
-        if (root.approvedCollections === undefined) {
-          changed += this.db!
-            .prepare('UPDATE media SET policy_enabled = 1 WHERE root_id = ?')
-            .run(root.id).changes
-          continue
-        }
-
-        // Reset first so a narrowed policy takes effect synchronously even if
-        // the corresponding mount is unavailable during this startup.
-        changed += this.db!
-          .prepare('UPDATE media SET policy_enabled = 0 WHERE root_id = ?')
-          .run(root.id).changes
-        if (root.approvedCollections.length === 0) continue
-
-        const CHUNK_SIZE = 498
-        for (
-          let index = 0;
-          index < root.approvedCollections.length;
-          index += CHUNK_SIZE
-        ) {
-          const chunk = root.approvedCollections.slice(
-            index,
-            index + CHUNK_SIZE
-          )
-          const placeholders = chunk.map(() => '?').join(',')
-          changed += this.db!
-            .prepare(
-              `UPDATE media
-               SET policy_enabled = 1
-               WHERE root_id = ?
-                 AND collection_title COLLATE NOCASE IN (${placeholders})`
-            )
-            .run(root.id, ...chunk).changes
-        }
       }
+      // The old JSON allowlist is now only a programming-group fallback. It
+      // must not restore historical automatic approval. Collection policy is
+      // authoritative, while collectionless rows remain review-only.
+      changed += this.db!
+        .prepare('UPDATE media SET policy_enabled = 0 WHERE collection_id IS NULL')
+        .run().changes
+      this.syncAllCollectionEligibility()
       return changed
     })
 
@@ -542,6 +1133,166 @@ export class MediaRepository implements IMediaRepository {
     this.db
       .prepare('UPDATE media SET root_available = ? WHERE root_id = ?')
       .run(available ? 1 : 0, rootId)
+  }
+
+  private syncAllCollectionEligibility(): void {
+    if (!this.db) throw new Error('Repository not initialized')
+    this.db.exec(`
+      UPDATE media
+      SET policy_enabled = CASE
+        WHEN EXISTS (
+          SELECT 1
+          FROM media_collections AS collection
+          WHERE collection.id = media.collection_id
+            AND ${COLLECTION_EFFECTIVE_DECISION_SQL} = 'allow'
+        ) THEN 1
+        ELSE 0
+      END
+    `)
+  }
+
+  private syncCollectionEligibility(collectionId: number): void {
+    if (!this.db) throw new Error('Repository not initialized')
+    this.db.prepare(`
+      UPDATE media
+      SET policy_enabled = CASE
+        WHEN EXISTS (
+          SELECT 1
+          FROM media_collections AS collection
+          WHERE collection.id = media.collection_id
+            AND ${COLLECTION_EFFECTIVE_DECISION_SQL} = 'allow'
+        ) THEN 1
+        ELSE 0
+      END
+      WHERE collection_id = ?
+    `).run(collectionId)
+  }
+
+  private rowToMediaCollection(row: Record<string, unknown>): MediaCollection {
+    const rawPolicy = row.policy_decision
+    const policyDecision: PolicyDecision = this.isPolicyDecision(rawPolicy)
+      ? rawPolicy
+      : 'review'
+    const rawOverride = row.parent_override
+    const parentOverride: OverrideDecision =
+      rawOverride === 'allow' || rawOverride === 'block' ? rawOverride : null
+    const resolved = resolveEffectiveDecision(
+      policyDecision,
+      rawOverride === null || rawOverride === undefined
+        ? null
+        : (rawOverride as OverrideDecision)
+    )
+    return {
+      id: Number(row.id),
+      rootId: String(row.root_id ?? 'legacy'),
+      libraryKind: this.normalizeLibraryKind(row.library_kind),
+      identityKey: String(row.identity_key ?? ''),
+      sourceTitle: String(row.source_title ?? ''),
+      parsedTitle: String(row.parsed_title ?? ''),
+      year: this.nullableNumber(row.year),
+      present: Boolean(row.present),
+      metadataProvider: this.nullableString(row.metadata_provider),
+      metadataExternalId: this.nullableString(row.metadata_external_id),
+      metadataStatus: this.normalizeMetadataStatus(row.metadata_status),
+      metadataLocked: Boolean(row.metadata_locked),
+      metadataTitle: this.nullableString(row.metadata_title),
+      metadataOriginalTitle: this.nullableString(row.metadata_original_title),
+      metadataYear: this.nullableNumber(row.metadata_year),
+      overview: this.nullableString(row.overview),
+      posterPath: this.nullableString(row.poster_path),
+      backdropPath: this.nullableString(row.backdrop_path),
+      genres: this.parseStringArray(row.genres_json),
+      certification: this.nullableString(row.certification),
+      certificationRegion: this.nullableString(row.certification_region),
+      ratingStatus: this.normalizeRatingStatus(row.rating_status),
+      matchConfidence: this.nullableNumber(row.match_confidence),
+      metadataCandidates: this.parseCandidates(row.metadata_candidates_json),
+      metadataError: this.nullableString(row.metadata_error),
+      policyDecision,
+      policyReason: String(row.policy_reason ?? 'metadata_pending'),
+      policyProfileId: String(row.policy_profile_id ?? 'kids-7'),
+      parentOverride,
+      effectiveDecision: resolved.decision,
+      decisionSource:
+        resolved.source === 'parent_override'
+          ? 'parent'
+          : resolved.source === 'policy'
+            ? 'policy'
+            : 'fail_closed',
+      fileCount: Number(row.file_count ?? 0),
+      seasonCount: Number(row.season_count ?? 0),
+      episodeCount: Number(row.episode_count ?? 0),
+      readyFileCount: Number(row.ready_file_count ?? 0),
+      failedFileCount: Number(row.failed_file_count ?? 0),
+      legacyOverrideCount: Number(row.legacy_override_count ?? 0),
+      scheduleEligibleCount: Number(row.schedule_eligible_count ?? 0),
+      rootAvailable: Boolean(row.root_available),
+      createdAt: String(row.created_at ?? ''),
+      updatedAt: String(row.updated_at ?? ''),
+    }
+  }
+
+  private isPolicyDecision(value: unknown): value is PolicyDecision {
+    return value === 'allow' || value === 'review' || value === 'block'
+  }
+
+  private normalizeMetadataStatus(value: unknown): MetadataMatchStatus {
+    switch (value) {
+      case 'matched':
+      case 'ambiguous':
+      case 'unmatched':
+      case 'manual':
+      case 'error':
+      case 'not_configured':
+        return value
+      default:
+        return 'pending'
+    }
+  }
+
+  private normalizeRatingStatus(value: unknown): MetadataRatingStatus {
+    return value === 'resolved' || value === 'ambiguous' ? value : 'missing'
+  }
+
+  private nullableString(value: unknown): string | null {
+    return typeof value === 'string' ? value : null
+  }
+
+  private nullableNumber(value: unknown): number | null {
+    return typeof value === 'number' && Number.isFinite(value) ? value : null
+  }
+
+  private parseStringArray(value: unknown): readonly string[] {
+    if (typeof value !== 'string') return []
+    try {
+      const parsed: unknown = JSON.parse(value)
+      return Array.isArray(parsed)
+        ? parsed.filter((item): item is string => typeof item === 'string')
+        : []
+    } catch {
+      return []
+    }
+  }
+
+  private parseCandidates(value: unknown): readonly MetadataCandidateRecord[] {
+    if (typeof value !== 'string') return []
+    try {
+      const parsed: unknown = JSON.parse(value)
+      if (!Array.isArray(parsed)) return []
+      return parsed.filter((candidate): candidate is MetadataCandidateRecord => {
+        if (!candidate || typeof candidate !== 'object') return false
+        const record = candidate as Record<string, unknown>
+        return (
+          typeof record.provider === 'string' &&
+          typeof record.externalId === 'string' &&
+          (record.mediaType === 'movie' || record.mediaType === 'tv') &&
+          typeof record.title === 'string' &&
+          typeof record.confidence === 'number'
+        )
+      })
+    } catch {
+      return []
+    }
   }
 
   private rowToMediaItem(row: Record<string, unknown>): MediaItem {
@@ -580,8 +1331,12 @@ export class MediaRepository implements IMediaRepository {
       playbackEnabled: Boolean(
         (row.root_available ?? 1) &&
           Number(row.duration_seconds) > 0 &&
-          (row.playback_override ?? row.policy_enabled ?? 1)
+          (row.playback_override ?? row.policy_enabled ?? 0)
       ),
+      collectionId: (row.collection_id as number | null) ?? null,
+      seasonNumber: (row.season_number as number | null) ?? null,
+      episodeNumber: (row.episode_number as number | null) ?? null,
+      episodeTitle: (row.episode_title as string | null) ?? null,
     }
   }
 
@@ -706,14 +1461,18 @@ export class MediaRepository implements IMediaRepository {
           item.relativePath ?? item.path,
           item.libraryKind ?? 'other',
           item.collectionTitle ?? item.filename,
-          (item.policyEnabled ?? true) ? 1 : 0,
+          item.policyEnabled === true ? 1 : 0,
           item.playbackOverride === null ||
             item.playbackOverride === undefined
             ? null
             : item.playbackOverride
               ? 1
               : 0,
-          (item.rootAvailable ?? true) ? 1 : 0
+          (item.rootAvailable ?? true) ? 1 : 0,
+          item.collectionId ?? null,
+          item.seasonNumber ?? null,
+          item.episodeNumber ?? null,
+          item.episodeTitle ?? null
         )
       }
     })

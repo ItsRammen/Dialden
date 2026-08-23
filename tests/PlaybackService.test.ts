@@ -29,6 +29,8 @@ const createMediaItemBuilder = (override?: Partial<MediaItem>): MediaItem => ({
   warning: null,
   mtime: null,
   compatibility: 'compatible',
+  rootAvailable: true,
+  playbackEnabled: true,
   ...override,
 })
 
@@ -70,6 +72,9 @@ describe('PlaybackService', () => {
     config.get.mockResolvedValue({
       session: { offAirAssetId: null },
     } as any)
+    media.getById.mockImplementation(async (id) =>
+      createMediaItemBuilder({ id })
+    )
 
     service = new PlaybackService({ player, engine, config, media, events })
   })
@@ -120,6 +125,106 @@ describe('PlaybackService', () => {
 
     expect(engine.getNextVideo).toHaveBeenCalled()
     expect(player.play).toHaveBeenCalledWith(nextVideo.path)
+  })
+
+  test('re-resolves stale engine paths before play and enqueue', async () => {
+    const staleFirst = createMediaItemBuilder({
+      id: 7,
+      path: '/stale/first.mp4',
+      filename: 'stale-first.mp4',
+    })
+    const staleNext = createMediaItemBuilder({
+      id: 8,
+      path: '/stale/next.mp4',
+      filename: 'stale-next.mp4',
+    })
+    const currentFirst = createMediaItemBuilder({
+      id: 7,
+      path: '/media/current/first.mp4',
+      filename: 'current-first.mp4',
+    })
+    const currentNext = createMediaItemBuilder({
+      id: 8,
+      path: '/media/current/next.mp4',
+      filename: 'current-next.mp4',
+    })
+    engine.startSession.mockResolvedValue(staleFirst)
+    engine.peekQueue.mockImplementation((count) =>
+      count === 1 ? [staleNext] : []
+    )
+    media.getById.mockImplementation(async (id) =>
+      id === 7 ? currentFirst : id === 8 ? currentNext : null
+    )
+
+    await service.startSession()
+
+    expect(player.play).toHaveBeenCalledWith(currentFirst.path)
+    expect(player.play).not.toHaveBeenCalledWith(staleFirst.path)
+    expect(player.enqueue).toHaveBeenCalledWith(currentNext.path)
+    expect(player.enqueue).not.toHaveBeenCalledWith(staleNext.path)
+  })
+
+  const ineligibleCurrentRows: Array<
+    readonly [string, Partial<MediaItem> | null]
+  > = [
+    ['a missing row', null],
+    ['missing root availability', { rootAvailable: undefined }],
+    ['an unavailable root', { rootAvailable: false }],
+    ['missing playback approval', { playbackEnabled: undefined }],
+    ['blocked playback', { playbackEnabled: false }],
+    ['a non-video media type', { mediaType: 'intro' }],
+    ['an interlude flag', { isInterlude: true }],
+    ['missing interlude state', { isInterlude: undefined }],
+    ['zero duration', { durationSeconds: 0 }],
+    ['non-finite duration', { durationSeconds: Number.NaN }],
+    ['an empty current path', { path: '' }],
+    ['a mismatched current ID', { id: 99 }],
+  ]
+
+  for (const [label, override] of ineligibleCurrentRows) {
+    test(`startSession() fails closed for ${label}`, async () => {
+      const queued = createMediaItemBuilder({ id: 7, path: '/stale/show.mp4' })
+      engine.startSession.mockResolvedValue(queued)
+      engine.peekQueue.mockReturnValue([])
+      media.getById.mockResolvedValue(
+        override === null ? null : createMediaItemBuilder({ id: 7, ...override })
+      )
+
+      await service.startSession()
+
+      expect(player.play).not.toHaveBeenCalled()
+      expect(player.enqueue).not.toHaveBeenCalled()
+    })
+  }
+
+  test('startSession() fails closed when current authorization lookup throws', async () => {
+    engine.startSession.mockResolvedValue(createMediaItemBuilder({ id: 7 }))
+    engine.peekQueue.mockReturnValue([])
+    media.getById.mockRejectedValue(new Error('database unavailable'))
+
+    await service.startSession()
+
+    expect(player.play).not.toHaveBeenCalled()
+    expect(player.enqueue).not.toHaveBeenCalled()
+  })
+
+  test('does not enqueue a newly blocked queue item after playing current media', async () => {
+    const first = createMediaItemBuilder({ id: 7 })
+    const next = createMediaItemBuilder({ id: 8, path: '/stale/next.mp4' })
+    engine.startSession.mockResolvedValue(first)
+    engine.peekQueue.mockImplementation((count) => (count === 1 ? [next] : []))
+    media.getById.mockImplementation(async (id) =>
+      id === 7
+        ? first
+        : id === 8
+          ? { ...next, playbackEnabled: false }
+          : null
+    )
+
+    await service.startSession()
+
+    expect(player.play).toHaveBeenCalledWith(first.path)
+    expect(player.enqueue).not.toHaveBeenCalled()
   })
 
   test('pause() delegates to Player and broadcasts state', async () => {

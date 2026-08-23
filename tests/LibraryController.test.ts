@@ -165,7 +165,7 @@ describe('LibraryController', () => {
     expect(mediaService.updatePlaybackOverride).toHaveBeenCalledWith(42, true)
     expect(mediaService.rescan).toHaveBeenCalled()
     expect(playlistEngine.refreshCache).toHaveBeenCalled()
-    expect(await response.text()).toContain('Kids 7 approved')
+    expect(await response.text()).toContain('Playable')
   })
 
   test('playback eligibility rejects partial IDs before any mutation or rescan', async () => {

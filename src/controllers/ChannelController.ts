@@ -5,7 +5,7 @@ interface ChannelControllerDeps {
   channels: ChannelService
 }
 
-/** Read-only schedule API for clients such as the future webOS application. */
+/** Read-only schedule API used by the browser and packaged webOS clients. */
 export function createChannelController({ channels }: ChannelControllerDeps) {
   const controller = new Hono()
 
@@ -33,6 +33,30 @@ export function createChannelController({ channels }: ChannelControllerDeps) {
       ? c.json(result)
       : c.json({ error: 'Channel not found' }, 404)
   })
+
+  controller.post('/api/admin/v1/channels/:id/on-air', (c) =>
+    channels.setOnAir(c.req.param('id'), true)
+      ? c.json({ channelId: c.req.param('id'), onAir: true })
+      : c.json({ error: 'Channel not found' }, 404)
+  )
+
+  controller.post('/api/admin/v1/channels/:id/off-air', (c) =>
+    channels.setOnAir(c.req.param('id'), false)
+      ? c.json({ channelId: c.req.param('id'), onAir: false })
+      : c.json({ error: 'Channel not found' }, 404)
+  )
+
+  controller.post('/channels/:id/on-air', (c) =>
+    channels.setOnAir(c.req.param('id'), true)
+      ? c.redirect('/', 303)
+      : c.text('Channel not found', 404)
+  )
+
+  controller.post('/channels/:id/off-air', (c) =>
+    channels.setOnAir(c.req.param('id'), false)
+      ? c.redirect('/', 303)
+      : c.text('Channel not found', 404)
+  )
 
   return controller
 }

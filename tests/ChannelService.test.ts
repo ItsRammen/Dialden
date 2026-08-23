@@ -76,6 +76,12 @@ describe('ChannelService', () => {
     )
     expect(middle?.program?.offsetSeconds).toBe(300)
     expect(middle?.program?.offsetMs).toBe(300_000)
+    expect(middle?.program?.durationMs).toBe(600_000)
+    expect(middle?.program?.playback).toEqual({
+      mode: 'direct',
+      url: '/api/v1/media/1/stream',
+      sourceOffsetAtPlaybackZeroMs: 0,
+    })
     expect(middle?.next?.scheduledStart).toBe('2026-08-23T22:40:00.000Z')
 
     const at0640 = new ChannelService(repository, policy, {
@@ -96,6 +102,8 @@ describe('ChannelService', () => {
       video(2, 'Numberblocks'),
       video(3, 'Bluey (2018)', false),
       { ...video(4, 'Bluey (2018)'), rootAvailable: false, playbackEnabled: false },
+      { ...video(5, 'Bluey (2018)'), playbackEnabled: undefined },
+      { ...video(6, 'Bluey (2018)'), rootAvailable: false, playbackEnabled: true },
     ])
     const clock = { now: () => new Date('2026-08-23T22:35:00.000Z') }
 
@@ -107,12 +115,21 @@ describe('ChannelService', () => {
       'kids-club',
       1
     )
+    const eligibleRepository = mock<IMediaRepository>()
+    eligibleRepository.getAll.mockResolvedValue([
+      video(1, 'Bluey (2018)'),
+      video(2, 'Numberblocks'),
+    ])
+    const eligibleOnly = await new ChannelService(
+      eligibleRepository,
+      policy,
+      clock
+    ).getGuide('kids-club', 1)
 
     expect(first).toEqual(second)
+    expect(first?.timelineRevision).toBe(eligibleOnly?.timelineRevision)
     expect(first?.programs.length).toBeGreaterThan(0)
-    expect(first?.programs.every((program) => [1, 2].includes(program.mediaId))).toBe(
-      true
-    )
+    expect(first?.programs.every((program) => [1, 2].includes(program.mediaId))).toBe(true)
   })
 
   test('returns off-air and not-found states without inventing a program', async () => {

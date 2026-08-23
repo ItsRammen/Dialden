@@ -46,17 +46,20 @@ ENV NODE_ENV=production \
     TOASTTV_DATA=/app/data \
     TOASTTV_DATABASE=/app/data/media.db \
     TOASTTV_MEDIA=/media \
+    TOASTTV_LIBRARY_POLICY=/app/data/kids-7.library.json \
     TOASTTV_MEDIA_READ_ONLY=true \
     TOASTTV_UPDATES_ENABLED=false
 
 COPY --from=build --chown=bun:bun /app/bin/server.js ./bin/server.js
 COPY --chown=bun:bun public ./public
+COPY --chown=bun:bun clients/webos ./clients/webos
 COPY --chown=bun:bun data ./data
 COPY --chown=bun:bun data ./defaults
 COPY --chown=bun:bun config ./config
+COPY --chown=bun:bun config/kids-7.library.json ./defaults/kids-7.library.json
 COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-RUN mkdir -p /media /app/data/thumbnails /app/data/transcode \
+RUN mkdir -p /media /app/data/thumbnails /app/data/artwork /app/data/transcode \
     && chown -R bun:bun /app /media
 
 EXPOSE 1993

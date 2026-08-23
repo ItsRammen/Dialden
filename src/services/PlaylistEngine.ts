@@ -344,7 +344,7 @@ export class PlaylistEngine {
     // Exclude interludes, intro, and outro from regular videos (they are handled specially)
     let videos = all.filter(
       (m) =>
-        m.playbackEnabled !== false &&
+        m.playbackEnabled === true &&
         !m.isInterlude &&
         m.mediaType !== 'intro' &&
         m.mediaType !== 'outro' &&
@@ -359,14 +359,14 @@ export class PlaylistEngine {
     // Special videos (intro/outro) are cached for lookup but not shuffled
     this.cachedSpecialVideos = all.filter(
       (m) =>
-        m.playbackEnabled !== false &&
+        m.playbackEnabled === true &&
         (m.mediaType === 'intro' || m.mediaType === 'outro')
     )
 
     // Filter interludes by SEASON via repo.getInterludes() which handles SQL logic
     this.cachedInterludes = (
       await this.repository.getInterludes(this.dateTime.today())
-    ).filter((item) => item.playbackEnabled !== false)
+    ).filter((item) => item.playbackEnabled === true)
 
     if (this.cachedVideos.length === 0) {
       this.deck = null

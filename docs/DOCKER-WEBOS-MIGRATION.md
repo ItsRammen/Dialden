@@ -1,6 +1,12 @@
 # ToastTV Docker and webOS Migration Audit
 
-Status: repository audit complete; the first headless-server boot seam and its initial persistence-safety hardening are implemented. Sections 1-9 describe the upstream ToastTV `0.6.4` baseline at commit `f63005e`, while explicit **current fork** notes describe changes in this working tree. Sections 10 onward describe the target architecture unless marked as implemented.
+Status: repository audit complete; the headless server, deterministic Kids 7
+channels, safe direct-play endpoint, browser reference client, and packaged
+webOS MVP are implemented. HLS fallback, authentication/pairing, and physical-TV
+compatibility validation remain future stages. Sections 1-9 describe the
+upstream ToastTV `0.6.4` baseline at commit `f63005e`, while explicit **current
+fork** notes describe changes in this working tree. Sections 10 onward describe
+the target architecture unless marked as implemented.
 
 The governing rule is:
 
@@ -60,13 +66,14 @@ The upstream baseline exposes:
 - a global dashboard SSE feed at `/events/dashboard`;
 - static assets and thumbnails.
 
-The current fork additionally exposes `GET /api/v1/health` plus deterministic
-channel list, now, and guide responses with server time and a computed timeline
-revision. In Docker headless mode it keeps management routes available but
-returns `503` from legacy local-playback mutations, disables media upload and
-catalog deletion for the read-only library, and disables bare-metal self-update.
-It does not yet expose client registration, media streaming, Range responses,
-HLS, pairing, or channel-scoped events.
+The current fork additionally exposes `GET /api/v1/health`, deterministic
+channel list/now/guide responses, and `GET`/`HEAD` direct media delivery with
+single-range support. It serves the browser reference client at `/tv/`, and the
+same files form the packaged webOS client. In Docker headless mode it keeps
+management routes available but returns `503` from legacy local-playback
+mutations, disables media upload and catalog deletion for the read-only library,
+and disables bare-metal self-update. It does not yet expose HLS, client
+registration, pairing, signed media URLs, or channel-scoped events.
 
 ## 2. Relevant source files and ownership
 
@@ -82,9 +89,11 @@ Classification:
 | Composition root | `src/daemon.ts` | B/C | Constructs database, indexing, MPV, Pi profile, CEC, global session | Split core server composition from legacy local-device adapter |
 | Hono app | `src/server.ts` | A | Static UI, controllers, SSE | Preserve and add versioned playback APIs |
 | Runtime config | `src/repositories/ConfigRepository.ts` | A | JSON bootstrap paths plus SQLite settings | Preserve; make container paths explicit and add migration-safe settings |
-| Media database | `src/repositories/MediaRepository.ts` | A | Media metadata and flat settings | Preserve IDs where possible; add schema migration ledger and new tables |
-| Repository contract | `src/repositories/IMediaRepository.ts` | A | Media/settings persistence interface | Preserve, then separate media/catalog contracts as schema grows |
-| File scan | `src/services/MediaIndexer.ts` | A/B | Scan, probe, seasonal/type detection, compatibility classification | Retain neutral probe/index logic; remove server-host decoder decisions |
+| Media database | `src/repositories/MediaRepository.ts` | A | File catalog, collections, cached metadata, ratings, policy, and overrides | Preserve stable file IDs and explicit overrides; evolve through the schema ledger |
+| Repository contract | `src/repositories/IMediaRepository.ts` | A | File, collection, metadata-queue, policy, and summary persistence | Preserve; split contracts only when scheduling/client persistence requires it |
+| File scan | `src/services/MediaIndexer.ts` | A/B | Root discovery, collection detection, changed-file probing, and scan state | Keep independent from online enrichment and retain fail-closed root/probe gates |
+| Metadata enrichment | `src/services/metadata/*`, `src/clients/TmdbClient.ts` | A | Cached, sequential TMDB matching, rating resolution, and policy evaluation | Keep behind `MetadataProvider`; never call providers per episode or page view |
+| Collection library | `src/services/CollectionLibraryService.ts`, collection controllers/templates | A | Collection summary/search/review, season detail, and parent actions | Primary library workflow; retain the flat file view as an advanced fallback |
 | Filesystem/probe | `src/clients/FilesystemClient.ts` | A | Recursive file listing/watch and ffprobe | Retain after root validation and richer probe data |
 | Thumbnail generation | `src/clients/ThumbnailClient.ts` | A | FFmpeg thumbnails under data directory | Retain with configurable persistent root |
 | Media business logic | `src/services/MediaService.ts` | A | List, type/date updates, logo and media deletion | Retain after read-only mount and path-safety work |
@@ -96,8 +105,9 @@ Classification:
 | TV detection | `src/services/TVDetectionService.ts` | C | Turns one TV's power/input state into global session state | Not part of server architecture |
 | Pi detection | `src/services/HardwareDetectionService.ts` | B | Chooses Raspberry Pi decoder profile | Replace server use with client capability negotiation |
 | Hardware profiles | `src/config/hardwareProfiles.ts` | B/C | Pi codec/resolution limits | Legacy Pi only; do not apply to indexed server media |
-| Dashboard SSE | `src/services/DashboardEventService.ts` | A/C | Generic fanout carrying global MPV events | Reuse transport; version events and add channel/client identity |
-| Admin UI | `src/controllers/*`, `src/templates/*`, `public/*` | A/C | Catalog/config plus global player controls | Preserve catalog/config; redesign playback portions around channels/clients |
+| Dashboard SSE | `src/services/DashboardEventService.ts` | A/C | MPV events plus scan and metadata progress fanout | Reuse transport; add channel-scoped events when durable schedules land |
+| Client presence | `src/services/ClientPresenceService.ts`, `src/controllers/ClientPresenceController.ts` | A | Ephemeral heartbeat-derived online/viewer telemetry | Operational signal only; replace with authenticated persisted clients during pairing work |
+| Admin UI | `src/controllers/*`, `src/templates/*`, `public/*` | A/C | Collection library, review, metadata settings, channels, and legacy local controls | Headless dashboard is broadcast-oriented; legacy controls remain isolated to local mode |
 | MPV assets | `data/mpv.conf`, `scripts/logo.lua`, `scripts/tvguide.lua` | C | Local HDMI presentation | Legacy Pi packaging only |
 | Installer/update | `scripts/install.sh`, `scripts/update.sh`, `Makefile` | B | Bare-metal Pi packages and services | Keep as legacy distribution; Docker uses separate artifacts |
 
@@ -192,31 +202,47 @@ The following behavior should be preserved rather than rewritten:
 
 The playlist logic should be decomposed into a pure or deterministic sequence builder. It may decide ordering and interlude placement, but it must not own the authoritative wall clock or a viewer-started timer.
 
-## 8. Existing database models relevant to playback
+## 8. Current database models relevant to playback
 
-SQLite currently has two tables.
+SQLite now separates file facts from collection-level metadata and decisions.
 
 ### `media`
 
-The effective migrated columns are:
+Alongside the legacy playback/probe fields, each managed file has a stable
+`(root_id, relative_path)` locator, `library_kind`, `collection_id`, parsed
+season/episode fields, root availability, and a compatibility projection of the
+effective collection decision. The original absolute path remains for the
+legacy local Pi player; remote delivery resolves the stable locator through the
+canonical media boundary.
+
+### `media_collections`
+
+One TV series or movie owns cached provider metadata, match state/candidates,
+raw certification and region, policy decision/reason/version, and the explicit
+parent override. The effective decision is:
 
 ```text
-id, path, filename, duration_seconds, is_interlude,
-date_start, date_end, created_at, media_type,
-codec, width, height, warning, mtime, compatibility
+parent_override ?? policy_decision
 ```
 
-### `settings`
+Missing, ambiguous, unrated, provider-error, and unconfigured states are never
+projected as playable. A manual TMDB confirmation locks the external match, and
+file rescans update presence without deleting metadata or parent decisions.
 
-```text
-key, value
-```
+### `settings` and `schema_migrations`
 
-There are no channel, schedule, program, timeline, client, credential, capability, pairing, probe-cache, or transcode-job tables. Migrations are performed by inspecting columns at startup; there is no schema-version ledger.
+`settings` retains the legacy key/value configuration. `schema_migrations`
+records the collection migration; older per-file explicit overrides are
+preserved, while old automatically generated policy booleans are not promoted
+to trusted collection approval.
 
-### Database implications for the target design
+There are still no durable channel, program, timeline, authenticated client,
+credential, capability, pairing, probe-cache, or transcode-job tables.
 
-Preserve the existing tables initially, then introduce versioned migrations and at least these concepts:
+### Database implications for the target schedule design
+
+Keep the implemented file/collection tables, then introduce these durable
+scheduling and client concepts through additional versioned migrations:
 
 ```text
 channels
@@ -257,8 +283,10 @@ The current fork fixes immediate data-loss/correctness defects from the audited 
 - `MediaRepository.upsertMedia()` and `upsertBatch()` now persist extended probe fields and the compatibility value computed by the indexer;
 - TV, movie, and interlude rows have stable `(root_id, relative_path)` locators in addition to their current absolute playback path;
 - scans reconcile each successfully traversed root independently. Missing or incompletely traversable roots preserve their catalog rows and parent overrides but are quarantined from playback; a successfully traversed empty root is reconciled as intentionally empty. An individual ffprobe failure gates only that zero-duration item while the otherwise complete root can become available;
-- managed collection policy is applied synchronously at startup, and every root remains playback-ineligible until its current mount completes a successful scan;
-- the Kids 7 policy now defines deterministic clock-driven channels and read-only `channels`, `now`, and bounded `guide` endpoints. Generated timelines are currently computed rather than durably materialized.
+- each show/movie is grouped into a persistent collection before files are upserted. Existing explicit parent overrides survive migration and rescans, while legacy automatic allowlist results are recalculated;
+- filesystem probing is independent of approval, and online metadata matching is a separate cached sequential job. Missing TMDB configuration or any uncertain/error state resolves to review;
+- the configurable Kids 7 rating policy stores `allow`, `review`, or `block` plus its reason. Only a current root, positive duration, and effective `allow` decision can enter playback or scheduling;
+- the Kids 7 policy also defines deterministic clock-driven channels and read-only `channels`, `now`, and bounded `guide` endpoints. Generated timelines are currently computed rather than durably materialized.
 
 The following persistence work remains before durable/materialized channel scheduling:
 
@@ -267,7 +295,7 @@ The following persistence work remains before durable/materialized channel sched
 - absolute playback paths remain transitional, but path-prefix changes retain row IDs through stable root-relative locators;
 - daily quota, queue, and session state are in memory only;
 - several configuration fields are read but not seeded or persisted on update;
-- there is no schema-version ledger or transactional schedule-revision migration.
+- the collection migration has a schema ledger, but durable schedule revisions and their transactional migrations do not exist yet.
 
 ## 9. Existing scheduling and timeline behavior
 
@@ -395,7 +423,7 @@ GET /api/v1/channels/:channelId/now
     "durationSeconds": 420,
     "playback": {
       "mode": "direct",
-      "url": "/api/v1/media/382/play"
+      "url": "/api/v1/media/382/stream"
     }
   },
   "next": {
@@ -416,13 +444,16 @@ Guide items must include stable program IDs, start/end instants, media availabil
 ### Media
 
 ```http
-GET  /api/v1/media/:mediaId
-HEAD /api/v1/media/:mediaId/play
-GET  /api/v1/media/:mediaId/play
-GET  /api/v1/media/:mediaId/hls/:playbackId/master.m3u8
+HEAD /api/v1/media/:mediaId/stream
+GET  /api/v1/media/:mediaId/stream
+GET  /api/v1/media/:mediaId/hls/:playbackId/master.m3u8  (future)
 ```
 
-The play route accepts no filesystem path. Direct playback must support HTTP Range requests and return correct `Accept-Ranges`, `Content-Range`, `Content-Length`, MIME, `206`, and `416` behavior. A full `200` response does not need `Content-Range`; a `416` response uses `Content-Range: bytes */<full-length>`.
+The stream route accepts no filesystem path. Direct playback supports HTTP
+Range requests and returns correct `Accept-Ranges`, `Content-Range`,
+`Content-Length`, MIME, `206`, and `416` behavior. A full `200` response does
+not need `Content-Range`; a `416` response uses
+`Content-Range: bytes */<full-length>`.
 
 `playbackId` is an opaque, server-issued reference to an allow-listed output decision, not a client-supplied FFmpeg profile or argument. The client must use the `playback.url` returned by the authoritative `now` response rather than constructing a transcode URL. A relative URL is resolved against the saved ToastTV server base, not the packaged app's origin; returning an absolute URL is also acceptable.
 
@@ -495,7 +526,10 @@ The initial headless milestone now provides:
 - `TOASTTV_MEDIA_READ_ONLY=true`, which replaces the upload UI with host-mount guidance, hides delete controls, and rejects both `POST /api/upload` and `DELETE /api/media/:id` with `403`; writable-mode filenames are reduced to a single basename, checked for canonical root containment, and rejected when the destination is a symlink;
 - `TOASTTV_UPDATES_ENABLED=false`, which skips update checks and rejects the bare-metal apply flow inside the container; Docker deployments update by rebuilding/redeploying the image;
 - unavailable roots preserve their index while successful empty roots reconcile; stable locators survive mount-prefix changes, and batch indexing persists computed compatibility values;
-- default-deny collection eligibility, parent overrides, root-availability gating, and deterministic Kids 7 channel/now/guide APIs;
+- collection-first TV/movie indexing, cached sequential TMDB enrichment, configurable rating policy, persistent parent overrides, and metadata/approval review queues;
+- fail-closed collection eligibility, independent probing, root-availability gating, and deterministic Kids 7 channel/now/guide APIs;
+- collection/season library pages, separate scan and metadata progress over SSE, cached size-restricted artwork, and a headless dashboard backed by real channel/library/client state;
+- ephemeral webOS client heartbeats and per-channel on-air/off-air controls using broadcast terminology rather than physical-TV power state;
 - `/api/v1/health` checking SQLite access and the FFmpeg toolchain;
 - shutdown stops the playback loop and watcher, retains and awaits the background scan task, and prevents that task from starting a watcher after shutdown begins.
 
@@ -509,6 +543,7 @@ The legacy Pi path remains the default outside the container. Shutdown is not ye
   media.db          SQLite catalog and settings
   logo.png          mutable management UI logo
   thumbnails/       generated thumbnails
+  artwork/          cached provider-sized TMDB collection artwork
   transcode/        reserved directory; HLS service not implemented yet
   update.log        legacy-only log path; updates are disabled in Docker
   mpv.conf          copied compatibility asset; unused in headless mode
@@ -517,10 +552,16 @@ The legacy Pi path remains the default outside the container. Shutdown is not ye
 /media/tv          read-only TV library
 /media/movies      read-only movie library
 /media/interludes  read-only optional interludes
-/app/config/kids-7.library.json  read-only folder/channel policy
+/app/data/kids-7.library.json  persistent rating/profile, programming-group, and channel policy
 ```
 
 The named `toasttv-data` volume preserves the implemented `/app/data` contents across container recreation. `TOASTTV_DATA` is the root for mutable generated paths, `TOASTTV_DATABASE` can override its database, `TOASTTV_CONFIG` selects the bootstrap JSON, and media remains a separate mount. The image creates `/media` before dropping privileges but does not change ownership of a user-supplied runtime bind mount. The runtime user is UID/GID `1000`, so a host/NAS library must grant that identity or a supplemental group file read and directory traverse permissions; the README includes the Compose `group_add` pattern.
+
+The image seeds `kids-7.library.json` into appdata only when it is missing, so
+Unraid policy edits survive image replacement. Container `TZ` controls logs and
+legacy date handling; channel schedule timezones live in that policy. Manual
+on-air/off-air state is intentionally process-local in this milestone and
+returns to on-air after restart.
 
 ### Target normalized persistent layout
 
@@ -539,7 +580,9 @@ Schema migrations, generated channel schedules, pairing credentials, probe versi
 
 - Persist per-root scan/readiness records (status, last success/error, and item count) and expose them through health. Row-level availability already gates playback and the scanner distinguishes a complete empty traversal from an unavailable/incomplete root, but an empty root has no row on which to retain that state.
 - Decide whether a future optional writable ingest root or persistent hide/tombstone feature is needed. The current Docker MVP intentionally supports host-side media changes plus rescan and rejects both application uploads and catalog-row deletion.
-- Replace ad-hoc column migrations with a versioned schema ledger and finish a canonical media resolver before serving absolute paths to remote clients; stable relative locators are now present.
+- Replace ad-hoc column migrations with a versioned schema ledger. Remote media
+  now resolves canonical root-relative locators and never serves the catalog's
+  stored absolute path; the legacy local-player path remains separate.
 - Retain the `Bun.serve` handle and drain/stop HTTP and SSE connections during shutdown.
 - Vendor HTMX and any other UI runtime assets for offline LAN use.
 - Add an image build/boot smoke test in CI for `amd64` and `arm64`.
@@ -616,8 +659,9 @@ Local pause never changes channel time. On resume, the first implementation shou
 | Priority | Risk | Impact | Mitigation |
 |---|---|---|---|
 | P0 | Computed channel timelines are not durably materialized | Policy-defined now/guide is restart-deterministic, but atomic schedule revisions and auditability are missing | Add durable schedule rules/program revisions without changing the current channel contract |
-| P0 | Absolute paths are still stored/played | Stable locators prevent ID churn, but remote delivery still needs canonical resolution and containment | Resolve `(root_id, relative_path)` through a canonical allow-listed media resolver |
+| P1 | Legacy absolute paths remain stored for local playback | Remote delivery now uses canonical root-relative resolution, but the legacy Pi player still consumes the catalog path | Keep the remote resolver as the only client delivery boundary and migrate legacy local playback separately |
 | P0 | Management mutation routes remain unauthenticated | A LAN peer can alter catalog/configuration | Separate admin/playback APIs and introduce admin authorization; in-container self-update is already disabled |
+| P0 | Incorrect automatic metadata match could apply the wrong rating | Unsafe content could be allowed from unrelated metadata | Auto-confirm only a unique exact normalized title/year/type match; send fuzzy, conflicting, missing, and unrated results to review and retain manual lock |
 | P0 | Media-element authentication is undefined | `<video>`/HLS requests cannot reliably send the API bearer header, encouraging long-lived query tokens | Use short-lived signed file/manifest/segment URLs, a tested scoped cookie, or same-origin hosting; never trust query `clientId`/profile |
 | P0 | On-demand HLS begins at source time zero | A mid-program viewer waits for FFmpeg to catch up and cannot join live | Pre-generate/cache seekable VOD HLS or use an offset-anchored job with an explicit source-time mapping |
 | P1 | Root state is enforced on rows but not persisted independently | Empty roots have no row carrying last scan/error state and health can remain green for a missing mount | Persist per-root scan state and include it in readiness; retain current traversal-completeness gating |
@@ -655,12 +699,31 @@ Exit condition: management HTTP boots without MPV/CEC/Pi hardware; SQLite and ge
 
 ### Stage 2: persistence and media safety prerequisites
 
-- Add versioned schema migrations.
+- Continue the implemented schema ledger for every future persistent change.
+- Retain collection-level metadata/policy/override state and the rule that only explicit effective `allow` is schedulable.
 - Persist explicit per-root availability/last-scan state and expose media readiness; row-level playback quarantine and complete-traversal reconciliation are implemented.
-- Finish canonical `MediaResolver` root checks using the implemented stable media locators.
+- Retain the implemented canonical media resolver as the only remote-delivery
+  boundary and add persisted per-root readiness around it.
 - Fix legacy extended-probe persistence and collect versioned container/audio/time-base data.
 - Decide whether a persistent hide/tombstone feature or separate writable ingest root is needed.
 - Add admin authorization and container-aware backup/restore guidance.
+
+### Collection library and metadata milestone — implemented
+
+- Group Plex-style TV folders and movies into persistent collections; parse TV
+  seasons/episodes while keeping detailed file facts behind the advanced view.
+- Cache show/movie-level TMDB metadata, candidate matches, artwork paths,
+  certifications, region, confidence, and errors in SQLite.
+- Run metadata enrichment as a sequential job separate from filesystem scans;
+  absent credentials, ambiguous matches, missing ratings, and provider failures
+  remain in review. Policy edits are reapplied at startup, while rating-region
+  changes invalidate cached certifications until their retained matches refresh.
+- Evaluate configurable Kids 7 rating buckets and preserve explicit parent
+  allow/block/reset actions across rescans and newly added episodes.
+- Expose collection summary/list/detail/review APIs and UI, guarded admin
+  mutations, scan/metadata SSE progress, safe bulk overrides, and manual match.
+- Render the headless home page from real channels, catalog decisions, metadata
+  state, scan state, and ephemeral client heartbeats.
 
 ### Stage 3: channel timeline core
 
@@ -677,12 +740,17 @@ Exit condition: management HTTP boots without MPV/CEC/Pi hardware; SQLite and ge
 - Add server info and client config.
 - Add clock-sampling guidance and API contract/integration tests for bounded guide windows, fallback polling, failure responses, rejection of query-supplied client/profile identity, and the conservative anonymous profile used before registration lands.
 
-### Stage 5: safe direct play and browser reference client
+### Stage 5: safe direct play and browser reference client — MVP implemented
 
-- Implement media-ID resolution and HTTP Range/HEAD handling.
-- Issue opaque/short-lived playback URLs suitable for `<video>` rather than requiring a bearer header on media fetches.
-- Add path traversal, symlink escape, signature expiry, MIME, Range boundary/`416`, and missing-media tests.
-- Build `/tv/` reference player with midpoint/RTT clock estimation, live seek, transition, bounded reconnection, periodic drift reconciliation, visible failure states, and Now/Next.
+- Media-ID resolution plus HTTP Range/HEAD handling is implemented.
+- The current trusted-LAN MVP uses an anonymous server-approved media URL;
+  opaque/short-lived URLs remain required before an authenticated deployment.
+- Root containment, symlink escape, MIME, Range boundary/`416`, and
+  missing-media tests cover the implemented resolver and endpoint; signature
+  expiry tests wait for signed URLs.
+- `/tv/` provides the reference player with midpoint clock estimation, live
+  seek, transitions, bounded reconnection, drift reconciliation, failure states,
+  and guide data.
 
 ### Stage 6: capability decisions and HLS
 
@@ -691,19 +759,24 @@ Exit condition: management HTTP boots without MPV/CEC/Pi hardware; SQLite and ge
 - Add a single-server FFmpeg HLS job/cache lifecycle with an explicit source-time-to-playlist-time mapping, atomic manifests, bounded cleanup, and graceful fallback.
 - Test mid-program cold join, warm cached join, multiple compatible clients sharing a job, late joiners, source/program end, restart cleanup, transcode failure, and representative MP4/MKV/AVI/video/audio combinations.
 
-### Stage 7: packaged webOS client
+### Stage 7: packaged webOS client — MVP implemented
 
-- Add `clients/webos` packaged shell and valid `appinfo.json`.
-- Implement saved/manual server setup, channel selection, HTML5 playback, live joining, remote focus, Back behavior, guide overlay, and reconnect.
-- Compare packaged/hybrid behavior with LG's hosted redirect pattern, retaining local recovery UI in the selected design.
-- Validate CORS origin behavior, signed/cookie media access, media readiness/seek timing, rejected `play()`, direct-to-HLS fallback, and the documented drift thresholds.
-- Validate against physical webOS generations; emulator-only results are insufficient for codec/HLS confidence.
+- `clients/webos` contains the packaged shell and `appinfo.json`; packaging and
+  Developer Mode sideloading are documented in [`WEBOS.md`](./WEBOS.md).
+- The MVP implements saved/manual server setup, channel selection, HTML5 direct
+  playback, live joining, remote focus, Back behavior, guide display, and
+  reconnection.
+- Hosted-shell comparison, authenticated media access, and direct-to-HLS
+  fallback remain future work.
+- Physical webOS generation testing remains required; browser or emulator
+  results cannot establish codec/HLS compatibility on a TV.
 
 ### Stage 8: registration, pairing, and multi-client polish
 
 - Persist clients, credentials, capabilities, channel assignment, and last seen.
 - Add short-code/QR pairing; experiment with discovery only as an enhancement.
-- Add connected-client and transcode status to management UI.
+- Replace the implemented ephemeral heartbeat presence with authenticated,
+  persisted client management; add transcode status when HLS lands.
 - Confirm credential rotation/revocation, signed-URL expiry, redacted logging, and that query-supplied client/profile identity is ignored.
 - Confirm that multiple clients on one channel resolve the same program and approximately the same offset without sharing viewer playback state.
 
@@ -724,10 +797,17 @@ Exit condition: management HTTP boots without MPV/CEC/Pi hardware; SQLite and ge
 - [x] Headless playback controls cannot create a fake local session.
 - [x] Missing/incomplete roots preserve indexed rows but are playback-quarantined; successfully traversed empty roots reconcile only their own rows.
 - [x] Stable root-relative locators preserve IDs and overrides across container path-prefix changes.
-- [x] Managed roots apply a default-deny top-level-folder policy before playback can start.
+- [x] Managed roots use collection-level rating policy and parent overrides; unknown, unrated, ambiguous, failed, and unconfigured metadata never auto-allows.
+- [x] TV episodes are grouped by show/season, and new episodes inherit the collection's effective decision without per-episode provider calls.
+- [x] Explicit parent decisions survive collection rescans and disappearance/reappearance; old automatic approval booleans are not trusted during migration.
+- [x] Scan/probe progress and separate metadata progress are exposed through API, UI, and dashboard SSE events.
+- [x] The About UI contains the TMDB-approved logo and required attribution notice.
 - [x] Deterministic Kids 7 channel list/now/guide endpoints are implemented and clock-tested.
 - [x] Batch upserts persist computed compatibility.
 - [x] Background scan is retained/awaited and cannot start a watcher after shutdown begins.
-- [ ] Actual Docker image build and container boot smoke test (blocked locally if the Docker daemon is unavailable).
+- [x] Docker image builds and a headless container boot smoke test serves `/tv/`,
+  three configured channels, and the packaged-app CORS preflight.
+- [x] Official LG CLI produces the installable webOS IPK; manifest/assets and
+  the 1920×1080 channel, playback, guide, focus, and Back flows are smoke-tested.
 - [ ] Health/readiness exposes persisted per-root status; runtime scanning already distinguishes incomplete/unavailable traversal from successful empty traversal.
 - [ ] `Bun.serve` handle is retained and HTTP/SSE connections are drained on shutdown.

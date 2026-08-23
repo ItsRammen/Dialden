@@ -13,6 +13,189 @@ export type Compatibility = 'compatible' | 'marginal' | 'incompatible'
 
 export type LibraryKind = 'tv' | 'movie' | 'other'
 
+export type PolicyDecision = 'allow' | 'review' | 'block'
+
+export type OverrideDecision = 'allow' | 'block' | null
+
+export type MetadataMatchStatus =
+  | 'pending'
+  | 'matched'
+  | 'ambiguous'
+  | 'unmatched'
+  | 'manual'
+  | 'error'
+  | 'not_configured'
+
+export type MetadataRatingStatus = 'resolved' | 'missing' | 'ambiguous'
+
+export interface MetadataCandidateRecord {
+  readonly provider: string
+  readonly externalId: string
+  readonly mediaType: 'movie' | 'tv'
+  readonly title: string
+  readonly originalTitle?: string
+  readonly year?: number
+  readonly posterPath?: string
+  readonly confidence: number
+}
+
+export interface MediaCollection {
+  readonly id: number
+  readonly rootId: string
+  readonly libraryKind: LibraryKind
+  readonly identityKey: string
+  readonly sourceTitle: string
+  readonly parsedTitle: string
+  readonly year: number | null
+  readonly present: boolean
+  readonly metadataProvider: string | null
+  readonly metadataExternalId: string | null
+  readonly metadataStatus: MetadataMatchStatus
+  readonly metadataLocked: boolean
+  readonly metadataTitle: string | null
+  readonly metadataOriginalTitle: string | null
+  readonly metadataYear: number | null
+  readonly overview: string | null
+  readonly posterPath: string | null
+  readonly backdropPath: string | null
+  readonly genres: readonly string[]
+  readonly certification: string | null
+  readonly certificationRegion: string | null
+  readonly ratingStatus: MetadataRatingStatus
+  readonly matchConfidence: number | null
+  readonly metadataCandidates: readonly MetadataCandidateRecord[]
+  readonly metadataError: string | null
+  readonly policyDecision: PolicyDecision
+  readonly policyReason: string
+  readonly policyProfileId: string
+  readonly parentOverride: OverrideDecision
+  readonly effectiveDecision: PolicyDecision
+  readonly decisionSource: 'parent' | 'policy' | 'fail_closed'
+  readonly fileCount: number
+  readonly seasonCount: number
+  readonly episodeCount: number
+  readonly readyFileCount: number
+  readonly failedFileCount: number
+  readonly legacyOverrideCount: number
+  readonly scheduleEligibleCount: number
+  readonly rootAvailable: boolean
+  readonly createdAt: string
+  readonly updatedAt: string
+}
+
+export interface CollectionUpsertInput {
+  readonly rootId: string
+  readonly libraryKind: LibraryKind
+  readonly identityKey: string
+  readonly sourceTitle: string
+  readonly parsedTitle: string
+  readonly year: number | null
+}
+
+export interface CollectionListOptions {
+  readonly kind?: LibraryKind
+  readonly effectiveDecision?: PolicyDecision
+  readonly metadataStatus?: MetadataMatchStatus
+  /** Only collections whose metadata match or certification needs review. */
+  readonly metadataReview?: boolean
+  readonly search?: string
+  readonly limit?: number
+  readonly offset?: number
+  readonly presentOnly?: boolean
+}
+
+export interface CollectionMetadataUpdate {
+  readonly provider: string
+  readonly externalId: string | null
+  readonly status: MetadataMatchStatus
+  readonly locked?: boolean
+  readonly title?: string | null
+  readonly originalTitle?: string | null
+  readonly year?: number | null
+  readonly overview?: string | null
+  readonly posterPath?: string | null
+  readonly backdropPath?: string | null
+  readonly genres?: readonly string[]
+  readonly certification?: string | null
+  readonly certificationRegion?: string | null
+  readonly ratingStatus?: MetadataRatingStatus
+  readonly matchConfidence?: number | null
+  readonly candidates?: readonly MetadataCandidateRecord[]
+  readonly error?: string | null
+  readonly matchedAt?: string | null
+}
+
+export interface LibrarySummary {
+  readonly tvCollections: number
+  readonly tvEpisodes: number
+  readonly movieCollections: number
+  readonly interludeFiles: number
+  readonly totalFiles: number
+  readonly approvedCollections: number
+  readonly reviewCollections: number
+  readonly blockedCollections: number
+  readonly unmatchedCollections: number
+  readonly metadataPendingCollections: number
+  readonly metadataMatchedCollections: number
+  readonly metadataReviewCollections: number
+  readonly probeFailedFiles: number
+}
+
+export type LibraryScanStatus =
+  | 'idle'
+  | 'discovering'
+  | 'scanning'
+  | 'completed'
+  | 'failed'
+
+export interface LibraryScanState {
+  readonly status: LibraryScanStatus
+  readonly currentRoot: string | null
+  readonly currentFile: string | null
+  readonly discoveredFiles: number
+  readonly processedFiles: number
+  readonly indexedFiles: number
+  readonly failedFiles: number
+  readonly startedAt: string | null
+  readonly completedAt: string | null
+  readonly error: string | null
+}
+
+export type LibraryScanEventType =
+  | 'library.scan.started'
+  | 'library.scan.progress'
+  | 'library.scan.root.completed'
+  | 'library.scan.completed'
+  | 'library.scan.failed'
+
+export interface LibraryScanEvent {
+  readonly type: LibraryScanEventType
+  readonly state: LibraryScanState
+}
+
+export type MetadataProviderHealth =
+  | 'not_configured'
+  | 'unverified'
+  | 'connected'
+  | 'degraded'
+
+export interface MetadataJobState {
+  readonly status: 'idle' | 'running' | 'completed' | 'failed' | 'not_configured'
+  /** Connection health observed by this server process, never inferred from a key alone. */
+  readonly providerHealth: MetadataProviderHealth
+  /** Redacted, user-safe health detail. Provider credentials must never appear here. */
+  readonly providerMessage: string | null
+  readonly total: number
+  readonly processed: number
+  readonly matched: number
+  readonly needsReview: number
+  readonly failed: number
+  readonly currentCollectionId: number | null
+  readonly startedAt: string | null
+  readonly completedAt: string | null
+  readonly error: string | null
+}
+
 /**
  * One independently mounted media library. The stable root ID and relative
  * path form a container-path-independent media locator.
@@ -22,8 +205,8 @@ export interface MediaRootConfig {
   readonly directory: string
   readonly kind: LibraryKind
   /**
-   * Exact, case-insensitive top-level collection names approved by policy.
-   * Undefined means this is a legacy/unrestricted root.
+   * Exact, case-insensitive top-level collection names approved by the legacy
+   * fallback policy. Missing/undefined policy never implies approval.
    */
   readonly approvedCollections?: readonly string[]
 }
@@ -56,6 +239,10 @@ export interface MediaItem {
   /** False until this configured root completes a successful current scan. */
   readonly rootAvailable?: boolean
   readonly playbackEnabled?: boolean
+  readonly collectionId?: number | null
+  readonly seasonNumber?: number | null
+  readonly episodeNumber?: number | null
+  readonly episodeTitle?: string | null
 }
 
 export interface PlaybackStatus {

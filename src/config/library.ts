@@ -41,6 +41,11 @@ export interface LibraryPolicyDocument {
     readonly id: string
     readonly name: string
     readonly age?: number
+    readonly rules?: {
+      readonly allow: readonly string[]
+      readonly review: readonly string[]
+      readonly block: readonly string[]
+    }
   }
   readonly roots: Readonly<Record<string, LibraryPolicyRoot>>
   readonly channels?: readonly LibraryChannelPolicy[]
@@ -135,7 +140,12 @@ function readPolicy(path: string): LibraryPolicyDocument {
     if (!rawProfile || typeof rawProfile !== 'object') {
       throw new Error('Library policy profile must be an object')
     }
-    const value = rawProfile as { id?: unknown; name?: unknown; age?: unknown }
+    const value = rawProfile as {
+      id?: unknown
+      name?: unknown
+      age?: unknown
+      rules?: unknown
+    }
     if (typeof value.id !== 'string' || typeof value.name !== 'string') {
       throw new Error('Library policy profile requires string id and name')
     }
@@ -145,10 +155,35 @@ function readPolicy(path: string): LibraryPolicyDocument {
     ) {
       throw new Error('Library policy profile age must be a non-negative integer')
     }
+    let rules:
+      | { allow: string[]; review: string[]; block: string[] }
+      | undefined
+    if (value.rules !== undefined) {
+      if (!value.rules || typeof value.rules !== 'object') {
+        throw new Error('Library policy profile rules must be an object')
+      }
+      const rawRules = value.rules as Record<string, unknown>
+      const readRatings = (key: 'allow' | 'review' | 'block') => {
+        const bucket = rawRules[key]
+        if (
+          !Array.isArray(bucket) ||
+          bucket.some((rating) => typeof rating !== 'string' || !rating.trim())
+        ) {
+          throw new Error(`Library policy profile ${key} rules are invalid`)
+        }
+        return bucket.map((rating) => (rating as string).trim())
+      }
+      rules = {
+        allow: readRatings('allow'),
+        review: readRatings('review'),
+        block: readRatings('block'),
+      }
+    }
     profile = {
       id: value.id,
       name: value.name,
       age: value.age as number | undefined,
+      ...(rules ? { rules } : {}),
     }
   }
 
@@ -260,7 +295,8 @@ function parseScheduleTime(value: string): number {
 /**
  * Resolve independently mounted TV/movie roots. When those managed roots are
  * configured they fail closed: a missing collection in the policy approves
- * nothing. The single-root legacy configuration remains unrestricted.
+ * nothing. Legacy single-root mode is also review-only until an explicit
+ * parent or policy decision exists.
  */
 export function loadLibraryConfig(
   fallbackMediaDirectory: string,

@@ -99,7 +99,7 @@ export class ConfigService {
     }>
   ): Promise<void> {
     const eligibleMedia = allMedia.filter(
-      (item) => item.playbackEnabled !== false
+      (item) => item.playbackEnabled === true
     )
     const currentConfig = await this.get()
     const mediaIds = new Set(eligibleMedia.map((m) => m.id))

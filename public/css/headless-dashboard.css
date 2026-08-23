@@ -1,0 +1,366 @@
+.headless-dashboard {
+  --headless-panel: rgba(15, 52, 96, 0.78);
+  --headless-border: rgba(255, 255, 255, 0.16);
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.headless-dashboard a:focus-visible,
+.headless-dashboard button:focus-visible,
+.headless-dashboard summary:focus-visible {
+  outline: 3px solid var(--toast-yellow);
+  outline-offset: 3px;
+}
+
+.headless-dashboard-header,
+.headless-section-heading,
+.headless-channel-card > header,
+.headless-ops-card > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.headless-dashboard-header {
+  padding: 1.25rem;
+  background: var(--headless-panel);
+  border: var(--border-cartoon);
+  border-radius: var(--border-radius);
+  box-shadow: var(--shadow-cartoon);
+}
+
+.headless-dashboard-header h1,
+.headless-section-heading h2,
+.headless-ops-card h2,
+.headless-channel-card h3 {
+  line-height: 1.2;
+}
+
+.headless-eyebrow {
+  color: var(--toast-teal);
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.headless-server-state {
+  min-width: 13rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+.headless-server-state strong {
+  color: var(--text-primary);
+  font-size: 0.95rem;
+}
+
+.headless-server-online strong,
+.headless-status-on_air,
+.headless-metadata-connected {
+  color: var(--toast-green);
+}
+
+.headless-server-degraded strong,
+.headless-status-scheduled,
+.headless-metadata-degraded,
+.headless-metadata-not_configured {
+  color: var(--toast-yellow);
+}
+
+.headless-server-offline strong,
+.headless-status-unavailable,
+.headless-metadata-offline {
+  color: #ff8b9f;
+}
+
+.headless-warnings {
+  padding: 1rem 1.25rem;
+  background: rgba(255, 217, 61, 0.08);
+  border: 2px solid rgba(255, 217, 61, 0.45);
+  border-radius: var(--border-radius);
+}
+
+.headless-warnings h2 {
+  margin-bottom: 0.75rem;
+  font-size: 1rem;
+}
+
+.headless-warnings ul {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  list-style: none;
+}
+
+.headless-warning {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.headless-warning a,
+.headless-card-link {
+  color: var(--toast-yellow);
+  font-weight: 800;
+}
+
+.headless-warning-critical {
+  color: #ffb4c0;
+}
+
+.headless-channel-grid,
+.headless-operations-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+  gap: 1rem;
+}
+
+.headless-channel-card,
+.headless-ops-card {
+  padding: 1rem;
+  background: var(--headless-panel);
+  border: 2px solid var(--headless-border);
+  border-radius: var(--border-radius);
+}
+
+.headless-channel-card header p {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+.headless-status,
+.headless-state-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.headless-programs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 1rem 0;
+}
+
+.headless-program {
+  display: grid;
+  grid-template-columns: 3.5rem minmax(0, 1fr);
+  gap: 0.75rem;
+}
+
+.headless-program dt {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.headless-program dd,
+.headless-provider {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.headless-program dd span,
+.headless-program time,
+.headless-provider span,
+.headless-muted,
+.headless-message,
+.headless-current span {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+.headless-program-empty dd,
+.headless-empty {
+  color: var(--text-secondary);
+}
+
+.headless-library-counts,
+.headless-stat-list {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.6rem;
+  margin: 1rem 0;
+}
+
+.headless-library-counts > div,
+.headless-stat-list > div {
+  display: flex;
+  flex-direction: column;
+  padding: 0.65rem;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+}
+
+.headless-library-counts dt,
+.headless-stat-list dt {
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+}
+
+.headless-library-counts dd,
+.headless-stat-list dd {
+  font-size: 1.25rem;
+  font-weight: 800;
+}
+
+.headless-library-counts span {
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+}
+
+.headless-progress {
+  margin-top: 1rem;
+}
+
+.headless-progress progress {
+  width: 100%;
+  min-height: 0.8rem;
+  accent-color: var(--toast-teal);
+}
+
+.headless-progress p {
+  margin-top: 0.35rem;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+.headless-current {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0.75rem 0;
+}
+
+.headless-current code {
+  overflow-wrap: anywhere;
+}
+
+.headless-error {
+  margin: 0.75rem 0;
+  color: #ffb4c0;
+}
+
+@media (max-width: 640px) {
+  .headless-dashboard-header,
+  .headless-section-heading,
+  .headless-channel-card > header,
+  .headless-ops-card > header {
+    flex-direction: column;
+  }
+
+  .headless-server-state {
+    min-width: 0;
+    align-items: flex-start;
+  }
+
+  .headless-warning {
+    grid-template-columns: auto 1fr;
+  }
+
+  .headless-warning a {
+    grid-column: 2;
+  }
+
+  .headless-library-counts,
+  .headless-stat-list {
+    grid-template-columns: 1fr;
+  }
+}
+
+.headless-channel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.headless-channel-actions form {
+  margin: 0;
+}
+
+.headless-channel-actions button {
+  padding: 0.55rem 0.75rem;
+  border: 1px solid currentColor;
+  border-radius: 8px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.headless-viewers {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.headless-clients {
+  padding: 1rem;
+  background: var(--headless-panel, rgba(255, 255, 255, 0.04));
+  border: 2px solid var(--headless-border, rgba(255, 255, 255, 0.12));
+  border-radius: var(--border-radius);
+}
+
+.headless-clients ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 0.7rem;
+  margin-top: 0.8rem;
+  list-style: none;
+}
+
+.headless-clients li,
+.headless-clients li > div {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.headless-clients li {
+  justify-content: space-between;
+  padding: 0.8rem;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+}
+
+.headless-clients li > div {
+  flex-direction: column;
+}
+
+.headless-clients small,
+.headless-clients li span:not(.headless-status) {
+  color: var(--text-secondary);
+}
+
+.headless-client-connected {
+  color: #62d98b;
+}
+
+.headless-client-offline {
+  color: var(--text-secondary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .headless-dashboard *,
+  .headless-dashboard *::before,
+  .headless-dashboard *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

@@ -6,6 +6,8 @@
  */
 
 import { logger } from '../utils/logger'
+import type { LibraryScanEvent, MetadataJobState } from '../types'
+import type { MetadataJobEventType } from './metadata/MetadataEnrichmentService'
 
 export interface QueueItem {
   id: number
@@ -28,6 +30,8 @@ export interface SyncEvent {
   sessionStartedAt: string | null
   sessionLimitMs: number
   queue: QueueItem[]
+  libraryScan?: LibraryScanEvent['state']
+  metadata?: MetadataJobState
 }
 
 export interface TrackStartEvent {
@@ -61,6 +65,11 @@ export interface QueueUpdateEvent {
   queue: QueueItem[]
 }
 
+export interface MetadataDashboardEvent {
+  readonly type: MetadataJobEventType
+  readonly state: MetadataJobState
+}
+
 export type DashboardEvent =
   | SyncEvent
   | TrackStartEvent
@@ -69,6 +78,8 @@ export type DashboardEvent =
   | SessionStartEvent
   | SessionEndEvent
   | QueueUpdateEvent
+  | LibraryScanEvent
+  | MetadataDashboardEvent
 
 type SSEWriter = {
   write: (data: string) => void

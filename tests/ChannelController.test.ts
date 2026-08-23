@@ -16,6 +16,7 @@ describe('ChannelController', () => {
           name: 'Kids Club',
           enabled: true,
           timezone: 'Asia/Taipei',
+          onAir: true,
         },
       ],
     })

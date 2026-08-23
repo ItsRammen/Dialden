@@ -20,6 +20,10 @@ services:
       TOASTTV_LIBRARY_POLICY: /app/config/kids-7.library.json
       TOASTTV_MEDIA_READ_ONLY: "true"
       TOASTTV_UPDATES_ENABLED: "false"
+      TMDB_API_KEY: "${TMDB_API_KEY:-}"
+      TMDB_LANGUAGE: "${TMDB_LANGUAGE:-en-US}"
+      RATING_REGION: "${RATING_REGION:-US}"
+      RATING_FALLBACK_REGIONS: "${RATING_FALLBACK_REGIONS:-}"
       TZ: "${TZ:-UTC}"
     ports:
       - "${TOASTTV_BIND_ADDRESS:-127.0.0.1}:${TOASTTV_PORT:-1993}:1993"

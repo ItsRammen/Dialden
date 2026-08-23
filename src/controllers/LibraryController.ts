@@ -52,7 +52,7 @@ export function createLibraryController(deps: LibraryControllerDeps) {
 
   // --- Pages ---
 
-  controller.get('/library', async (c) => {
+  controller.get('/library/files', async (c) => {
     const allMedia = await media.getAll()
     const appConfig = await config.get()
     const { view, filter, search } = getLibraryParams(c)
@@ -412,9 +412,8 @@ export function createLibraryController(deps: LibraryControllerDeps) {
     const override = mode === 'policy' ? null : mode === 'allow'
     await media.updatePlaybackOverride(id, override)
     if (override === true) {
-      // Unapproved catalog entries intentionally skip ffprobe. A newly
-      // approved item needs duration/codec metadata before schedule work can
-      // safely consume it.
+      // Re-run technical indexing so a file override still cannot bypass an
+      // unknown duration or failed probe.
       await media.rescan()
     }
     await playlist.refreshCache()
@@ -422,12 +421,12 @@ export function createLibraryController(deps: LibraryControllerDeps) {
     const item = await media.getById(id)
     if (!item) return c.html(html`<div class="toast warning">Media not found</div>`, 404)
 
-    const effective = item.playbackEnabled !== false
+    const effective = item.playbackEnabled === true
     const source = item.playbackOverride === null ? 'library policy' : 'parent override'
     const pendingMetadata = override === true && !effective
     return c.html(`
       <span id="eligibility-${id}" class="status-pill ${effective ? 'active' : 'expired'}" hx-swap-oob="true">
-        ${effective ? 'Kids 7 approved' : 'Not scheduled'}
+        ${effective ? 'Playable' : 'Not schedulable'}
       </span>
       <div class="toast ${pendingMetadata ? 'warning' : 'success'}">${
         pendingMetadata

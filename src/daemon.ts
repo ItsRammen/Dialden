@@ -27,9 +27,28 @@ import { TVDetectionService } from './services/TVDetectionService'
 import { HardwareDetectionService } from './services/HardwareDetectionService'
 import { UpdateService } from './services/UpdateService'
 import { UpdateClient } from './clients/UpdateClient'
-import type { MediaItem, ToastTVConfig, IMediaPlayer } from './types'
+import type {
+  MediaItem,
+  MediaRootConfig,
+  ToastTVConfig,
+  IMediaPlayer,
+} from './types'
 import { loadLibraryConfig } from './config/library'
-import type { LibraryPolicyDocument } from './config/library'
+import type {
+  LibraryPolicyDocument,
+  ResolvedLibraryConfig,
+} from './config/library'
+import {
+  loadMetadataConfig,
+  toPublicMetadataConfig,
+  type MetadataRuntimeConfig,
+  type PublicMetadataConfig,
+} from './config/metadata'
+import { TmdbMetadataProvider } from './services/metadata/TmdbMetadataProvider'
+import { MetadataEnrichmentService } from './services/metadata/MetadataEnrichmentService'
+import {
+  type RatingPolicyProfile,
+} from './policy/PolicyEngine'
 
 export class ToastTVDaemon {
   private running = false
@@ -49,7 +68,10 @@ export class ToastTVDaemon {
   private readonly mediaReadOnly: boolean
   private managedLibrary = false
   private libraryPolicy: LibraryPolicyDocument | null = null
+  private mediaRoots: readonly MediaRootConfig[] = []
   private scanTask: Promise<void> | null = null
+  private metadataService: MetadataEnrichmentService | null = null
+  private metadataConfig: MetadataRuntimeConfig | null = null
   private stopping = false
 
   constructor(
@@ -100,6 +122,20 @@ export class ToastTVDaemon {
 
   getLibraryPolicy(): LibraryPolicyDocument | null {
     return this.libraryPolicy
+  }
+
+  getMediaRoots(): readonly MediaRootConfig[] {
+    return this.mediaRoots
+  }
+
+  getMetadataService(): MetadataEnrichmentService {
+    if (!this.metadataService) throw new Error('Daemon not started')
+    return this.metadataService
+  }
+
+  getPublicMetadataConfig(): PublicMetadataConfig {
+    if (!this.metadataConfig) throw new Error('Daemon not initialized')
+    return toPublicMetadataConfig(this.metadataConfig)
   }
 
   getIndexer(): MediaIndexer {
@@ -165,8 +201,24 @@ export class ToastTVDaemon {
     // Managed TV/movie libraries are default-deny. Rows from a legacy
     // single-root database remain visible but cannot enter playback until the
     // root-aware scan applies the active policy.
-    const libraryConfig = loadLibraryConfig(bootstrap.paths.media)
+    let libraryConfig: ResolvedLibraryConfig
+    try {
+      libraryConfig = loadLibraryConfig(bootstrap.paths.media)
+    } catch (error) {
+      // A bad or unreadable policy can never be allowed to broaden playback.
+      // Keep the configured roots, discard the policy, and start review-only.
+      console.error(
+        `Library policy could not be loaded; continuing fail-closed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      )
+      libraryConfig = loadLibraryConfig(bootstrap.paths.media, {
+        ...process.env,
+        TOASTTV_LIBRARY_POLICY: undefined,
+      })
+    }
     this.libraryPolicy = libraryConfig.policy
+    this.mediaRoots = libraryConfig.roots
     this.managedLibrary = libraryConfig.roots.some(
       (root) => root.approvedCollections !== undefined
     )
@@ -226,6 +278,43 @@ export class ToastTVDaemon {
       this.hardwareService ?? undefined
     )
 
+    this.metadataConfig = loadMetadataConfig()
+    const metadataProvider = new TmdbMetadataProvider({
+      apiKey: this.metadataConfig.tmdbApiKey,
+      requestTimeoutMs: this.metadataConfig.requestTimeoutMs,
+    })
+    const configuredProfile = this.libraryPolicy?.profile
+    const metadataProfile: RatingPolicyProfile | null = configuredProfile?.rules
+      ? {
+          id: configuredProfile.id,
+          name: configuredProfile.name,
+          ...(configuredProfile.age === undefined
+            ? {}
+            : { age: configuredProfile.age }),
+          rules: configuredProfile.rules,
+        }
+      : null
+    this.metadataService = new MetadataEnrichmentService(
+      this.repository,
+      metadataProvider,
+      this.metadataConfig,
+      metadataProfile
+    )
+    const invalidatedRatings =
+      await this.metadataService.synchronizeRatingRegions()
+    if (invalidatedRatings > 0) {
+      console.log(
+        `Queued ${invalidatedRatings} cached certifications after rating-region change`
+      )
+    }
+    const reEvaluatedCollections =
+      await this.metadataService.reapplyCachedPolicies()
+    if (reEvaluatedCollections > 0) {
+      console.log(
+        `Re-evaluated policy for ${reEvaluatedCollections} cached collections`
+      )
+    }
+
     this.engine = new PlaylistEngine(
       this.appConfig,
       this.repository,
@@ -239,6 +328,9 @@ export class ToastTVDaemon {
     this.indexer.onScanComplete(async () => {
       await this.engine?.refreshCache(true)
       await this.playbackService?.reconcilePrequeue()
+      // Online enrichment is deliberately detached from filesystem scan
+      // completion. The sequential worker consumes only cached pending rows.
+      void this.metadataService?.runPending()
     })
 
     console.log('Components initialized.')

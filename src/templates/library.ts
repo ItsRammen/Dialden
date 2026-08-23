@@ -53,7 +53,7 @@ export function renderLibraryContent(props: LibraryProps): string {
   } else if (filter === 'interludes') {
     filteredMedia = media.filter((m) => m.isInterlude)
   } else if (filter === 'approved') {
-    filteredMedia = media.filter((m) => m.playbackEnabled !== false)
+    filteredMedia = media.filter((m) => m.playbackEnabled === true)
   } else if (filter === 'blocked') {
     filteredMedia = media.filter((m) => m.playbackEnabled === false)
   }
@@ -383,8 +383,8 @@ function renderTypeSelect(item: MediaItem, displayType: MediaType): string {
 }
 
 function renderEligibilityBadge(item: MediaItem): string {
-  const effective = item.playbackEnabled !== false
-  return `<span id="eligibility-${item.id}" class="status-pill ${effective ? 'active' : 'expired'}">${effective ? 'Kids 7 approved' : 'Not scheduled'}</span>`
+  const effective = item.playbackEnabled === true
+  return `<span id="eligibility-${item.id}" class="status-pill ${effective ? 'active' : 'expired'}">${effective ? 'Playable' : 'Not scheduled'}</span>`
 }
 
 function renderEligibilitySelect(item: MediaItem): string {
@@ -402,7 +402,7 @@ function renderEligibilitySelect(item: MediaItem): string {
             hx-trigger="change"
             hx-target="#toast-container"
             hx-swap="innerHTML">
-      <option value="policy" ${mode === 'policy' ? 'selected' : ''}>Use Kids 7 policy</option>
+      <option value="policy" ${mode === 'policy' ? 'selected' : ''}>Use collection decision</option>
       <option value="allow" ${mode === 'allow' ? 'selected' : ''}>Parent approve</option>
       <option value="block" ${mode === 'block' ? 'selected' : ''}>Never schedule</option>
     </select>

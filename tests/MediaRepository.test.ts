@@ -7,6 +7,7 @@
 import { describe, expect, test, beforeEach, afterEach } from 'bun:test'
 import { MediaRepository } from '../src/repositories/MediaRepository'
 import type { MediaItemInput } from '../src/repositories/IMediaRepository'
+import { Database } from 'bun:sqlite'
 
 // Builder for MediaItemInput with extended metadata defaults
 const createInput = (override?: Partial<MediaItemInput>): MediaItemInput => ({
@@ -75,6 +76,61 @@ describe('MediaRepository', () => {
     const updated = await repo.getAll()
     expect(updated).toHaveLength(1)
     expect(updated[0]?.durationSeconds).toBe(120)
+  })
+
+  test('sanitizes malformed persisted parent overrides to review and rejects new corruption', async () => {
+    const [collection] = await repo.upsertCollections([
+      {
+        rootId: 'tv',
+        libraryKind: 'tv',
+        identityKey: 'show',
+        sourceTitle: 'Show',
+        parsedTitle: 'Show',
+        year: null,
+      },
+    ])
+    expect(collection).toBeDefined()
+    await repo.updateCollectionPolicy(
+      collection?.id ?? 0,
+      'allow',
+      'rating_allowed'
+    )
+
+    const internals = repo as unknown as {
+      db: Database
+      sanitizeAndGuardCollectionOverrides(): void
+    }
+    internals.db.exec(`
+      DROP TRIGGER validate_collection_parent_override_insert;
+      DROP TRIGGER validate_collection_parent_override_update;
+      PRAGMA ignore_check_constraints = ON;
+      UPDATE media_collections SET parent_override = 'unexpected';
+    `)
+
+    // Even before startup sanitation runs, the shared decision expression
+    // treats an unexpected override as review instead of falling through.
+    expect(await repo.getCollectionById(collection?.id ?? 0)).toMatchObject({
+      effectiveDecision: 'review',
+      decisionSource: 'fail_closed',
+    })
+    expect(await repo.getCollections({ effectiveDecision: 'allow' })).toEqual(
+      []
+    )
+
+    internals.sanitizeAndGuardCollectionOverrides()
+    expect(await repo.getCollectionById(collection?.id ?? 0)).toMatchObject({
+      parentOverride: null,
+      policyDecision: 'review',
+      policyReason: 'invalid_parent_override',
+      effectiveDecision: 'review',
+    })
+    expect(() =>
+      internals.db
+        .prepare(
+          `UPDATE media_collections SET parent_override = 'unexpected' WHERE id = ?`
+        )
+        .run(collection?.id ?? 0)
+    ).toThrow(/invalid collection parent override/i)
   })
 
   test('upsertBatch persists compatibility from the indexer', async () => {
@@ -225,7 +281,7 @@ describe('MediaRepository', () => {
     ])
   })
 
-  test('synchronizes a narrowed policy before an unavailable root can play', async () => {
+  test('does not promote the legacy collection allowlist into approval', async () => {
     await repo.upsertBatch([
       createInput({
         path: '/media/tv/Bluey/episode.mkv',
@@ -261,7 +317,7 @@ describe('MediaRepository', () => {
     await repo.setRootAvailable('tv', true)
 
     const playable = await repo.getAllVideos()
-    expect(playable.map((item) => item.collectionTitle)).toEqual(['Bluey'])
+    expect(playable).toEqual([])
     const rows = await repo.getAll()
     expect(rows.find((item) => item.collectionTitle === 'Old Show')?.policyEnabled).toBe(
       false
@@ -291,6 +347,7 @@ describe('MediaRepository', () => {
         collectionTitle: 'bump.mp4',
         isInterlude: true,
         mediaType: 'interlude',
+        policyEnabled: true,
       }),
     ])
 
@@ -331,6 +388,7 @@ describe('MediaRepository', () => {
         durationSeconds: 10,
         isInterlude: true,
         mediaType: 'interlude',
+        policyEnabled: true,
       })
     )
 
@@ -343,6 +401,7 @@ describe('MediaRepository', () => {
         mediaType: 'interlude',
         dateStart: '12-01',
         dateEnd: '02-28',
+        policyEnabled: true,
       })
     )
 

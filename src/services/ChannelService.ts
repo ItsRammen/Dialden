@@ -16,6 +16,7 @@ export interface ChannelSummary {
   readonly name: string
   readonly enabled: boolean
   readonly timezone: string
+  readonly onAir: boolean
 }
 
 export interface ScheduledProgram {
@@ -27,9 +28,17 @@ export interface ScheduledProgram {
   readonly scheduledStart: string
   readonly scheduledEnd: string
   readonly durationSeconds: number
+  readonly durationMs: number
+}
+
+export interface DirectPlaybackDescriptor {
+  readonly mode: 'direct'
+  readonly url: string
+  readonly sourceOffsetAtPlaybackZeroMs: 0
 }
 
 export interface CurrentProgram extends ScheduledProgram {
+  readonly playback: DirectPlaybackDescriptor
   readonly offsetMs: number
   readonly offsetSeconds: number
 }
@@ -68,6 +77,7 @@ const DAY_NAMES: ScheduleDay[] = [
 export class ChannelService {
   private readonly channels: readonly LibraryChannelPolicy[]
   private readonly groupsByCollection = new Map<string, ReadonlySet<string>>()
+  private readonly manuallyOffAir = new Set<string>()
 
   constructor(
     private readonly repository: IMediaRepository,
@@ -90,24 +100,54 @@ export class ChannelService {
     return {
       serverTime: now.toISOString(),
       serverTimeMs: now.getTime(),
-      channels: this.channels.map(({ id, name, enabled, timezone }) => ({
-        id,
-        name,
-        enabled,
-        timezone,
-      })),
+      channels: this.channels
+        .filter((channel) => channel.enabled)
+        .map(({ id, name, enabled, timezone }) => ({
+          id,
+          name,
+          enabled,
+          timezone,
+          onAir: !this.manuallyOffAir.has(id),
+        })),
     }
+  }
+
+  setOnAir(channelId: string, onAir: boolean): boolean {
+    if (!this.getChannel(channelId)) return false
+    if (onAir) this.manuallyOffAir.delete(channelId)
+    else this.manuallyOffAir.add(channelId)
+    return true
+  }
+
+  isOnAir(channelId: string): boolean {
+    return this.getChannel(channelId) !== null && !this.manuallyOffAir.has(channelId)
   }
 
   async getNow(channelId: string): Promise<ChannelNowResult | null> {
     const channel = this.getChannel(channelId)
     if (!channel) return null
 
-    const now = this.clock.now()
+    if (this.manuallyOffAir.has(channelId)) {
+      const now = this.clock.now()
+      return {
+        channelId,
+        serverTime: now.toISOString(),
+        serverTimeMs: now.getTime(),
+        timezone: channel.timezone,
+        timelineRevision: this.timelineRevision(channel, []),
+        program: null,
+        next: null,
+      }
+    }
+
     const media = await this.repository.getAll()
+    const around = this.clock.now()
     // A sparse channel (for example Friday movie night) may need several days
     // of look-ahead to produce a useful `next` value.
-    const programs = this.buildWindow(channel, media, now, 7)
+    const programs = this.buildWindow(channel, media, around, 7)
+    // Sample the authoritative response time after schedule generation so the
+    // client does not inherit time spent reading/building the timeline.
+    const now = this.clock.now()
     const nowMs = now.getTime()
     const current = programs.find(
       (program) =>
@@ -127,6 +167,7 @@ export class ChannelService {
       program: current
         ? {
             ...current,
+            playback: this.directPlayback(current.mediaId),
             offsetMs: Math.max(
               0,
               nowMs - Date.parse(current.scheduledStart)
@@ -158,23 +199,38 @@ export class ChannelService {
     const channel = this.getChannel(channelId)
     if (!channel) return null
 
-    const now = this.clock.now()
+    if (this.manuallyOffAir.has(channelId)) {
+      const now = this.clock.now()
+      return {
+        channelId,
+        serverTime: now.toISOString(),
+        serverTimeMs: now.getTime(),
+        timezone: channel.timezone,
+        timelineRevision: this.timelineRevision(channel, []),
+        programs: [],
+      }
+    }
+
     const boundedHours = Math.min(24, Math.max(1, Math.floor(hours)))
-    const horizonMs = now.getTime() + boundedHours * 60 * 60 * 1000
     const media = await this.repository.getAll()
-    const programs = this.buildWindow(channel, media, now, 1).filter(
+    const around = this.clock.now()
+    const programs = this.buildWindow(channel, media, around, 1)
+    const now = this.clock.now()
+    const nowMs = now.getTime()
+    const horizonMs = nowMs + boundedHours * 60 * 60 * 1000
+    const visiblePrograms = programs.filter(
       (program) =>
-        Date.parse(program.scheduledEnd) > now.getTime() &&
+        Date.parse(program.scheduledEnd) > nowMs &&
         Date.parse(program.scheduledStart) < horizonMs
     )
 
     return {
       channelId,
       serverTime: now.toISOString(),
-      serverTimeMs: now.getTime(),
+      serverTimeMs: nowMs,
       timezone: channel.timezone,
       timelineRevision: this.timelineRevision(channel, media),
-      programs,
+      programs: visiblePrograms,
     }
   }
 
@@ -227,7 +283,8 @@ export class ChannelService {
       const allowedGroups = new Set(slot.groups)
       const eligible = media.filter((item) => {
         if (
-          item.playbackEnabled === false ||
+          item.rootAvailable !== true ||
+          item.playbackEnabled !== true ||
           item.mediaType !== 'video' ||
           item.isInterlude ||
           item.durationSeconds <= 0
@@ -275,6 +332,7 @@ export class ChannelService {
           scheduledStart: scheduledStart.toISOString(),
           scheduledEnd: scheduledEnd.toISOString(),
           durationSeconds: selected.durationSeconds,
+          durationMs: selected.durationSeconds * 1000,
         })
         cursorMs = scheduledEnd.getTime()
         sequence++
@@ -289,11 +347,9 @@ export class ChannelService {
       this.collectionKey(item.rootId ?? 'legacy', item.collectionTitle ?? '')
     )
     if (configured) return configured
-    if (item.playbackOverride === true) {
-      return new Set([
-        item.libraryKind === 'movie' ? 'family_movie' : 'adventure',
-      ])
-    }
+    // Approval and programming-group membership are independent. A parent
+    // override may make a collection eligible, but it must not silently assign
+    // that collection to an adventure or family-movie schedule.
     return new Set()
   }
 
@@ -305,12 +361,22 @@ export class ChannelService {
       : filename
   }
 
+  private directPlayback(mediaId: number): DirectPlaybackDescriptor {
+    return {
+      mode: 'direct',
+      url: `/api/v1/media/${mediaId}/stream`,
+      sourceOffsetAtPlaybackZeroMs: 0,
+    }
+  }
+
   private timelineRevision(
     channel: LibraryChannelPolicy,
     media: MediaItem[]
   ): string {
     const catalog = media
-      .filter((item) => item.playbackEnabled !== false)
+      .filter(
+        (item) => item.rootAvailable === true && item.playbackEnabled === true
+      )
       .map((item) => [
         item.rootId,
         item.relativePath,

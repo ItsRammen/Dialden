@@ -171,7 +171,7 @@ describe('MediaIndexer', () => {
     expect(repo.removeNotInRootPaths).toHaveBeenCalledWith('movies', [])
   })
 
-  test('managed roots index all files but probe only approved collections', async () => {
+  test('managed roots probe all files and use effective collection decisions', async () => {
     const multiRootConfig: MediaConfig = {
       ...mediaConfig,
       roots: [
@@ -189,6 +189,17 @@ describe('MediaIndexer', () => {
         '/media/tv/South Park/Season 01/South Park - S01E01.mkv',
       ])
       .mockReturnValueOnce([])
+    repo.upsertCollections.mockImplementation(async (collections) =>
+      collections.map(
+        (collection, index) =>
+          ({
+            ...collection,
+            id: index + 1,
+            effectiveDecision:
+              collection.sourceTitle === 'Bluey (2018)' ? 'allow' : 'block',
+          }) as any
+      )
+    )
 
     indexer = new MediaIndexer(
       multiRootConfig,
@@ -199,7 +210,7 @@ describe('MediaIndexer', () => {
     )
     await indexer.scanAll()
 
-    expect(probe.getMetadata).toHaveBeenCalledTimes(1)
+    expect(probe.getMetadata).toHaveBeenCalledTimes(2)
     expect(probe.getMetadata).toHaveBeenCalledWith(
       '/media/tv/Bluey (2018)/Season 01/Bluey - S01E01.mkv'
     )
@@ -212,11 +223,13 @@ describe('MediaIndexer', () => {
           libraryKind: 'tv',
           collectionTitle: 'Bluey (2018)',
           policyEnabled: true,
+          collectionId: 1,
         }),
         expect.objectContaining({
           collectionTitle: 'South Park',
           policyEnabled: false,
-          durationSeconds: 0,
+          durationSeconds: 60,
+          collectionId: 2,
         }),
       ])
     )
@@ -292,7 +305,7 @@ describe('MediaIndexer', () => {
     )
   })
 
-  test('preserves stale metadata and mtime for an unchanged unapproved row', async () => {
+  test('re-probes a changed unapproved row without making it playable', async () => {
     const existing = {
       id: 18,
       path: '/media/tv/Blocked Show/episode.mkv',
@@ -347,13 +360,16 @@ describe('MediaIndexer', () => {
 
     await indexer.scanAll()
 
-    expect(probe.getMetadata).not.toHaveBeenCalled()
+    expect(probe.getMetadata).toHaveBeenCalledWith(
+      '/media/tv/Blocked Show/episode.mkv'
+    )
     expect(repo.upsertBatch.mock.calls[0]?.[0]?.[0]).toEqual(
       expect.objectContaining({
-        durationSeconds: 900,
-        codec: 'hevc',
-        compatibility: 'incompatible',
-        mtime: 123,
+        durationSeconds: 60,
+        codec: 'h264',
+        compatibility: 'compatible',
+        mtime: 999,
+        policyEnabled: false,
         playbackOverride: null,
       })
     )

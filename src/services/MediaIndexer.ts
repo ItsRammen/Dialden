@@ -18,10 +18,17 @@ import type {
   MediaMetadata,
   MediaType,
   Compatibility,
+  LibraryScanEvent,
+  LibraryScanEventType,
+  LibraryScanState,
   MediaRootConfig,
 } from '../types'
 import type { IHardwareDetectionService } from './HardwareDetectionService'
 import type { HardwareProfile } from '../config/hardwareProfiles'
+import {
+  deriveCollectionIdentity,
+  type CollectionIdentity,
+} from '../domain/CollectionIdentity'
 
 export class MediaIndexer {
   private scanPromise: Promise<number> | null = null
@@ -30,6 +37,21 @@ export class MediaIndexer {
     (count: number) => void | Promise<void>
   >()
   private readonly scanStartListeners = new Set<() => void | Promise<void>>()
+  private readonly scanEventListeners = new Set<
+    (event: LibraryScanEvent) => void | Promise<void>
+  >()
+  private scanState: LibraryScanState = {
+    status: 'idle',
+    currentRoot: null,
+    currentFile: null,
+    discoveredFiles: 0,
+    processedFiles: 0,
+    indexedFiles: 0,
+    failedFiles: 0,
+    startedAt: null,
+    completedAt: null,
+    error: null,
+  }
   private hardwareProfile: HardwareProfile | null = null
 
   constructor(
@@ -76,26 +98,63 @@ export class MediaIndexer {
     return () => this.scanStartListeners.delete(listener)
   }
 
+  getScanState(): LibraryScanState {
+    return { ...this.scanState }
+  }
+
+  onScanEvent(
+    listener: (event: LibraryScanEvent) => void | Promise<void>
+  ): () => void {
+    this.scanEventListeners.add(listener)
+    return () => this.scanEventListeners.delete(listener)
+  }
+
   private async scanUntilSettled(): Promise<number> {
     let total = 0
-    while (true) {
-      this.rescanRequested = false
-      total = await this.scanOnce()
-      if (this.rescanRequested) continue
-      for (const listener of this.scanCompleteListeners) {
-        try {
-          await listener(total)
-        } catch (error) {
-          console.error('Post-scan refresh failed', error)
+    try {
+      while (true) {
+        this.rescanRequested = false
+        total = await this.scanOnce()
+        if (this.rescanRequested) continue
+        for (const listener of this.scanCompleteListeners) {
+          try {
+            await listener(total)
+          } catch (error) {
+            console.error('Post-scan refresh failed', error)
+          }
         }
+        // A watcher event can arrive while a completion listener is refreshing
+        // consumers. Run it before resolving the shared promise.
+        if (!this.rescanRequested) return total
       }
-      // A watcher event can arrive while a completion listener is refreshing
-      // consumers. Run it before resolving the shared promise.
-      if (!this.rescanRequested) return total
+    } catch (error) {
+      this.scanState = {
+        ...this.scanState,
+        status: 'failed',
+        currentRoot: null,
+        currentFile: null,
+        completedAt: new Date().toISOString(),
+        error: this.errorMessage(error),
+      }
+      await this.emitScanEvent('library.scan.failed')
+      throw error
     }
   }
 
   private async scanOnce(): Promise<number> {
+    this.scanState = {
+      status: 'discovering',
+      currentRoot: null,
+      currentFile: null,
+      discoveredFiles: 0,
+      processedFiles: 0,
+      indexedFiles: 0,
+      failedFiles: 0,
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      error: null,
+    }
+    await this.emitScanEvent('library.scan.started')
     let videoCount = 0
     let interludeCount = 0
     let removed = 0
@@ -149,6 +208,7 @@ export class MediaIndexer {
             relativePaths
           )) ?? 0
         await this.repository.setRootAvailable(root.id, true)
+        await this.emitScanEvent('library.scan.root.completed')
       } catch (error) {
         console.error(
           `Media root scan failed; preserving its index: ${root.id}`,
@@ -171,6 +231,7 @@ export class MediaIndexer {
             relativePaths
           )) ?? 0
         await this.repository.setRootAvailable(interludeRoot.id, true)
+        await this.emitScanEvent('library.scan.root.completed')
       } catch (error) {
         console.error(
           'Interlude root scan failed; preserving its index',
@@ -183,6 +244,14 @@ export class MediaIndexer {
     console.log(
       `Indexed ${total} files (${videoCount} library, ${interludeCount} interludes), removed ${removed} stale`
     )
+    this.scanState = {
+      ...this.scanState,
+      status: 'completed',
+      currentRoot: null,
+      currentFile: null,
+      completedAt: new Date().toISOString(),
+    }
+    await this.emitScanEvent('library.scan.completed')
     return total
   }
 
@@ -234,6 +303,14 @@ export class MediaIndexer {
       this.mediaConfig.supportedExtensions,
       excludePaths
     )
+    this.scanState = {
+      ...this.scanState,
+      status: 'scanning',
+      currentRoot: root.id,
+      currentFile: null,
+      discoveredFiles: this.scanState.discoveredFiles + files.length,
+    }
+    await this.emitScanEvent('library.scan.progress')
     const rawDescriptors = files.map((filePath) => ({
       filePath,
       relativePath: this.getRelativePath(root, filePath),
@@ -247,26 +324,40 @@ export class MediaIndexer {
     ])
     // Some third-party/test repository adapters may predate the locator API.
     const existingLocatorMap = locatorMap ?? new Map()
-
-    const approvedNames = root.approvedCollections
-      ? new Set(
-          root.approvedCollections.map((name) =>
-            name.toLocaleLowerCase('en-US')
-          )
-        )
-      : null
+    const identities = new Map<string, CollectionIdentity>()
+    for (const descriptor of rawDescriptors) {
+      const identity = this.deriveIdentity(root, descriptor.relativePath)
+      if (identity) identities.set(identity.identityKey, identity)
+    }
+    const collectionInputs = [...identities.values()].map((identity) => ({
+      rootId: root.id,
+      libraryKind: root.kind,
+      identityKey: identity.identityKey,
+      sourceTitle: identity.sourceTitle,
+      parsedTitle: identity.title,
+      year: identity.year,
+    }))
+    const collectionRows =
+      typeof this.repository.upsertCollections === 'function'
+        ? ((await this.repository.upsertCollections(collectionInputs)) ?? [])
+        : []
+    const collectionsByKey = new Map(
+      collectionRows.map((collection) => [collection.identityKey, collection])
+    )
     const descriptors = rawDescriptors.map(({ filePath, relativePath }) => {
-      const collectionTitle =
-        relativePath.split('/')[0] || getFilename(filePath)
-      const policyEnabled =
-        isInterlude ||
-        approvedNames === null ||
-        approvedNames.has(collectionTitle.toLocaleLowerCase('en-US'))
+      const identity = this.deriveIdentity(root, relativePath)
+      const collection = identity
+        ? collectionsByKey.get(identity.identityKey)
+        : undefined
+      const collectionTitle = identity?.sourceTitle ?? getFilename(filePath)
+      const policyEnabled = collection?.effectiveDecision === 'allow'
       const existing =
         existingLocatorMap.get(relativePath) ?? existingPathMap.get(filePath)
       const mtime = this.filesystem.getMtime(filePath)
-      const shouldProbe =
-        policyEnabled || existing?.playbackOverride === true
+      // Technical indexing is independent from parental approval. Probe every
+      // new or changed file so unknown collections can be reviewed without
+      // ever making them eligible for playback.
+      const shouldProbe = true
       const needsProbe =
         shouldProbe &&
         (!existing ||
@@ -279,6 +370,8 @@ export class MediaIndexer {
         filePath,
         relativePath,
         collectionTitle,
+        identity,
+        collection,
         policyEnabled,
         existing,
         mtime,
@@ -290,8 +383,31 @@ export class MediaIndexer {
     const filesToProbe = descriptors
       .filter((descriptor) => descriptor.needsProbe)
       .map((descriptor) => descriptor.filePath)
+    for (const descriptor of descriptors) {
+      if (!descriptor.needsProbe) {
+        await this.recordScanFile(
+          root.id,
+          descriptor.relativePath,
+          (descriptor.existing?.durationSeconds ?? 0) > 0
+        )
+      }
+    }
+    const descriptorByPath = new Map(
+      descriptors.map((descriptor) => [descriptor.filePath, descriptor])
+    )
     const CONCURRENCY = 4
-    const metadataResults = await this.probeParallel(filesToProbe, CONCURRENCY)
+    const metadataResults = await this.probeParallel(
+      filesToProbe,
+      CONCURRENCY,
+      async (filePath, result) => {
+        const descriptor = descriptorByPath.get(filePath)
+        await this.recordScanFile(
+          root.id,
+          descriptor?.relativePath ?? getFilename(filePath),
+          (result?.durationSeconds ?? 0) > 0
+        )
+      }
+    )
 
     const probedByPath = new Map<string, MediaMetadata | null>()
     for (let i = 0; i < filesToProbe.length; i++) {
@@ -358,11 +474,22 @@ export class MediaIndexer {
         rootAvailable: false,
         playbackEnabled:
           descriptor.existing?.playbackOverride ?? policyEnabled,
+        collectionId: descriptor.collection?.id ?? null,
+        seasonNumber: descriptor.identity?.seasonNumber ?? null,
+        episodeNumber: descriptor.identity?.episodeNumber ?? null,
+        episodeTitle: descriptor.identity?.episodeTitle ?? null,
       }
     })
 
     if (itemsToUpsert.length > 0) {
       await this.repository.upsertBatch(itemsToUpsert)
+
+      if (typeof this.repository.reconcileCollections === 'function') {
+        await this.repository.reconcileCollections(
+          root.id,
+          [...identities.keys()]
+        )
+      }
 
       if (this.thumbnailClient && filesToProbe.length > 0) {
         const paths = filesToProbe
@@ -374,7 +501,15 @@ export class MediaIndexer {
         // Do not block a large first-time Plex scan on thousands of FFmpeg
         // thumbnail jobs. Library page visits fill the remaining cache in
         // bounded batches.
-        await this.thumbnailClient.generateAll(thumbnailItems, 12)
+        try {
+          await this.thumbnailClient.generateAll(thumbnailItems, 12)
+        } catch (error) {
+          console.error('Thumbnail generation failed after library scan', error)
+        }
+      }
+    } else {
+      if (typeof this.repository.reconcileCollections === 'function') {
+        await this.repository.reconcileCollections(root.id, [])
       }
     }
 
@@ -399,6 +534,52 @@ export class MediaIndexer {
             kind: 'other',
           },
         ]
+  }
+
+  private deriveIdentity(
+    root: MediaRootConfig,
+    relativePath: string
+  ): CollectionIdentity | null {
+    if (root.kind === 'tv' || root.kind === 'movie') {
+      return deriveCollectionIdentity({
+        libraryKind: root.kind,
+        relativePath,
+      })
+    }
+    // Interludes and station assets remain file-level inventory. TMDB and
+    // collection parental decisions apply only to shows and movies.
+    return null
+  }
+
+  private async emitScanEvent(type: LibraryScanEventType): Promise<void> {
+    const event: LibraryScanEvent = { type, state: this.getScanState() }
+    for (const listener of this.scanEventListeners) {
+      try {
+        await listener(event)
+      } catch (error) {
+        console.error(`Library scan event listener failed (${type})`, error)
+      }
+    }
+  }
+
+  private async recordScanFile(
+    rootId: string,
+    relativePath: string,
+    indexed: boolean
+  ): Promise<void> {
+    this.scanState = {
+      ...this.scanState,
+      currentRoot: rootId,
+      currentFile: relativePath,
+      processedFiles: this.scanState.processedFiles + 1,
+      indexedFiles: this.scanState.indexedFiles + (indexed ? 1 : 0),
+      failedFiles: this.scanState.failedFiles + (indexed ? 0 : 1),
+    }
+    await this.emitScanEvent('library.scan.progress')
+  }
+
+  private errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error)
   }
 
   private getRelativePath(root: MediaRootConfig, filePath: string): string {
@@ -436,7 +617,11 @@ export class MediaIndexer {
    */
   private async probeParallel(
     files: string[],
-    concurrency: number
+    concurrency: number,
+    onResult?: (
+      filePath: string,
+      result: MediaMetadata | null
+    ) => void | Promise<void>
   ): Promise<Array<MediaMetadata | null>> {
     const results: Array<MediaMetadata | null> = []
 
@@ -452,6 +637,12 @@ export class MediaIndexer {
           }
         })
       )
+      if (onResult) {
+        for (let index = 0; index < batch.length; index++) {
+          const filePath = batch[index]
+          if (filePath) await onResult(filePath, batchResults[index] ?? null)
+        }
+      }
       results.push(...batchResults)
     }
 

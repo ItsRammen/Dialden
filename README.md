@@ -8,8 +8,8 @@ The anti-algorithm for tired parents and kids who just want to watch cartoons.
 
 > **ToastTV Other fork:** This repository adds a Docker/Unraid headless server,
 > managed TV and movie roots, a conservative Kids 7 policy, parent overrides,
-> and deterministic channel schedule APIs. Direct media streaming and the LG
-> webOS playback package are still under development.
+> deterministic channel schedules, direct media streaming, and an LG webOS
+> client for trusted home-LAN playback.
 
 <img src="docs/toasttv_hero.png" alt="A picture of 3 kids watching cartoons on a TV in a cozy 90s living room" />
 
@@ -30,11 +30,14 @@ Open the administration UI at `http://127.0.0.1:1993`. The inherited Raspberry
 Pi installer at `toasttv.eu` installs the original upstream bare-metal release,
 not this Docker/Unraid fork.
 
+Preview the TV client at `http://127.0.0.1:1993/tv/`. To package and sideload it
+on an LG TV, follow the [LG webOS client guide](./docs/WEBOS.md).
+
 ## Getting Started
 
 The Raspberry Pi playback features below describe the inherited upstream
-project. This fork's current Docker milestone provides library administration
-and schedules; media streaming and the LG webOS player are still in development.
+project. This fork's Docker path provides library administration, schedules,
+direct streaming, and a separately packaged LG webOS client.
 
 ## Broadcast Control Center
 
@@ -125,9 +128,12 @@ Movies:   /mnt/user/Plex/Movies (read-only)
 Web UI:   http://TOWER:1993
 ```
 
-The template uses the bundled Kids 7 policy. Parent allow/block overrides and
-the media index persist beneath appdata. The image is an administration and
-schedule server only; it does not yet include the LG viewing application.
+The template uses the bundled Kids 7 rating policy. Set an optional TMDB API
+key in the Unraid template to match collections and evaluate certifications;
+without one, new collections safely remain in **Needs Review**. Parent
+allow/block overrides, cached metadata, artwork, and the media index persist
+beneath appdata. The image serves the browser reference client at `/tv/`; the
+same client can be packaged and sideloaded on an LG TV.
 
 For this library on Windows:
 
@@ -157,25 +163,57 @@ The admin UI defaults to `http://127.0.0.1:1993`; health status is at
 not expose this port to the internet or an untrusted network. To reach it from
 a trusted home LAN, explicitly set `TOASTTV_BIND_ADDRESS=0.0.0.0` in `.env`.
 
-SQLite, thumbnails, and parent overrides use the `toasttv-data` Docker volume.
+SQLite, thumbnails, cached artwork, and parent overrides use the `toasttv-data` Docker volume.
 TV, movies, interludes, and policy are separate read-only bind mounts. Back up
 the data volume with the container stopped before copying raw SQLite files;
 `docker compose down -v` deletes it.
 
-[`config/kids-7.library.json`](./config/kids-7.library.json) contains the exact
-top-level filesystem folder names approved for playback (currently 47 TV and
-69 movie folders from this library). Matching is exact and case-insensitive and
-recursively includes supported video files beneath a matched folder, including
-any Extras subfolder. Supported extensions are `.mp4`, `.mkv`, `.avi`, `.mov`,
-and `.webm`. Unmatched media remains visible to administrators but is not
-probed, thumbnailed, or scheduled. The Library page opens on **Kids 7**. A
-parent can allow, block, or return an item to policy control without modifying
-the media files.
+[`config/kids-7.library.json`](./config/kids-7.library.json) defines configurable
+rating buckets and local programming groups. Folder entries remain as a legacy
+group-assignment source; they are no longer automatic approvals. The default
+profile auto-allows `G`, `TV-Y`, `TV-Y7`, and `TV-G`; sends `PG`, `TV-PG`,
+unknown, unrated, ambiguous, and provider failures to review; and blocks
+`PG-13`, `TV-14`, `R`, `TV-MA`, and `NC-17`. A parent can approve, block, or
+return an entire show/movie to policy control, and that decision survives
+rescans. Technical probing occurs independently of approval, but only a current
+root, valid positive duration, and effective `allow` decision can enter an
+automatic schedule.
 
 The policy is intentionally conservative and is loaded once at process start.
-Restart the container after editing it. If `TOASTTV_LIBRARY_POLICY` is unset,
-managed roots boot default-deny; if a configured policy is missing, unreadable,
-or invalid, startup fails rather than falling back to the full library.
+Restart the container after editing it. Compose mounts the repository copy at
+`/app/config/kids-7.library.json`; Unraid seeds an editable persistent copy at
+`/mnt/user/appdata/toasttv/kids-7.library.json` and reads it through
+`/app/data/kids-7.library.json`. Back up that file with appdata. `TZ` controls
+container logs and legacy date handling; channel slot timezones are the
+per-channel `timezone` values in this policy. If `TOASTTV_LIBRARY_POLICY` is unset,
+managed roots boot review-only. If a configured policy is missing, unreadable,
+or invalid, ToastTV logs the problem and continues with those roots fail-closed
+instead of broadening access.
+
+TMDB enrichment runs separately from filesystem scanning and caches collection
+metadata in SQLite. Configure `TMDB_API_KEY`, `RATING_REGION` (default `US`),
+optional comma-separated `RATING_FALLBACK_REGIONS`, and `TMDB_LANGUAGE`
+(default `en-US`) in `.env` or the Unraid template. The secret is used only on
+the server and is never returned by the client/admin configuration APIs. A
+rating-region order change immediately returns cached certifications to review
+and refreshes their retained TMDB matches before automatic playback can resume.
+
+The main `/library` page is collection-first: it summarizes TV shows, movies,
+interludes, and collections needing review. TV and movie views support search,
+approval and metadata filters, collection-level bulk approve/block actions, and
+show pages grouped by season. Raw filenames and probe details remain available
+under **Advanced Media Details** and at `/library/files`; they are no longer the
+primary approval workflow. Use **Library → Needs Review** to approve, block, or
+return a collection to the Kids 7 policy, and **Review → Metadata** to confirm an
+ambiguous TMDB result or retry an unmatched collection.
+
+Filesystem scanning and online metadata enrichment are independent background
+operations. Their progress is visible in the Library and headless dashboard and
+is streamed over the existing dashboard event feed. A new episode joins its
+existing show collection and inherits that collection's effective decision;
+metadata is not fetched once per episode or on every page load. TMDB poster
+files are fetched through a size-restricted server proxy and cached beneath
+`/app/data/artwork`.
 
 The scanner preserves catalog rows and parent overrides when a mount cannot be
 completely traversed, but quarantines that root from playback until a complete
@@ -190,18 +228,27 @@ The current schedule endpoints are:
 GET /api/v1/channels
 GET /api/v1/channels/:id/now
 GET /api/v1/channels/:id/guide?hours=8
+GET|HEAD /api/v1/media/:id/stream
 ```
+
+Collection-oriented read APIs are available under `/api/v1/library`; mutating
+scan, metadata, approval, and channel controls use `/api/admin/v1`. The current
+deployment is still a trusted-LAN MVP: the admin prefix is an API boundary, not
+authentication, and TV presence heartbeats are operational telemetry rather
+than a trusted identity. Do not expose either interface to the public internet.
 
 The policy seeds Kids Club, Nature & Discovery, and Family Movie Night in the
 `Asia/Taipei` timezone. Timelines are deterministic across restarts and return
-the current media ID, start/end timestamps, and live offset. These endpoints
-do not stream media yet; direct-play delivery and the webOS player are the next
-client milestone.
+the current media ID, start/end timestamps, live offset, and a server-approved
+playback URL. The stream endpoint supports HTTP Range requests for seeking.
+**Go off air** temporarily suppresses a channel timeline; that manual switch is
+process-local in this milestone and returns to on-air after a container restart.
 
 `/api/v1/health` currently checks SQLite and FFmpeg only. It does not prove the
-mounts are readable or that the first scan finished. Wait for
-`Background scan complete` in `docker compose logs -f toasttv`, then verify the
-Kids 7 library before relying on a schedule.
+mounts are readable or that the first scan finished. Watch the Dashboard or
+Library scan card until discovery/probing completes, then open **Library → Needs
+Review** and verify metadata/approval decisions before relying on a schedule.
+Use `docker compose logs -f toasttv` as the troubleshooting fallback.
 
 Docker Compose defaults to UID/GID `1000`; the image also accepts numeric
 `PUID`/`PGID` overrides. A host or NAS media bind mount must grant the selected
@@ -220,9 +267,17 @@ read-only, and runs the server as Unraid's normal `PUID=99` / `PGID=100`.
 Override those advanced fields if your share permissions use another identity.
 Stop the container while an appdata backup copies the SQLite database.
 
-Docker deliberately disables legacy local playback controls. Direct-play/HLS
-delivery, a browser reference player, and the webOS client remain staged in
-[`docs/DOCKER-WEBOS-MIGRATION.md`](./docs/DOCKER-WEBOS-MIGRATION.md).
+Docker deliberately disables legacy local playback controls. The webOS MVP uses
+direct play only; transcoding and HLS fallback remain staged in
+[`docs/DOCKER-WEBOS-MIGRATION.md`](./docs/DOCKER-WEBOS-MIGRATION.md). See
+[`docs/WEBOS.md`](./docs/WEBOS.md) for browser preview, packaging, sideloading,
+and codec-compatibility guidance.
+
+**TMDB attribution:**
+
+<a href="https://www.themoviedb.org"><img src="public/tmdb-logo.svg" alt="The Movie Database (TMDB)" width="72"></a>
+
+This product uses the TMDB API but is not endorsed or certified by TMDB.
 
 ```bash
 make install   # Install Bun, MPV, FFmpeg

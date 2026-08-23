@@ -146,6 +146,15 @@ export function renderSettings(props: SettingsProps): string {
             <span class="hint">Scan for new files added via filesystem</span>
           </section>
           
+          <!-- Metadata Card -->
+          <section class="settings-card">
+            <div class="card-header">
+              <h2>Metadata</h2>
+            </div>
+            <p>Configure TMDB matching and preferred certification regions.</p>
+            <a class="btn btn-secondary" href="/settings/metadata">Metadata settings</a>
+          </section>
+
           <!-- Server Card -->
           <section class="settings-card">
             <div class="card-header">
@@ -195,6 +204,13 @@ export function renderSettings(props: SettingsProps): string {
             <div class="form-group">
               <label>Version</label>
               <span class="version-display">${props.currentVersion ?? 'unknown'}</span>
+            </div>
+
+            <div class="form-group" aria-label="TMDB attribution">
+              <a href="https://www.themoviedb.org" target="_blank" rel="noopener noreferrer">
+                <img src="/tmdb-logo.svg" width="72" height="52" alt="The Movie Database (TMDB)">
+              </a>
+              <p class="hint">This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
             </div>
             
             <div id="update-result">

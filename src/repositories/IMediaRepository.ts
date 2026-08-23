@@ -5,7 +5,18 @@
  * Implementations can use SQLite, PostgreSQL, or any other storage.
  */
 
-import type { MediaItem, MediaType, Compatibility } from '../types'
+import type {
+  MediaItem,
+  MediaType,
+  Compatibility,
+  CollectionListOptions,
+  CollectionMetadataUpdate,
+  CollectionUpsertInput,
+  LibrarySummary,
+  MediaCollection,
+  OverrideDecision,
+  PolicyDecision,
+} from '../types'
 
 /**
  * Input type for creating/updating media items.
@@ -56,6 +67,44 @@ export interface IMediaRepository {
    * Get media item by type (for singletons like intro/outro)
    */
   getByType(type: MediaType): Promise<MediaItem | null>
+
+  // --- Collection catalog ---
+
+  upsertCollections(
+    collections: readonly CollectionUpsertInput[]
+  ): Promise<MediaCollection[]>
+
+  reconcileCollections(
+    rootId: string,
+    presentIdentityKeys: readonly string[]
+  ): Promise<number>
+
+  getCollections(options?: CollectionListOptions): Promise<MediaCollection[]>
+
+  getCollectionById(id: number): Promise<MediaCollection | null>
+
+  getCollectionMedia(id: number): Promise<MediaItem[]>
+
+  getLibrarySummary(): Promise<LibrarySummary>
+
+  updateCollectionPolicy(
+    id: number,
+    decision: PolicyDecision,
+    reason: string,
+    profileId?: string
+  ): Promise<boolean>
+
+  updateCollectionOverride(
+    id: number,
+    decision: OverrideDecision
+  ): Promise<boolean>
+
+  updateCollectionMetadata(
+    id: number,
+    metadata: CollectionMetadataUpdate
+  ): Promise<boolean>
+
+  getCollectionsNeedingMetadata(limit?: number): Promise<MediaCollection[]>
 
   // --- Write Operations ---
 

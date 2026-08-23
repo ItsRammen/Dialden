@@ -125,7 +125,7 @@ export class MediaService {
     const media = await this.getAll()
     await this.thumbnails.generateAll(
       media
-        .filter((item) => item.playbackEnabled !== false)
+        .filter((item) => item.playbackEnabled === true)
         .map((m) => ({ id: m.id, path: m.path })),
       48
     )

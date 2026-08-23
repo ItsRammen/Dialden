@@ -1,0 +1,119 @@
+# LG webOS client
+
+ToastTV includes a packaged LG webOS client in `clients/webos`. It connects to
+the ToastTV server over the trusted home LAN, displays the configured channels
+and guide, and joins the program already in progress.
+
+## Before packaging
+
+1. Start ToastTV and wait for `Background scan complete` in the server logs.
+2. Make the server reachable from the TV. Docker deployments normally need
+   `TOASTTV_BIND_ADDRESS=0.0.0.0` in `.env`.
+3. From another device on the same network, open
+   `http://<toasttv-host>:1993/tv/`. This browser preview uses the page's current
+   origin as its server URL and exercises the same client files as the TV app.
+
+The installed TV app initially suggests `http://TOWER:1993`. Change it on the
+setup screen if the server has another hostname, address, or port. The app saves
+the chosen URL on the TV. If `TOWER` is not resolvable by the TV, use the
+server's LAN IP address, for example `http://192.168.1.20:1993`.
+
+ToastTV currently has no authentication, so keep port `1993` on a trusted home
+LAN and do not expose it directly to the internet.
+
+Media mounts are read-only inside the container. Do not replace or rewrite a
+mounted video from the Unraid host while it is actively streaming; finish the
+copy first, then let ToastTV discover the completed file.
+
+## Build the IPK
+
+Use the repository script, which downloads LG's official CLI at the pinned
+version and packages the client:
+
+```powershell
+npm run webos:package
+```
+
+The package is written to:
+
+```text
+dist/webos/com.itsrammen.app.toasttv_0.1.0_all.ipk
+```
+
+LG documents the CLI installation and packaging commands in its
+[CLI installation guide](https://webostv.developer.lge.com/develop/tools/cli-installation)
+and [CLI developer guide](https://webostv.developer.lge.com/develop/tools/cli-dev-guide).
+
+## Install on an LG TV
+
+The TV and development computer must be on the same network.
+
+Install LG's device commands once before the first sideload:
+
+```powershell
+npm install --global @webos-tools/cli@3.2.5
+```
+
+1. Create or sign in to an LG Developer account.
+2. Install **Developer Mode** from LG Apps on the TV.
+3. Open Developer Mode, sign in, enable **Dev Mode Status**, and allow the TV
+   to restart.
+4. Reopen Developer Mode and enable **Key Server**. Note the TV's IP address
+   and the six-character passphrase shown by the app.
+5. On the development computer, register the TV:
+
+   ```powershell
+   ares-setup-device
+   ```
+
+   Select `add`, then use a memorable device name such as `toasttv-lg`, the
+   TV's IP address, port `9922`, and SSH user `prisoner`. A password is not
+   required.
+
+6. Retrieve the TV key, then verify the connection:
+
+   ```powershell
+   ares-novacom --device toasttv-lg --getkey
+   ares-device --system-info --device toasttv-lg
+   ```
+
+   Enter the case-sensitive passphrase displayed on the TV when prompted.
+
+7. Install and launch ToastTV:
+
+   ```powershell
+   ares-install --device toasttv-lg dist/webos/com.itsrammen.app.toasttv_0.1.0_all.ipk
+   ares-launch --device toasttv-lg com.itsrammen.app.toasttv
+   ```
+
+Repackage and run `ares-install` again after client changes. Developer Mode is
+time-limited; use **Extend Session Time** in the TV's Developer Mode app before
+it expires. If Developer Mode expires, development-installed apps are removed.
+LG's [Developer Mode app guide](https://webostv.developer.lge.com/develop/getting-started/developer-mode-app)
+contains the full device setup and renewal workflow.
+
+## Playback compatibility
+
+This first client streams the original file directly and does not transcode or
+fall back to HLS. A file being indexed by ToastTV does not guarantee that every
+LG model can decode its container, video codec, and audio codec. MP4 containing
+H.264 video and AAC audio is the conservative first format to test; MKV, AVI,
+MOV, WebM, HEVC, and less common audio formats vary by TV generation.
+
+If the guide works but a program will not play, first test that source in the
+`/tv/` browser preview, then inspect the file's codecs and try a compatible MP4.
+The server's Range endpoint supports seeking, but it cannot make an unsupported
+codec playable. LG publishes generation-specific
+[audio/video format tables](https://webostv.developer.lge.com/develop/specifications/video-audio-50)
+and its [streaming protocol matrix](https://webostv.developer.lge.com/develop/specifications/streaming-protocol-drm).
+
+## Troubleshooting
+
+- **Server unavailable:** confirm the saved URL, use a LAN IP instead of a
+  hostname, and verify `/api/v1/health` from another device on the same network.
+- **Empty channel:** wait for the background scan, then confirm eligible media
+  appears under **Kids 7** in the administration UI.
+- **Guide loads but video fails:** this is usually a TV codec/container limit in
+  the direct-play MVP; test a known H.264/AAC MP4.
+- **Install cannot connect:** reopen Developer Mode, enable Key Server again,
+  retrieve the key, and check that the Developer Mode session has not expired.

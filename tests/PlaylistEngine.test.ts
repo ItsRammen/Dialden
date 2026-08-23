@@ -31,6 +31,8 @@ const createVideo = (
   warning: null,
   mtime: null,
   compatibility: 'compatible',
+  rootAvailable: true,
+  playbackEnabled: true,
   ...override,
 })
 
