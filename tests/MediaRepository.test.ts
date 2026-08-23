@@ -78,6 +78,68 @@ describe('MediaRepository', () => {
     expect(updated[0]?.durationSeconds).toBe(120)
   })
 
+  test('persists network and studio metadata for station facets', async () => {
+    const [collection] = await repo.upsertCollections([
+      {
+        rootId: 'tv',
+        libraryKind: 'tv',
+        identityKey: 'spongebob-squarepants',
+        sourceTitle: 'SpongeBob SquarePants',
+        parsedTitle: 'SpongeBob SquarePants',
+        year: 1999,
+      },
+    ])
+    expect(collection).toBeDefined()
+    await repo.updateCollectionMetadata(collection?.id ?? 0, {
+      provider: 'tmdb',
+      externalId: '387',
+      status: 'matched',
+      genres: ['Animation', 'Comedy'],
+      networks: ['Nickelodeon'],
+      studios: ['Nickelodeon Animation Studio'],
+    })
+
+    expect(await repo.getCollectionById(collection?.id ?? 0)).toMatchObject({
+      networks: ['Nickelodeon'],
+      studios: ['Nickelodeon Animation Studio'],
+    })
+  })
+
+  test('queues existing TMDB matches once when station facets are introduced', async () => {
+    const [stored] = await repo.upsertCollections([
+      {
+        rootId: 'tv',
+        libraryKind: 'tv',
+        identityKey: 'locked-show',
+        sourceTitle: 'Locked Show',
+        parsedTitle: 'Locked Show',
+        year: 2020,
+      },
+    ])
+    await repo.updateCollectionMetadata(stored?.id ?? 0, {
+      provider: 'tmdb',
+      externalId: '1234',
+      status: 'manual',
+      locked: true,
+    })
+    await repo.updateCollectionOverride(stored?.id ?? 0, 'allow')
+
+    const internals = repo as unknown as {
+      db: Database
+      migrateStationFacets(): void
+    }
+    internals.db.exec('DELETE FROM schema_migrations WHERE version = 2')
+    internals.migrateStationFacets()
+
+    expect(await repo.getCollectionById(stored?.id ?? 0)).toMatchObject({
+      metadataStatus: 'pending',
+      metadataLocked: true,
+      metadataExternalId: '1234',
+      parentOverride: 'allow',
+      effectiveDecision: 'allow',
+    })
+  })
+
   test('sanitizes malformed persisted parent overrides to review and rejects new corruption', async () => {
     const [collection] = await repo.upsertCollections([
       {
@@ -182,6 +244,169 @@ describe('MediaRepository', () => {
 
     await repo.updatePlaybackOverride(item?.id ?? 0, null)
     expect(await repo.getAllVideos()).toEqual([])
+  })
+
+  test('collection approval stays authoritative over stale scan upserts and file inheritance', async () => {
+    const [collection] = await repo.upsertCollections([
+      {
+        rootId: 'tv',
+        libraryKind: 'tv',
+        identityKey: 'bluey',
+        sourceTitle: 'Bluey',
+        parsedTitle: 'Bluey',
+        year: null,
+      },
+    ])
+    const collectionId = collection?.id ?? 0
+    const staleScanInput = createInput({
+      path: '/media/tv/Bluey/episode.mkv',
+      filename: 'episode.mkv',
+      rootId: 'tv',
+      relativePath: 'Bluey/episode.mkv',
+      libraryKind: 'tv',
+      collectionTitle: 'Bluey',
+      collectionId,
+      policyEnabled: false,
+      rootAvailable: true,
+    })
+    await repo.upsertBatch([staleScanInput])
+
+    await repo.updateCollectionOverride(collectionId, 'allow')
+    expect((await repo.getAll())[0]).toMatchObject({
+      policyEnabled: true,
+      playbackEnabled: true,
+    })
+
+    // A long-running scanner may have captured review before the approval.
+    // Landing that stale descriptor later must not undo the parent decision.
+    await repo.upsertBatch([{ ...staleScanInput, policyEnabled: false }])
+    const approvedPage = await repo.getMediaPage({
+      filter: 'approved',
+      limit: 100,
+      offset: 0,
+    })
+    expect(approvedPage.total).toBe(1)
+    expect(approvedPage.items[0]).toMatchObject({
+      collectionId,
+      policyEnabled: true,
+      playbackEnabled: true,
+    })
+
+    const itemId = approvedPage.items[0]?.id ?? 0
+    await repo.updatePlaybackOverride(itemId, false)
+    expect((await repo.getById(itemId))?.playbackEnabled).toBe(false)
+
+    // Repair a stale cache left by an older process. Choosing "Use collection
+    // decision" must re-read the approved collection, not merely clear the
+    // per-file override and expose the stale zero.
+    const internals = repo as unknown as { db: Database }
+    internals.db
+      .prepare('UPDATE media SET policy_enabled = 0 WHERE id = ?')
+      .run(itemId)
+    await repo.updatePlaybackOverride(itemId, null)
+    expect(await repo.getById(itemId)).toMatchObject({
+      playbackOverride: null,
+      policyEnabled: true,
+      playbackEnabled: true,
+    })
+  })
+
+  test('rolls back collection decisions when linked eligibility propagation fails', async () => {
+    const [collection] = await repo.upsertCollections([
+      {
+        rootId: 'tv',
+        libraryKind: 'tv',
+        identityKey: 'rollback-show',
+        sourceTitle: 'Rollback Show',
+        parsedTitle: 'Rollback Show',
+        year: null,
+      },
+    ])
+    const collectionId = collection?.id ?? 0
+    await repo.updateCollectionPolicy(
+      collectionId,
+      'allow',
+      'test_allowed',
+      'kids-7'
+    )
+    await repo.upsertMedia(
+      createInput({
+        path: '/media/tv/Rollback Show/episode.mkv',
+        rootId: 'tv',
+        relativePath: 'Rollback Show/episode.mkv',
+        libraryKind: 'tv',
+        collectionTitle: 'Rollback Show',
+        collectionId,
+        policyEnabled: true,
+      })
+    )
+    const internals = repo as unknown as { db: Database }
+    internals.db.exec(`
+      CREATE TRIGGER reject_eligibility_sync
+      BEFORE UPDATE OF policy_enabled ON media
+      WHEN NEW.collection_id = ${collectionId}
+      BEGIN
+        SELECT RAISE(ABORT, 'eligibility sync failed');
+      END;
+    `)
+
+    await expect(
+      repo.updateCollectionOverride(collectionId, 'block')
+    ).rejects.toThrow('eligibility sync failed')
+    await expect(
+      repo.updateCollectionPolicy(
+        collectionId,
+        'block',
+        'test_blocked',
+        'kids-7'
+      )
+    ).rejects.toThrow('eligibility sync failed')
+
+    expect(await repo.getCollectionById(collectionId)).toMatchObject({
+      policyDecision: 'allow',
+      parentOverride: null,
+      effectiveDecision: 'allow',
+    })
+    expect((await repo.getAll())[0]).toMatchObject({
+      policyEnabled: true,
+      playbackEnabled: true,
+    })
+  })
+
+  test('finds file-approved media without requiring a collection allow decision', async () => {
+    const [collection] = await repo.upsertCollections([
+      {
+        rootId: 'tv',
+        libraryKind: 'tv',
+        identityKey: 'file-approved-show',
+        sourceTitle: 'File Approved Show',
+        parsedTitle: 'File Approved Show',
+        year: null,
+      },
+    ])
+    const collectionId = collection?.id ?? 0
+    await repo.upsertMedia(
+      createInput({
+        path: '/media/tv/File Approved Show/episode.mkv',
+        rootId: 'tv',
+        relativePath: 'File Approved Show/episode.mkv',
+        libraryKind: 'tv',
+        collectionTitle: 'File Approved Show',
+        collectionId,
+        policyEnabled: false,
+        playbackOverride: true,
+        rootAvailable: true,
+      })
+    )
+
+    const playable = await repo.getCollections({ scheduleEligibleOnly: true })
+
+    expect(playable).toHaveLength(1)
+    expect(playable[0]).toMatchObject({
+      id: collectionId,
+      effectiveDecision: 'review',
+      scheduleEligibleCount: 1,
+    })
   })
 
   test('stable root-relative locator survives a container path change', async () => {

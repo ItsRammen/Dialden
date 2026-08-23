@@ -1,4 +1,11 @@
-import type { MetadataRuntimeConfig } from '../../config/metadata'
+import {
+  persistMetadataConfig,
+  resolveMetadataConfigUpdate,
+  toPublicMetadataConfig,
+  type MetadataConfigUpdateInput,
+  type MetadataRuntimeConfig,
+  type PublicMetadataConfig,
+} from '../../config/metadata'
 import {
   MetadataProviderError,
   type MetadataProvider,
@@ -21,6 +28,7 @@ import {
   type ParsedCollectionTitle,
   type RankedMetadataCandidate,
 } from './TitleMatcher'
+import { TmdbMetadataProvider } from './TmdbMetadataProvider'
 
 export type MetadataJobEventType =
   | 'library.metadata.started'
@@ -33,10 +41,15 @@ export interface MetadataJobEvent {
   readonly state: MetadataJobState
 }
 
+export type MetadataProviderFactory = (
+  config: MetadataRuntimeConfig
+) => MetadataProvider
+
 export class MetadataEnrichmentService {
   private static readonly RATING_REGIONS_SETTING =
     'metadata_rating_regions_v1'
   private activeRun: Promise<MetadataJobState> | null = null
+  private operationTail: Promise<void> = Promise.resolve()
   private readonly listeners = new Set<
     (event: MetadataJobEvent) => void | Promise<void>
   >()
@@ -57,9 +70,10 @@ export class MetadataEnrichmentService {
 
   constructor(
     private readonly repository: IMediaRepository,
-    private readonly provider: MetadataProvider,
-    private readonly config: MetadataRuntimeConfig,
-    private readonly profile: RatingPolicyProfile | null = DEFAULT_KIDS_7_POLICY
+    private provider: MetadataProvider,
+    private config: MetadataRuntimeConfig,
+    private readonly profile: RatingPolicyProfile | null = DEFAULT_KIDS_7_POLICY,
+    private readonly providerFactory: MetadataProviderFactory = createTmdbProvider
   ) {
     if (!provider.configured) {
       this.state = {
@@ -74,6 +88,82 @@ export class MetadataEnrichmentService {
     return { ...this.state }
   }
 
+  /** The only configuration shape safe for admin and TV-client responses. */
+  getPublicConfig(): PublicMetadataConfig {
+    return toPublicMetadataConfig(this.config)
+  }
+
+  /**
+   * Validate and exercise current or supplied form values without persisting
+   * them or replacing the active provider. Blank API-key input keeps the
+   * current server-side key.
+   */
+  testConfiguration(
+    input: MetadataConfigUpdateInput,
+    signal?: AbortSignal
+  ): Promise<void> {
+    return this.withExclusiveOperation(() =>
+      this.testConfigurationUnlocked(input, signal)
+    )
+  }
+
+  private async testConfigurationUnlocked(
+    input: MetadataConfigUpdateInput,
+    signal?: AbortSignal
+  ): Promise<void> {
+    const candidate = resolveMetadataConfigUpdate(this.config, input)
+    if (sameMetadataConfig(candidate, this.config)) {
+      await this.testConnectionUnlocked(signal)
+      return
+    }
+    await this.providerFactory(candidate).testConnection(signal)
+  }
+
+  /**
+   * Queue dependent refreshes safely, persist one complete configuration, then
+   * swap the live provider. Callers never receive the secret-bearing object.
+   */
+  updateConfiguration(
+    input: MetadataConfigUpdateInput
+  ): Promise<PublicMetadataConfig> {
+    return this.withExclusiveOperation(() =>
+      this.applyConfigurationUpdate(input)
+    )
+  }
+
+  private async applyConfigurationUpdate(
+    input: MetadataConfigUpdateInput
+  ): Promise<PublicMetadataConfig> {
+    const previous = this.config
+    const next = resolveMetadataConfigUpdate(this.config, input)
+    const nextProvider = this.providerFactory(next)
+
+    // Queue any safety- or locale-sensitive refresh before committing the new
+    // setting. If invalidation fails, the saved and live configurations remain
+    // untouched and the controller can truthfully report that the old config
+    // is still active. Region invalidation revokes eligibility first, so even a
+    // later repository failure leaves the affected collection fail-closed.
+    await this.synchronizeConfigurationChange(previous, next, nextProvider, true)
+    await persistMetadataConfig(this.repository, next)
+
+    this.config = next
+    this.provider = nextProvider
+    this.state = {
+      ...this.state,
+      status: this.provider.configured ? 'idle' : 'not_configured',
+      providerHealth: this.provider.configured
+        ? 'unverified'
+        : 'not_configured',
+      providerMessage: this.provider.configured
+        ? null
+        : 'Metadata provider credentials are not configured.',
+      currentCollectionId: null,
+      error: null,
+    }
+
+    return this.getPublicConfig()
+  }
+
   onEvent(
     listener: (event: MetadataJobEvent) => void | Promise<void>
   ): () => void {
@@ -83,7 +173,7 @@ export class MetadataEnrichmentService {
 
   runPending(): Promise<MetadataJobState> {
     if (this.activeRun) return this.activeRun
-    const run = this.processPending()
+    const run = this.withExclusiveOperation(() => this.processPending())
     this.activeRun = run
     void run.finally(() => {
       if (this.activeRun === run) this.activeRun = null
@@ -91,7 +181,13 @@ export class MetadataEnrichmentService {
     return run
   }
 
-  async testConnection(signal?: AbortSignal): Promise<void> {
+  testConnection(signal?: AbortSignal): Promise<void> {
+    return this.withExclusiveOperation(() =>
+      this.testConnectionUnlocked(signal)
+    )
+  }
+
+  private async testConnectionUnlocked(signal?: AbortSignal): Promise<void> {
     try {
       await this.provider.testConnection(signal)
       this.markProviderSuccess()
@@ -106,8 +202,13 @@ export class MetadataEnrichmentService {
    * makes policy edits (or a missing/invalid policy) take effect without a
    * filesystem rescan or another TMDB request.
    */
-  async reapplyCachedPolicies(): Promise<number> {
-    if (this.activeRun) await this.activeRun
+  reapplyCachedPolicies(): Promise<number> {
+    return this.withExclusiveOperation(() =>
+      this.reapplyCachedPoliciesUnlocked()
+    )
+  }
+
+  private async reapplyCachedPoliciesUnlocked(): Promise<number> {
     let offset = 0
     let updated = 0
     const pageSize = 250
@@ -150,19 +251,40 @@ export class MetadataEnrichmentService {
    * Existing TMDB identities are retained, but their cached certification is
    * cleared and queued for refresh before it can authorize playback again.
    */
-  async synchronizeRatingRegions(): Promise<number> {
-    if (this.activeRun) await this.activeRun
-    const signature = JSON.stringify([
-      this.config.preferredRatingRegion,
-      ...this.config.fallbackRatingRegions,
-    ])
+  synchronizeRatingRegions(): Promise<number> {
+    return this.withExclusiveOperation(() =>
+      this.synchronizeRatingRegionsUnlocked()
+    )
+  }
+
+  private async synchronizeRatingRegionsUnlocked(): Promise<number> {
+    return this.synchronizeConfigurationChange(
+      this.config,
+      this.config,
+      this.provider,
+      false
+    )
+  }
+
+  private async synchronizeConfigurationChange(
+    previousConfig: MetadataRuntimeConfig,
+    nextConfig: MetadataRuntimeConfig,
+    nextProvider: MetadataProvider,
+    refreshLanguage: boolean
+  ): Promise<number> {
+    const signature = ratingRegionSignature(nextConfig)
     const previous = await this.repository.getSetting(
       MetadataEnrichmentService.RATING_REGIONS_SETTING
     )
-    if (previous === signature) return 0
+    const ratingRegionsChanged =
+      previous !== signature ||
+      ratingRegionSignature(previousConfig) !== signature
+    const languageChanged =
+      refreshLanguage && previousConfig.language !== nextConfig.language
+    if (!ratingRegionsChanged && !languageChanged) return 0
 
     let offset = 0
-    let invalidated = 0
+    let queued = 0
     const pageSize = 250
     while (true) {
       const collections = await this.repository.getCollections({
@@ -178,44 +300,64 @@ export class MetadataEnrichmentService {
         ) {
           continue
         }
+        if (ratingRegionsChanged) {
+          const policyUpdated = await this.repository.updateCollectionPolicy(
+            collection.id,
+            'review',
+            'rating_region_changed',
+            this.profileId()
+          )
+          if (!policyUpdated) continue
+        }
+
         const metadataUpdated =
           await this.repository.updateCollectionMetadata(collection.id, {
-            provider: collection.metadataProvider ?? this.provider.id,
+            provider: collection.metadataProvider ?? nextProvider.id,
             externalId: collection.metadataExternalId,
             status: 'pending',
             locked: collection.metadataLocked,
-            certification: null,
-            certificationRegion: null,
-            ratingStatus: 'missing',
-            error: null,
-            matchedAt: null,
+            ...(ratingRegionsChanged
+              ? {
+                  certification: null,
+                  certificationRegion: null,
+                  ratingStatus: 'missing' as const,
+                  error: null,
+                  matchedAt: null,
+                }
+              : { error: null }),
           })
-        if (!metadataUpdated) continue
-        await this.repository.updateCollectionPolicy(
-          collection.id,
-          'review',
-          'rating_region_changed',
-          this.profileId()
-        )
-        invalidated++
+        if (!metadataUpdated) {
+          throw new Error('Metadata collection changed while queuing a refresh')
+        }
+        queued++
       }
       offset += collections.length
       if (collections.length < pageSize) break
     }
 
-    await this.repository.setSetting(
-      MetadataEnrichmentService.RATING_REGIONS_SETTING,
-      signature
-    )
-    return invalidated
+    if (ratingRegionsChanged) {
+      await this.repository.setSetting(
+        MetadataEnrichmentService.RATING_REGIONS_SETTING,
+        signature
+      )
+    }
+    return queued
   }
 
-  async confirmMatch(
+  confirmMatch(
+    collectionId: number,
+    externalId: string
+  ): Promise<MediaCollection | null> {
+    return this.withExclusiveOperation(() =>
+      this.confirmMatchUnlocked(collectionId, externalId)
+    )
+  }
+
+  private async confirmMatchUnlocked(
     collectionId: number,
     externalId: string
   ): Promise<MediaCollection | null> {
     if (!/^\d+$/.test(externalId) || Number(externalId) <= 0) return null
-    if (this.activeRun) await this.activeRun
     const collection = await this.repository.getCollectionById(collectionId)
     if (!collection || collection.libraryKind === 'other') return null
 
@@ -230,8 +372,15 @@ export class MetadataEnrichmentService {
     return this.repository.getCollectionById(collectionId)
   }
 
-  async retryCollection(collectionId: number): Promise<MediaCollection | null> {
-    if (this.activeRun) await this.activeRun
+  retryCollection(collectionId: number): Promise<MediaCollection | null> {
+    return this.withExclusiveOperation(() =>
+      this.retryCollectionUnlocked(collectionId)
+    )
+  }
+
+  private async retryCollectionUnlocked(
+    collectionId: number
+  ): Promise<MediaCollection | null> {
     const collection = await this.repository.getCollectionById(collectionId)
     if (!collection) return null
     try {
@@ -489,6 +638,8 @@ export class MetadataEnrichmentService {
       posterPath: details.posterPath ?? null,
       backdropPath: details.backdropPath ?? null,
       genres: details.genres,
+      networks: details.networks ?? [],
+      studios: details.studios ?? [],
       certification,
       certificationRegion: rating.selected?.region ?? null,
       ratingStatus: rating.status,
@@ -625,6 +776,22 @@ export class MetadataEnrichmentService {
     }
   }
 
+  private async withExclusiveOperation<T>(
+    operation: () => Promise<T>
+  ): Promise<T> {
+    const previous = this.operationTail
+    let release!: () => void
+    this.operationTail = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    await previous
+    try {
+      return await operation()
+    } finally {
+      release()
+    }
+  }
+
   private profileId(): string {
     return this.profile?.id?.trim() || 'unconfigured'
   }
@@ -638,4 +805,36 @@ export class MetadataEnrichmentService {
       collection.ratingStatus === 'resolved' ? collection.certification : null
     return evaluatePolicy(this.profile, { matchStatus, certification })
   }
+}
+
+function createTmdbProvider(
+  config: MetadataRuntimeConfig
+): MetadataProvider {
+  return new TmdbMetadataProvider({
+    apiKey: config.tmdbApiKey,
+    requestTimeoutMs: config.requestTimeoutMs,
+  })
+}
+
+function ratingRegionSignature(config: MetadataRuntimeConfig): string {
+  return JSON.stringify([
+    config.preferredRatingRegion,
+    ...config.fallbackRatingRegions,
+  ])
+}
+
+function sameMetadataConfig(
+  left: MetadataRuntimeConfig,
+  right: MetadataRuntimeConfig
+): boolean {
+  return (
+    left.tmdbApiKey === right.tmdbApiKey &&
+    left.language === right.language &&
+    left.preferredRatingRegion === right.preferredRatingRegion &&
+    left.requestTimeoutMs === right.requestTimeoutMs &&
+    left.fallbackRatingRegions.length === right.fallbackRatingRegions.length &&
+    left.fallbackRatingRegions.every(
+      (region, index) => region === right.fallbackRatingRegions[index]
+    )
+  )
 }

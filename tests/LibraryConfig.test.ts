@@ -103,6 +103,40 @@ describe('library configuration', () => {
     }
   })
 
+  test('allows 24:00 only as the exact end-of-day boundary', () => {
+    const channel = {
+      id: 'all-day',
+      name: 'All Day',
+      enabled: true,
+      timezone: 'UTC',
+      slots: [
+        {
+          days: ['mon'],
+          start: '00:00',
+          end: '24:00',
+          groups: ['all-day'],
+        },
+      ],
+    }
+    expect(validateLibraryChannels([channel])[0]?.slots[0]?.end).toBe('24:00')
+    expect(() =>
+      validateLibraryChannels([
+        {
+          ...channel,
+          slots: [{ ...channel.slots[0], start: '24:00', end: '24:00' }],
+        },
+      ])
+    ).toThrow(/invalid schedule time/i)
+    expect(() =>
+      validateLibraryChannels([
+        {
+          ...channel,
+          slots: [{ ...channel.slots[0], end: '24:01' }],
+        },
+      ])
+    ).toThrow(/invalid schedule time/i)
+  })
+
   test('rejects the same group delimiters in a loaded collection policy', () => {
     const directory = mkdtempSync(join(tmpdir(), 'toasttv-policy-groups-'))
     try {

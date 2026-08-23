@@ -17,7 +17,9 @@ export class HeadlessDashboardService {
     private readonly channels: ChannelService,
     private readonly indexer: Pick<MediaIndexer, 'getScanState'>,
     private readonly metadata: Pick<MetadataEnrichmentService, 'getState'>,
-    private readonly metadataConfig: PublicMetadataConfig,
+    private readonly metadataConfig:
+      | PublicMetadataConfig
+      | (() => PublicMetadataConfig),
     private readonly presence?: Pick<ClientPresenceService, 'getSnapshot'>
   ) {}
 
@@ -40,6 +42,10 @@ export class HeadlessDashboardService {
     ])
     const scan = this.indexer.getScanState()
     const metadata = this.metadata.getState()
+    const metadataConfig =
+      typeof this.metadataConfig === 'function'
+        ? this.metadataConfig()
+        : this.metadataConfig
     const presence = this.presence?.getSnapshot()
     const warnings: HeadlessDashboardWarningViewModel[] = []
     const channelConfigurationError =
@@ -49,17 +55,17 @@ export class HeadlessDashboardService {
       summary.tvCollections === 0 &&
       summary.movieCollections === 0
     const metadataDegraded =
-      this.metadataConfig.configured &&
+      metadataConfig.configured &&
       (metadata.providerHealth === 'degraded' ||
         metadata.status === 'failed' ||
         metadata.failed > 0 ||
         metadataErrors.length > 0)
     const metadataVerified =
-      this.metadataConfig.configured &&
+      metadataConfig.configured &&
       metadata.providerHealth === 'connected' &&
       !metadataDegraded
-    const metadataStatusMessage = !this.metadataConfig.configured
-      ? 'Set TMDB_API_KEY to enable automatic collection matching.'
+    const metadataStatusMessage = !metadataConfig.configured
+      ? 'Add a TMDB API key in Metadata settings to enable automatic collection matching.'
       : metadataDegraded
         ? metadata.providerMessage ??
           'One or more metadata records failed and need attention.'
@@ -206,14 +212,14 @@ export class HeadlessDashboardService {
       },
       metadata: {
         providerName: 'TMDB',
-        status: !this.metadataConfig.configured
+        status: !metadataConfig.configured
           ? 'not_configured'
           : metadataDegraded
             ? 'degraded'
             : metadataVerified
               ? 'connected'
               : 'offline',
-        preferredRegion: this.metadataConfig.preferredRatingRegion,
+        preferredRegion: metadataConfig.preferredRatingRegion,
         matchedCollections: summary.metadataMatchedCollections,
         pendingCollections: summary.metadataPendingCollections,
         reviewCollections: summary.metadataReviewCollections,

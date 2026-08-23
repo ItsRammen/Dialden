@@ -540,7 +540,7 @@ The initial headless milestone now provides:
 - collection-first TV/movie indexing, cached sequential TMDB enrichment, configurable rating policy, persistent parent overrides, and metadata/approval review queues;
 - fail-closed collection eligibility, independent probing, root-availability gating, and deterministic Kids 7 channel/now/guide APIs;
 - collection/season library pages, separate scan and metadata progress over SSE, cached size-restricted artwork, and a headless dashboard backed by real channel/library/client state;
-- ephemeral webOS client heartbeats plus editable channel CRUD and persistent per-channel on-air/off-air controls using broadcast terminology rather than physical-TV power state;
+- ephemeral webOS client heartbeats plus editable channel CRUD, previewed catalog-driven station automation, persistent collection-group assignments, and per-channel on-air/off-air controls using broadcast terminology rather than physical-TV power state;
 - `/api/v1/health` checking SQLite access and the FFmpeg toolchain;
 - shutdown stops the playback loop and watcher, retains and awaits the background scan task, and prevents that task from starting a watcher after shutdown begins.
 
@@ -552,7 +552,7 @@ The legacy Pi path remains the default outside the container. Shutdown is not ye
 /app/data/
   config.json       bootstrap seed/input when present
   media.db          SQLite catalog and settings
-  channels.json     editable channel definitions and manual off-air switches; created on first mutation
+  channels.json     editable channel definitions, generated collection groups, and manual off-air switches
   logo.png          mutable management UI logo
   thumbnails/       generated thumbnails
   artwork/          cached provider-sized TMDB collection artwork
@@ -573,8 +573,11 @@ The named `toasttv-data` volume preserves the implemented `/app/data` contents a
 The image seeds `kids-7.library.json` into appdata only when it is missing, so
 Unraid policy edits survive image replacement. Container `TZ` controls logs and
 legacy date handling. The policy seeds channel definitions; after an edit,
-effective channel timezones and slots plus manual on-air/off-air state are
-atomically stored in `channels.json` and restored at startup. The supplied
+effective channel timezones and slots, generated collection-group membership,
+and manual on-air/off-air state are atomically stored in `channels.json` and
+restored at startup. Station previews can filter parent-allowed, technically playable
+collections by title, TMDB genre, original network, and production studio.
+Brand-style mixes are personal catalog filters, never official schedules. The supplied
 Compose file explicitly selects its separate read-only `/app/config` policy;
 its seeded appdata copy is not active unless `TOASTTV_LIBRARY_POLICY` is changed.
 

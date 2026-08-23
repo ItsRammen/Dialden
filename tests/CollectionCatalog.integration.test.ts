@@ -148,6 +148,68 @@ describe('collection-first catalog integration', () => {
     })
   })
 
+  test('keeps a parent approval made while the scanner is probing a file', async () => {
+    filesystem.files = [
+      `${TV_ROOT}/Bluey (2018)/Season 01/Bluey - S01E01 - Magic Xylophone.mkv`,
+    ]
+    let releaseProbe: ((metadata: MediaMetadata) => void) | undefined
+    let announceProbeStarted: (() => void) | undefined
+    const probeStarted = new Promise<void>((resolve) => {
+      announceProbeStarted = resolve
+    })
+    const delayedProbe: IMediaProbe = {
+      async getDuration() {
+        return 420
+      },
+      getMetadata() {
+        announceProbeStarted?.()
+        return new Promise<MediaMetadata>((resolve) => {
+          releaseProbe = resolve
+        })
+      },
+    }
+    indexer = new MediaIndexer(
+      mediaConfig,
+      interludeConfig,
+      repository,
+      filesystem,
+      delayedProbe
+    )
+
+    const scan = indexer.scanAll()
+    await probeStarted
+    const [collection] = await repository.getCollections({ kind: 'tv' })
+    expect(collection?.effectiveDecision).toBe('review')
+    await repository.updateCollectionOverride(collection?.id ?? 0, 'allow')
+
+    if (!releaseProbe) throw new Error('Expected the media probe to be pending')
+    releaseProbe({
+      durationSeconds: 420,
+      codec: 'h264',
+      width: 1920,
+      height: 1080,
+      fps: 24,
+      bitrateMbps: 4,
+    })
+    expect(await scan).toBe(1)
+
+    const approvedFiles = await repository.getMediaPage({
+      filter: 'approved',
+      limit: 100,
+      offset: 0,
+    })
+    expect(approvedFiles.total).toBe(1)
+    expect(approvedFiles.items[0]).toMatchObject({
+      collectionId: collection?.id,
+      policyEnabled: true,
+      playbackEnabled: true,
+    })
+    expect(await repository.getCollectionById(collection?.id ?? 0)).toMatchObject({
+      parentOverride: 'allow',
+      scheduleEligibleCount: 1,
+    })
+  })
+
   test('preserves a parent override while a collection disappears and is upserted again', async () => {
     const [created] = await repository.upsertCollections([
       {

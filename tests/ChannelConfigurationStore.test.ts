@@ -27,12 +27,17 @@ describe('ChannelConfigurationStore', () => {
       const path = join(directory, 'channels.json')
       const store = new ChannelConfigurationStore(path, [channel])
 
-      expect(store.load()).toEqual({ channels: [channel], manuallyOffAir: [] })
+      expect(store.load()).toEqual({
+        channels: [channel],
+        manuallyOffAir: [],
+        collectionGroups: [],
+      })
       store.save({ channels: [channel], manuallyOffAir: ['kids-club'] })
 
       expect(store.load()).toEqual({
         channels: [channel],
         manuallyOffAir: ['kids-club'],
+        collectionGroups: [],
       })
       expect(JSON.parse(readFileSync(path, 'utf8'))).toMatchObject({
         version: 1,
@@ -40,7 +45,11 @@ describe('ChannelConfigurationStore', () => {
       })
 
       store.save({ channels: [channel], manuallyOffAir: [] })
-      expect(store.load()).toEqual({ channels: [channel], manuallyOffAir: [] })
+      expect(store.load()).toEqual({
+        channels: [channel],
+        manuallyOffAir: [],
+        collectionGroups: [],
+      })
     } finally {
       rmSync(directory, { recursive: true, force: true })
     }

@@ -5,6 +5,11 @@ import {
   type LibraryChannelPolicy,
 } from '../config/library'
 import type { ChannelService } from '../services/ChannelService'
+import type { StationBuildRequest } from '../services/ChannelService'
+import type {
+  StationAirtimeId,
+  StationPresetId,
+} from '../services/StationAutomationService'
 import { renderChannelAdministration } from '../templates/channelAdministration'
 
 interface ChannelControllerDeps {
@@ -43,6 +48,29 @@ export function createChannelController({ channels }: ChannelControllerDeps) {
   controller.get('/api/admin/v1/channels', (c) =>
     c.json(channels.administrationSnapshot())
   )
+
+  controller.post('/api/admin/v1/channels/auto-build/preview', async (c) => {
+    try {
+      const request = await readJsonStationRequest(c.req.raw)
+      return c.json({
+        preview: await channels.previewAutomatedStationBuild(request),
+      })
+    } catch (error) {
+      return c.json({ error: safeMessage(error) }, 400)
+    }
+  })
+
+  controller.post('/api/admin/v1/channels/auto-build', async (c) => {
+    try {
+      const request = await readJsonStationRequest(c.req.raw)
+      return c.json(
+        { result: await channels.createAutomatedStation(request) },
+        201
+      )
+    } catch (error) {
+      return c.json({ error: safeMessage(error) }, 400)
+    }
+  })
 
   controller.post('/api/admin/v1/channels', async (c) => {
     try {
@@ -111,17 +139,66 @@ export function createChannelController({ channels }: ChannelControllerDeps) {
     }
   })
 
-  controller.get('/channels', (c) => {
+  controller.get('/channels', async (c) => {
     const changed = c.req.query('changed')
     return c.html(
       renderChannelAdministration(channels.administrationSnapshot(), {
+        ...(await automationSurface(channels)),
         editId: c.req.query('edit'),
+        automationSearch: readCatalogSearch(c.req.query('catalogSearch')),
         changed:
-          changed === 'created' || changed === 'updated' || changed === 'deleted'
+          changed === 'created' ||
+          changed === 'updated' ||
+          changed === 'deleted' ||
+          changed === 'generated'
             ? changed
             : undefined,
       })
     )
+  })
+
+  controller.post('/channels/auto-build', async (c) => {
+    let request: StationBuildRequest | undefined
+    let automationSearch = ''
+    try {
+      const data = await c.req.formData()
+      automationSearch = readCatalogSearch(textValue(data.get('catalogSearch')))
+      request = readFormStationRequest(data)
+      const action = textValue(data.get('action'))
+      if (action === 'search' || action === 'clear-search') {
+        if (action === 'clear-search') automationSearch = ''
+        return c.html(
+          renderChannelAdministration(channels.administrationSnapshot(), {
+            ...(await automationSurface(channels)),
+            automationDraft: request,
+            automationSearch,
+          })
+        )
+      }
+      if (action === 'create') {
+        await channels.createAutomatedStation(request)
+        return c.redirect('/channels?changed=generated', 303)
+      }
+      const preview = await channels.previewAutomatedStationBuild(request)
+      return c.html(
+        renderChannelAdministration(channels.administrationSnapshot(), {
+          ...(await automationSurface(channels)),
+          automationDraft: request,
+          automationPreview: preview,
+          automationSearch,
+        })
+      )
+    } catch (error) {
+      return c.html(
+        renderChannelAdministration(channels.administrationSnapshot(), {
+          ...(await automationSurface(channels)),
+          automationDraft: request,
+          automationSearch,
+          error: safeMessage(error),
+        }),
+        400
+      )
+    }
   })
 
   controller.post('/channels', async (c) => {
@@ -131,6 +208,7 @@ export function createChannelController({ channels }: ChannelControllerDeps) {
     } catch (error) {
       return c.html(
         renderChannelAdministration(channels.administrationSnapshot(), {
+          ...(await automationSurface(channels)),
           error: safeMessage(error),
         }),
         400
@@ -147,6 +225,7 @@ export function createChannelController({ channels }: ChannelControllerDeps) {
     } catch (error) {
       return c.html(
         renderChannelAdministration(channels.administrationSnapshot(), {
+          ...(await automationSurface(channels)),
           editId: c.req.param('id'),
           error: safeMessage(error),
         }),
@@ -198,6 +277,120 @@ export function createChannelController({ channels }: ChannelControllerDeps) {
   })
 
   return controller
+}
+
+async function readJsonStationRequest(
+  request: Request
+): Promise<StationBuildRequest> {
+  const contentType = request.headers.get('content-type')?.toLowerCase() ?? ''
+  if (!contentType.startsWith('application/json')) {
+    throw new Error('Content-Type must be application/json')
+  }
+  let value: unknown
+  try {
+    value = await request.json()
+  } catch {
+    throw new Error('Request body must contain valid JSON')
+  }
+  if (!value || typeof value !== 'object') {
+    throw new Error('Station request must be an object')
+  }
+  const candidate = value as Record<string, unknown>
+  return normalizeStationRequest({
+    id: candidate.id,
+    name: candidate.name,
+    timezone: candidate.timezone,
+    preset: candidate.preset,
+    airtime: candidate.airtime,
+    collectionIds: candidate.collectionIds,
+    genres: candidate.genres,
+    networks: candidate.networks,
+    studios: candidate.studios,
+  })
+}
+
+function readFormStationRequest(data: FormData): StationBuildRequest {
+  return normalizeStationRequest({
+    id: data.get('id'),
+    name: data.get('name'),
+    timezone: data.get('timezone'),
+    preset: data.get('preset'),
+    airtime: data.get('airtime'),
+    collectionIds: data.getAll('collectionIds'),
+    genres: data.getAll('genres'),
+    networks: data.getAll('networks'),
+    studios: data.getAll('studios'),
+  })
+}
+
+function normalizeStationRequest(value: {
+  id: unknown
+  name: unknown
+  timezone: unknown
+  preset: unknown
+  airtime?: unknown
+  collectionIds?: unknown
+  genres?: unknown
+  networks?: unknown
+  studios?: unknown
+}): StationBuildRequest {
+  const preset = textValue(value.preset)
+  if (!isStationPreset(preset)) throw new Error('Choose a valid station preset')
+  const airtime = textValue(value.airtime) || 'all-day'
+  if (!isStationAirtime(airtime)) throw new Error('Choose a valid airtime')
+  return {
+    id: textValue(value.id),
+    name: textValue(value.name),
+    timezone: textValue(value.timezone),
+    preset,
+    airtime,
+    collectionIds: readArray(value.collectionIds, 'collection IDs').map(
+      parseCollectionId
+    ),
+    genres: readArray(value.genres, 'genres').map(textValue),
+    networks: readArray(value.networks, 'networks').map(textValue),
+    studios: readArray(value.studios, 'studios').map(textValue),
+  }
+}
+
+function parseCollectionId(value: unknown): number {
+  if (typeof value === 'number') {
+    if (Number.isSafeInteger(value) && value > 0) return value
+    throw new Error('Collection selection is invalid')
+  }
+  const text = textValue(value)
+  if (!/^[1-9]\d*$/.test(text)) {
+    throw new Error('Collection selection is invalid')
+  }
+  const id = Number(text)
+  if (!Number.isSafeInteger(id)) {
+    throw new Error('Collection selection is invalid')
+  }
+  return id
+}
+
+function readArray(value: unknown, label: string): unknown[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.length > 1_000) {
+    throw new Error(`Selected ${label} are invalid`)
+  }
+  return value
+}
+
+function isStationPreset(value: string): value is StationPresetId {
+  return [
+    'all-approved-tv',
+    'family-animation',
+    'nickelodeon-style',
+    'movie-night',
+    'custom',
+  ].includes(value)
+}
+
+function isStationAirtime(value: string): value is StationAirtimeId {
+  return ['all-day', 'school-day', 'evening', 'weekend-mornings'].includes(
+    value
+  )
 }
 
 async function readJsonChannel(request: Request): Promise<LibraryChannelPolicy> {
@@ -254,6 +447,23 @@ function textValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function readCatalogSearch(value: unknown): string {
+  return textValue(value).slice(0, 100)
+}
+
 function safeMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+async function automationSurface(channels: ChannelService): Promise<{
+  automation?: Awaited<ReturnType<ChannelService['stationAutomationCatalog']>>
+  error?: string
+}> {
+  try {
+    return { automation: await channels.stationAutomationCatalog() }
+  } catch (error) {
+    return {
+      error: `Station automation catalog unavailable: ${safeMessage(error)}`,
+    }
+  }
 }

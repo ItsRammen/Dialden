@@ -8,7 +8,7 @@
   <ExtraParams>--init --stop-timeout=300</ExtraParams>
   <Icon>https://raw.githubusercontent.com/ItsRammen/ToatTV_Other/main/public/app-icon.png</Icon>
   <WebUI>http://[IP]:[PORT:1993]/</WebUI>
-  <Overview>Headless ToastTV server with collection-first TV and movie libraries, fail-closed Kids 7 ratings policy, parent review, deterministic channels, and an LG webOS client.</Overview>
+  <Overview>Headless ToastTV server with collection-first TV and movie libraries, fail-closed Kids 7 ratings policy, parent review, metadata-driven station automation, deterministic channels, and an LG webOS client.</Overview>
   <Support>https://github.com/ItsRammen/ToatTV_Other/issues</Support>
   <Project>https://github.com/ItsRammen/ToatTV_Other</Project>
   <TemplateURL>https://raw.githubusercontent.com/ItsRammen/ToatTV_Other/main/templates/toasttv.xml</TemplateURL>
@@ -16,8 +16,8 @@
   <Category>MediaApp:Video</Category>
   <ExtraSearchTerms>kids television channels schedule family media</ExtraSearchTerms>
   <Requires>Readable local TV and Movies directories on the Unraid host. Keep the Web UI on a trusted LAN because authentication is not implemented yet.</Requires>
-  <Changes>Initial Unraid template and multi-architecture GHCR image.</Changes>
-  <Date>2026-08-23</Date>
+  <Changes>0.7.0 adds in-app TMDB settings, metadata-driven station automation, and immediate collection-decision scheduling fixes.</Changes>
+  <Date>2026-08-24</Date>
   <MinVer>6.12.0</MinVer>
   <License>MIT</License>
 
@@ -27,10 +27,10 @@
   <Config Name="Movies" Target="/media/movies" Default="/mnt/user/Plex/Movies" Mode="ro" Description="Read-only movie library. Movies are grouped by folder and unknown or unrated titles never auto-approve." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/Plex/Movies</Config>
   <Config Name="Interludes" Target="/media/interludes" Default="/mnt/user/appdata/toasttv/interludes" Mode="ro" Description="Optional read-only station idents, bumpers, and interludes." Type="Path" Display="advanced" Required="false" Mask="false">/mnt/user/appdata/toasttv/interludes</Config>
   <Config Name="Container Timezone" Target="TZ" Default="Asia/Taipei" Mode="" Description="IANA timezone for logs and legacy date handling. Each channel's schedule timezone is configured in the persistent library policy." Type="Variable" Display="always" Required="true" Mask="false">Asia/Taipei</Config>
-  <Config Name="TMDB API Key" Target="TMDB_API_KEY" Default="" Mode="" Description="Optional server-side TMDB v3 API key. If omitted, new collections remain in Needs Review." Type="Variable" Display="always" Required="false" Mask="true"></Config>
-  <Config Name="Rating Region" Target="RATING_REGION" Default="US" Mode="" Description="Preferred ISO country code for movie certifications and TV content ratings." Type="Variable" Display="always" Required="true" Mask="false">US</Config>
-  <Config Name="Rating Fallback Regions" Target="RATING_FALLBACK_REGIONS" Default="" Mode="" Description="Optional comma-separated fallback country codes, such as AU,GB." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
-  <Config Name="TMDB Language" Target="TMDB_LANGUAGE" Default="en-US" Mode="" Description="TMDB metadata response language." Type="Variable" Display="advanced" Required="true" Mask="false">en-US</Config>
+  <Config Name="TMDB API Key (Bootstrap)" Target="TMDB_API_KEY" Default="" Mode="" Description="Optional first-start fallback. Prefer ToastTV Settings &gt; Metadata; saved appdata settings override this value." Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
+  <Config Name="Rating Region (Bootstrap)" Target="RATING_REGION" Default="US" Mode="" Description="Optional first-start ISO country-code fallback. Configure the live value in ToastTV Settings &gt; Metadata." Type="Variable" Display="advanced" Required="false" Mask="false">US</Config>
+  <Config Name="Rating Fallback Regions (Bootstrap)" Target="RATING_FALLBACK_REGIONS" Default="" Mode="" Description="Optional first-start comma-separated fallback country codes. Configure the live order in ToastTV Settings &gt; Metadata." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="TMDB Language (Bootstrap)" Target="TMDB_LANGUAGE" Default="en-US" Mode="" Description="Optional first-start metadata-language fallback. Configure the live value in ToastTV Settings &gt; Metadata." Type="Variable" Display="advanced" Required="false" Mask="false">en-US</Config>
   <Config Name="User ID" Target="PUID" Default="99" Mode="" Description="Unraid nobody user ID used for persistent appdata files." Type="Variable" Display="advanced" Required="true" Mask="false">99</Config>
   <Config Name="Group ID" Target="PGID" Default="100" Mode="" Description="Unraid users group ID used for persistent appdata files." Type="Variable" Display="advanced" Required="true" Mask="false">100</Config>
   <Config Name="TV Root" Target="TOASTTV_TV_MEDIA" Default="/media/tv" Mode="" Description="Managed TV root inside the container." Type="Variable" Display="advanced-hide" Required="true" Mask="false">/media/tv</Config>

@@ -31,6 +31,8 @@ export interface MetadataCandidate {
 export interface ProviderTitleDetails extends MetadataCandidate {
   readonly backdropPath?: string
   readonly genres: readonly string[]
+  readonly networks?: readonly string[]
+  readonly studios?: readonly string[]
 }
 
 /**

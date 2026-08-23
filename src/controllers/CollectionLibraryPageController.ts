@@ -516,7 +516,7 @@ function technicalModel(
     status: 'available',
     reason:
       collection.scheduleEligibleCount > 0
-        ? `${collection.scheduleEligibleCount} files are eligible for automatic schedules.`
+        ? `${collection.scheduleEligibleCount} ${collection.scheduleEligibleCount === 1 ? 'file is' : 'files are'} eligible for automatic schedules.`
         : 'Files are technically ready; approval or programming rules may still exclude them.',
     availableFiles: collection.readyFileCount,
     totalFiles: collection.fileCount,

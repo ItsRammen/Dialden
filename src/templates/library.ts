@@ -130,6 +130,9 @@ export function renderLibraryContent(props: LibraryProps): string {
   const pageCount = Math.max(1, Math.ceil(total / pageSize))
   const currentPage = Math.max(1, Math.min(page, pageCount))
   const navigation = { view, filter, search, page: currentPage }
+  const refreshHref = escapeHtml(libraryHref('/partials/library', navigation))
+  const libraryIsActuallyEmpty =
+    filter === 'all' && search.trim() === '' && total === 0
 
   // Build content based on filter
   let mediaContent = ''
@@ -172,7 +175,11 @@ export function renderLibraryContent(props: LibraryProps): string {
   }
 
   return `
-    <div class="library" id="library-content">
+    <div class="library" id="library-content"
+         hx-get="${refreshHref}"
+         hx-trigger="libraryEligibilityChanged from:body"
+         hx-target="this"
+         hx-swap="outerHTML">
       <h1>Media Library (${total})</h1>
       
       <!-- Toolbar -->
@@ -262,10 +269,10 @@ export function renderLibraryContent(props: LibraryProps): string {
 
       <div id="media-container">
         ${
-          filteredMedia.length === 0
+          libraryIsActuallyEmpty
             ? `<div class="empty-state">
                <span class="empty-icon">📺</span>
-               <p>No videos yet</p>
+               <p>No media indexed yet</p>
                <p class="empty-hint">${mediaWritable ? 'Drop files above or add to' : 'Add files on the host mount for'} <code>${safeMediaDirectory}</code></p>
              </div>`
             : mediaContent
@@ -468,15 +475,20 @@ function renderEligibilitySelect(item: MediaItem): string {
       : item.playbackOverride
         ? 'allow'
         : 'block'
+  const collectionDecision =
+    item.policyEnabled === true
+      ? 'allows scheduling'
+      : 'does not allow scheduling'
   return `
     <select class="type-select"
             name="mode"
             aria-label="Playback eligibility for ${escapeHtml(item.filename)}"
+            title="Remove the per-file override and follow this collection's current decision"
             hx-post="/api/playback-eligibility/${item.id}"
             hx-trigger="change"
             hx-target="#toast-container"
             hx-swap="innerHTML">
-      <option value="policy" ${mode === 'policy' ? 'selected' : ''}>Use collection decision</option>
+      <option value="policy" ${mode === 'policy' ? 'selected' : ''}>Use collection decision — ${collectionDecision}</option>
       <option value="allow" ${mode === 'allow' ? 'selected' : ''}>Parent approve</option>
       <option value="block" ${mode === 'block' ? 'selected' : ''}>Never schedule</option>
     </select>
@@ -486,10 +498,12 @@ function renderEligibilitySelect(item: MediaItem): string {
 function renderDeleteButton(item: MediaItem): string {
   return `
     <button class="btn btn-danger btn-small"
+            aria-label="Remove ${escapeHtml(item.filename)} from the media index"
+            title="Remove from the index; the host file is not deleted"
             hx-delete="/api/media/${item.id}"
             hx-target="#media-${item.id}"
             hx-swap="outerHTML"
-            hx-confirm="Delete ${escapeHtml(item.filename)}?">
+            hx-confirm="Remove ${escapeHtml(item.filename)} from the index? The host file remains and will return on the next rescan.">
       ✕
     </button>
   `

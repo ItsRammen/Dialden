@@ -7,8 +7,14 @@ import type {
   ProviderTitleDetails,
 } from '../src/metadata/types'
 import { MetadataProviderError } from '../src/metadata/types'
-import type { MetadataRuntimeConfig } from '../src/config/metadata'
-import type { MediaItemInput } from '../src/repositories/IMediaRepository'
+import {
+  METADATA_CONFIG_SETTING_KEY,
+  type MetadataRuntimeConfig,
+} from '../src/config/metadata'
+import type {
+  IMediaRepository,
+  MediaItemInput,
+} from '../src/repositories/IMediaRepository'
 import { MediaRepository } from '../src/repositories/MediaRepository'
 import { MetadataEnrichmentService } from '../src/services/metadata/MetadataEnrichmentService'
 import type { RatingPolicyProfile } from '../src/policy/PolicyEngine'
@@ -29,14 +35,29 @@ interface ProviderScenario {
   readonly ratingStatus?: CertificationLookup['status']
   readonly searchError?: Error
   readonly connectionError?: Error
+  readonly detailsForLanguage?: (
+    language: string,
+    candidate: MetadataCandidate
+  ) => ProviderTitleDetails
 }
 
 function providerFor(scenario: ProviderScenario): MetadataProvider {
   const candidates = [...(scenario.candidates ?? [])]
-  const detailsFor = (externalId: string): ProviderTitleDetails => {
+  const detailsFor = (
+    externalId: string,
+    language: string
+  ): ProviderTitleDetails => {
     const candidate = candidates.find((item) => item.externalId === externalId)
     if (!candidate) throw new Error(`Unexpected details lookup for ${externalId}`)
-    return { ...candidate, genres: ['Animation', 'Family'] }
+    if (scenario.detailsForLanguage) {
+      return scenario.detailsForLanguage(language, candidate)
+    }
+    return {
+      ...candidate,
+      genres: ['Animation', 'Family'],
+      networks: ['ABC Kids'],
+      studios: ['Ludo Studio'],
+    }
   }
   const rating = (): CertificationLookup => ({
     status: scenario.ratingStatus ?? (scenario.certification ? 'resolved' : 'missing'),
@@ -72,11 +93,11 @@ function providerFor(scenario: ProviderScenario): MetadataProvider {
       if (scenario.searchError) throw scenario.searchError
       return candidates
     },
-    async getMovie(externalId: string) {
-      return detailsFor(externalId)
+    async getMovie(externalId: string, input) {
+      return detailsFor(externalId, input.language)
     },
-    async getTV(externalId: string) {
-      return detailsFor(externalId)
+    async getTV(externalId: string, input) {
+      return detailsFor(externalId, input.language)
     },
     async getMovieCertification() {
       return rating()
@@ -207,6 +228,8 @@ describe('metadata enrichment and policy integration', () => {
       metadataStatus: 'matched',
       certification: 'TV-Y7',
       ratingStatus: 'resolved',
+      networks: ['ABC Kids'],
+      studios: ['Ludo Studio'],
       policyDecision: 'allow',
       effectiveDecision: 'allow',
       scheduleEligibleCount: 1,
@@ -539,5 +562,344 @@ describe('metadata enrichment and policy integration', () => {
       scheduleEligibleCount: 0,
     })
     expect(await repository.getAllVideos()).toEqual([])
+  })
+
+  test('tests supplied settings without persisting or exposing the candidate key', async () => {
+    const builtConfigs: MetadataRuntimeConfig[] = []
+    const service = new MetadataEnrichmentService(
+      repository,
+      providerFor({ configured: true }),
+      runtimeConfig,
+      undefined,
+      (config) => {
+        builtConfigs.push(config)
+        return providerFor({ configured: config.tmdbApiKey !== null })
+      }
+    )
+    const candidateKey = 'candidate-secret-value-123456'
+
+    await service.testConfiguration({})
+    await service.testConfiguration({
+      tmdbApiKey: candidateKey,
+      language: 'zh-tw',
+      preferredRatingRegion: 'tw',
+      fallbackRatingRegions: 'US',
+      requestTimeoutMs: '2500',
+    })
+
+    expect(service.getState().providerHealth).toBe('connected')
+    expect(builtConfigs).toEqual([
+      {
+        tmdbApiKey: candidateKey,
+        language: 'zh-TW',
+        preferredRatingRegion: 'TW',
+        fallbackRatingRegions: ['US'],
+        requestTimeoutMs: 2500,
+      },
+    ])
+    expect(await repository.getSetting(METADATA_CONFIG_SETTING_KEY)).toBeNull()
+    expect(service.getPublicConfig()).toMatchObject({
+      configured: true,
+      language: runtimeConfig.language,
+    })
+    expect(JSON.stringify(service.getPublicConfig())).not.toContain(candidateKey)
+  })
+
+  test('keeps the saved and active configuration unchanged when region invalidation fails', async () => {
+    const collection = await addCollection('Bluey', 2018)
+    const candidate: MetadataCandidate = {
+      provider: 'tmdb',
+      externalId: '82728',
+      mediaType: 'tv',
+      title: 'Bluey',
+      year: 2018,
+    }
+    const initial = new MetadataEnrichmentService(
+      repository,
+      providerFor({ candidates: [candidate], certification: 'TV-Y7' }),
+      runtimeConfig
+    )
+    await initial.synchronizeRatingRegions()
+    await initial.runPending()
+
+    const invalidationFailure = new Error('simulated invalidation failure')
+    const failingRepository = new Proxy(repository as IMediaRepository, {
+      get(target, property, receiver) {
+        if (property === 'updateCollectionMetadata') {
+          return async (
+            id: number,
+            metadata: Parameters<
+              IMediaRepository['updateCollectionMetadata']
+            >[1]
+          ) => {
+            if (metadata.status === 'pending') throw invalidationFailure
+            return target.updateCollectionMetadata(id, metadata)
+          }
+        }
+        const value = Reflect.get(target, property, receiver) as unknown
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+    let activeProviderTests = 0
+    let candidateProviderTests = 0
+    const activeProvider: MetadataProvider = {
+      ...providerFor({ configured: true }),
+      async testConnection() {
+        activeProviderTests++
+      },
+    }
+    const service = new MetadataEnrichmentService(
+      failingRepository,
+      activeProvider,
+      runtimeConfig,
+      undefined,
+      () => ({
+        ...providerFor({ configured: true }),
+        async testConnection() {
+          candidateProviderTests++
+        },
+      })
+    )
+
+    await expect(
+      service.updateConfiguration({ preferredRatingRegion: 'AU' })
+    ).rejects.toBe(invalidationFailure)
+
+    expect(service.getPublicConfig()).toMatchObject({
+      language: 'en-US',
+      preferredRatingRegion: 'US',
+    })
+    expect(await repository.getSetting(METADATA_CONFIG_SETTING_KEY)).toBeNull()
+    await service.testConnection()
+    expect(activeProviderTests).toBe(1)
+    expect(candidateProviderTests).toBe(0)
+    expect(await repository.getCollectionById(collection.id)).toMatchObject({
+      metadataStatus: 'matched',
+      certification: 'TV-Y7',
+      policyDecision: 'review',
+      effectiveDecision: 'review',
+      scheduleEligibleCount: 0,
+    })
+  })
+
+  test('requeues direct matches when language changes and refreshes localized fields', async () => {
+    const collection = await addCollection('Bluey', 2018)
+    const candidate: MetadataCandidate = {
+      provider: 'tmdb',
+      externalId: '82728',
+      mediaType: 'tv',
+      title: 'Bluey',
+      originalTitle: 'Bluey',
+      year: 2018,
+    }
+    const requestedLanguages: string[] = []
+    const service = new MetadataEnrichmentService(
+      repository,
+      providerFor({ candidates: [candidate], certification: 'TV-Y7' }),
+      runtimeConfig,
+      undefined,
+      () =>
+        providerFor({
+          candidates: [candidate],
+          certification: 'TV-Y7',
+          detailsForLanguage(language) {
+            requestedLanguages.push(language)
+            return {
+              ...candidate,
+              title: '妙妙犬布麗',
+              overview: '繁體中文簡介',
+              posterPath: '/bluey-zh-poster.jpg',
+              backdropPath: '/bluey-zh-backdrop.jpg',
+              genres: ['動畫', '家庭'],
+              networks: ['澳洲兒童頻道'],
+              studios: ['魯多工作室'],
+            }
+          },
+        })
+    )
+    await service.synchronizeRatingRegions()
+    await service.runPending()
+    expect(await repository.getCollectionById(collection.id)).toMatchObject({
+      metadataStatus: 'matched',
+      metadataTitle: 'Bluey',
+      policyDecision: 'allow',
+    })
+
+    await service.updateConfiguration({ language: 'zh-TW' })
+    expect(await repository.getCollectionById(collection.id)).toMatchObject({
+      metadataStatus: 'pending',
+      policyDecision: 'allow',
+      effectiveDecision: 'allow',
+      scheduleEligibleCount: 1,
+    })
+
+    await service.runPending()
+    expect(requestedLanguages).toEqual(['zh-TW'])
+    expect(await repository.getCollectionById(collection.id)).toMatchObject({
+      metadataStatus: 'matched',
+      metadataTitle: '妙妙犬布麗',
+      overview: '繁體中文簡介',
+      posterPath: '/bluey-zh-poster.jpg',
+      backdropPath: '/bluey-zh-backdrop.jpg',
+      genres: ['動畫', '家庭'],
+      networks: ['澳洲兒童頻道'],
+      studios: ['魯多工作室'],
+      certification: 'TV-Y7',
+      policyDecision: 'allow',
+    })
+    expect(
+      JSON.parse(
+        (await repository.getSetting(METADATA_CONFIG_SETTING_KEY)) ?? '{}'
+      ).language
+    ).toBe('zh-TW')
+  })
+
+  test('does not let a pending run hydrate a region change with the old provider', async () => {
+    const collection = await addCollection('Bluey', 2018)
+    const candidate: MetadataCandidate = {
+      provider: 'tmdb',
+      externalId: '82728',
+      mediaType: 'tv',
+      title: 'Bluey',
+      year: 2018,
+    }
+    const initial = new MetadataEnrichmentService(
+      repository,
+      providerFor({ candidates: [candidate], certification: 'TV-Y7' }),
+      runtimeConfig
+    )
+    await initial.synchronizeRatingRegions()
+    await initial.runPending()
+
+    let releaseInvalidation!: () => void
+    let invalidationStarted!: () => void
+    const invalidationGate = new Promise<void>((resolve) => {
+      releaseInvalidation = resolve
+    })
+    const invalidationEntered = new Promise<void>((resolve) => {
+      invalidationStarted = resolve
+    })
+    let paused = false
+    const gatedRepository = new Proxy(repository as IMediaRepository, {
+      get(target, property, receiver) {
+        if (property === 'updateCollectionMetadata') {
+          return async (
+            id: number,
+            metadata: Parameters<
+              IMediaRepository['updateCollectionMetadata']
+            >[1]
+          ) => {
+            if (!paused && metadata.status === 'pending') {
+              paused = true
+              invalidationStarted()
+              await invalidationGate
+            }
+            return target.updateCollectionMetadata(id, metadata)
+          }
+        }
+        const value = Reflect.get(target, property, receiver) as unknown
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+    let oldProviderHydrations = 0
+    let newProviderHydrations = 0
+    const oldBase = providerFor({
+      candidates: [candidate],
+      certification: 'TV-Y7',
+    })
+    const oldProvider: MetadataProvider = {
+      ...oldBase,
+      async getTV(externalId, input) {
+        oldProviderHydrations++
+        return oldBase.getTV(externalId, input)
+      },
+    }
+    const service = new MetadataEnrichmentService(
+      gatedRepository,
+      oldProvider,
+      runtimeConfig,
+      undefined,
+      () => {
+        const nextBase = providerFor({
+          candidates: [candidate],
+          certification: 'TV-Y7',
+          certificationRegion: 'AU',
+        })
+        return {
+          ...nextBase,
+          async getTV(externalId, input) {
+            newProviderHydrations++
+            return nextBase.getTV(externalId, input)
+          },
+        }
+      }
+    )
+
+    const update = service.updateConfiguration({
+      preferredRatingRegion: 'AU',
+    })
+    await invalidationEntered
+    const pending = service.runPending()
+    await Promise.resolve()
+    expect(oldProviderHydrations).toBe(0)
+    expect(newProviderHydrations).toBe(0)
+
+    releaseInvalidation()
+    await update
+    await pending
+
+    expect(oldProviderHydrations).toBe(0)
+    expect(newProviderHydrations).toBe(1)
+    expect(service.getPublicConfig().preferredRatingRegion).toBe('AU')
+    expect(await repository.getCollectionById(collection.id)).toMatchObject({
+      metadataStatus: 'matched',
+      certificationRegion: 'AU',
+      policyDecision: 'allow',
+    })
+  })
+
+  test('persists a live provider swap while blank key input keeps the secret', async () => {
+    const builtConfigs: MetadataRuntimeConfig[] = []
+    const service = new MetadataEnrichmentService(
+      repository,
+      providerFor({ configured: true }),
+      runtimeConfig,
+      undefined,
+      (config) => {
+        builtConfigs.push(config)
+        return providerFor({ configured: config.tmdbApiKey !== null })
+      }
+    )
+
+    const publicConfig = await service.updateConfiguration({
+      tmdbApiKey: '',
+      language: 'en-GB',
+      preferredRatingRegion: 'gb',
+      fallbackRatingRegions: 'US, GB',
+      requestTimeoutMs: '3500',
+    })
+
+    expect(builtConfigs[0]).toEqual({
+      tmdbApiKey: runtimeConfig.tmdbApiKey,
+      language: 'en-GB',
+      preferredRatingRegion: 'GB',
+      fallbackRatingRegions: ['US'],
+      requestTimeoutMs: 3500,
+    })
+    expect(publicConfig).toEqual({
+      provider: 'tmdb',
+      configured: true,
+      language: 'en-GB',
+      preferredRatingRegion: 'GB',
+      fallbackRatingRegions: ['US'],
+      requestTimeoutMs: 3500,
+    })
+    expect(JSON.stringify(publicConfig)).not.toContain(runtimeConfig.tmdbApiKey!)
+
+    const saved = JSON.parse(
+      (await repository.getSetting(METADATA_CONFIG_SETTING_KEY)) ?? '{}'
+    )
+    expect(saved.tmdbApiKey).toBe(runtimeConfig.tmdbApiKey)
+    expect(saved.preferredRatingRegion).toBe('GB')
   })
 })

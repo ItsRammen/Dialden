@@ -40,14 +40,22 @@ export interface TmdbGenre {
   readonly name?: unknown
 }
 
+export interface TmdbNamedEntity {
+  readonly id?: unknown
+  readonly name?: unknown
+}
+
 export interface TmdbMovieDetails extends TmdbMovieSearchResult {
   readonly backdrop_path?: unknown
   readonly genres?: unknown
+  readonly production_companies?: unknown
 }
 
 export interface TmdbTVDetails extends TmdbTVSearchResult {
   readonly backdrop_path?: unknown
   readonly genres?: unknown
+  readonly networks?: unknown
+  readonly production_companies?: unknown
 }
 
 export interface TmdbMovieReleaseDate {

@@ -94,6 +94,11 @@ describe('TMDB metadata provider adapter', () => {
           poster_path: '/bluey.jpg',
           backdrop_path: '/bluey-bg.jpg',
           genres: [{ id: 16, name: 'Animation' }, { id: 10751, name: 'Family' }],
+          networks: [{ id: 13, name: 'ABC Kids' }],
+          production_companies: [
+            { id: 1, name: 'Ludo Studio' },
+            { id: 2, name: 'Ludo Studio' },
+          ],
         }),
       }),
     })
@@ -109,6 +114,30 @@ describe('TMDB metadata provider adapter', () => {
       posterPath: '/bluey.jpg',
       backdropPath: '/bluey-bg.jpg',
       genres: ['Animation', 'Family'],
+      networks: ['ABC Kids'],
+      studios: ['Ludo Studio'],
+    })
+  })
+
+  test('maps movie production companies as studio facets', async () => {
+    const provider = new TmdbMetadataProvider({
+      client: stubClient({
+        getMovie: async () => ({
+          id: 13,
+          title: 'Example Movie',
+          genres: [{ id: 10751, name: 'Family' }],
+          production_companies: [
+            { id: 3, name: 'Example Pictures' },
+            { id: 4, name: 'Example Animation' },
+          ],
+        }),
+      }),
+    })
+
+    expect(await provider.getMovie('13', { language: 'en-US' })).toMatchObject({
+      genres: ['Family'],
+      networks: [],
+      studios: ['Example Pictures', 'Example Animation'],
     })
   })
 

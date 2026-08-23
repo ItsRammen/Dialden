@@ -124,12 +124,12 @@ describe("UpdateService", () => {
 
 		expect(cached).not.toBeNull();
 		expect(cached?.latestVersion).toBe("0.7.0");
-		expect(cached?.updateAvailable).toBe(true);
+		expect(cached?.updateAvailable).toBe(false);
 	});
 
 	test("should report isUpdating as false initially", () => {
 		const service = new UpdateService(client);
 		expect(service.isUpdating).toBe(false);
-		expect(service.currentVersion).toBe("0.6.5");
+		expect(service.currentVersion).toBe("0.7.0");
 	});
 });

@@ -81,6 +81,8 @@ CREATE TABLE IF NOT EXISTS media_collections (
   poster_path TEXT,
   backdrop_path TEXT,
   genres_json TEXT NOT NULL DEFAULT '[]',
+  networks_json TEXT NOT NULL DEFAULT '[]',
+  studios_json TEXT NOT NULL DEFAULT '[]',
   certification TEXT,
   certification_region TEXT,
   rating_status TEXT NOT NULL DEFAULT 'missing',
@@ -116,7 +118,10 @@ const MEDIA_COLUMNS = `
   date_start, date_end, codec, width, height, warning, mtime, compatibility,
   root_id, relative_path, library_kind, collection_title,
   policy_enabled, playback_override, root_available,
-  collection_id, season_number, episode_number, episode_title
+  collection_id,
+  (SELECT identity_key FROM media_collections
+    WHERE media_collections.id = media.collection_id) AS collection_identity_key,
+  season_number, episode_number, episode_title
 `
 
 /** One fail-closed expression shared by every collection query/projection. */
@@ -387,6 +392,8 @@ export class MediaRepository implements IMediaRepository {
       transaction()
     }
 
+    this.migrateStationFacets()
+
     this.sanitizeAndGuardCollectionOverrides()
 
     this.db.exec(
@@ -406,6 +413,50 @@ export class MediaRepository implements IMediaRepository {
     )
 
     console.log(`Initialized media database at ${this.dbPath}`)
+  }
+
+  /** Versioned one-time queue for network/production-company station facets. */
+  private migrateStationFacets(): void {
+    if (!this.db) throw new Error('Repository not initialized')
+    const stationFacetMigration = this.db
+      .prepare('SELECT version FROM schema_migrations WHERE version = 2')
+      .get() as { version: number } | null
+    if (!stationFacetMigration) {
+      const collectionColumns = this.db
+        .prepare('PRAGMA table_info(media_collections)')
+        .all() as Array<{ name: string }>
+      const hasCollectionColumn = (name: string) =>
+        collectionColumns.some((column) => column.name === name)
+      const transaction = this.db.transaction(() => {
+        if (!hasCollectionColumn('networks_json')) {
+          this.db!.exec(
+            `ALTER TABLE media_collections ADD COLUMN networks_json TEXT NOT NULL DEFAULT '[]'`
+          )
+        }
+        if (!hasCollectionColumn('studios_json')) {
+          this.db!.exec(
+            `ALTER TABLE media_collections ADD COLUMN studios_json TEXT NOT NULL DEFAULT '[]'`
+          )
+        }
+        // Existing matched rows predate these facets. Queue a direct hydrate
+        // by stable external ID; metadata locks and parent overrides remain
+        // untouched, and the sequential worker runs after the startup scan.
+        this.db!.exec(`
+          UPDATE media_collections
+          SET metadata_status = 'pending',
+              metadata_error = NULL,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE metadata_provider = 'tmdb'
+            AND metadata_external_id IS NOT NULL
+            AND trim(metadata_external_id) <> ''
+            AND metadata_status IN ('matched', 'manual')
+        `)
+        this.db!.prepare(
+          `INSERT INTO schema_migrations (version) VALUES (2)`
+        ).run()
+      })
+      transaction()
+    }
   }
 
   private sanitizeAndGuardCollectionOverrides(): void {
@@ -705,11 +756,15 @@ export class MediaRepository implements IMediaRepository {
     const limit = Math.max(1, Math.min(250, Math.trunc(options.limit ?? 100)))
     const offset = Math.max(0, Math.trunc(options.offset ?? 0))
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
+    const having = options.scheduleEligibleOnly
+      ? 'HAVING schedule_eligible_count > 0'
+      : ''
     const rows = this.db
       .prepare(`
         ${COLLECTION_AGGREGATE_SELECT}
         ${where}
         GROUP BY collection.id
+        ${having}
         ORDER BY COALESCE(collection.metadata_title, collection.parsed_title)
           COLLATE NOCASE, collection.id
         LIMIT ? OFFSET ?
@@ -901,18 +956,20 @@ export class MediaRepository implements IMediaRepository {
   ): Promise<boolean> {
     if (!this.db) throw new Error('Repository not initialized')
     if (!this.isPolicyDecision(decision)) return false
-    const result = this.db
-      .prepare(`
-        UPDATE media_collections
-        SET policy_decision = ?, policy_reason = ?, policy_profile_id = ?,
-            policy_version = policy_version + 1,
-            policy_evaluated_at = CURRENT_TIMESTAMP,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `)
-      .run(decision, reason, profileId, id)
-    if (result.changes > 0) this.syncCollectionEligibility(id)
-    return result.changes > 0
+    return this.db.transaction(() => {
+      const result = this.db!
+        .prepare(`
+          UPDATE media_collections
+          SET policy_decision = ?, policy_reason = ?, policy_profile_id = ?,
+              policy_version = policy_version + 1,
+              policy_evaluated_at = CURRENT_TIMESTAMP,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `)
+        .run(decision, reason, profileId, id)
+      if (result.changes > 0) this.syncCollectionEligibility(id)
+      return result.changes > 0
+    })()
   }
 
   async updateCollectionOverride(
@@ -923,17 +980,19 @@ export class MediaRepository implements IMediaRepository {
     if (decision !== null && decision !== 'allow' && decision !== 'block') {
       return false
     }
-    const result = this.db
-      .prepare(`
-        UPDATE media_collections
-        SET parent_override = ?,
-            override_at = CASE WHEN ? IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `)
-      .run(decision, decision, id)
-    if (result.changes > 0) this.syncCollectionEligibility(id)
-    return result.changes > 0
+    return this.db.transaction(() => {
+      const result = this.db!
+        .prepare(`
+          UPDATE media_collections
+          SET parent_override = ?,
+              override_at = CASE WHEN ? IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `)
+        .run(decision, decision, id)
+      if (result.changes > 0) this.syncCollectionEligibility(id)
+      return result.changes > 0
+    })()
   }
 
   async updateCollectionMetadata(
@@ -971,6 +1030,8 @@ export class MediaRepository implements IMediaRepository {
       ['posterPath', 'poster_path', scalar],
       ['backdropPath', 'backdrop_path', scalar],
       ['genres', 'genres_json', (value) => JSON.stringify(value ?? [])],
+      ['networks', 'networks_json', (value) => JSON.stringify(value ?? [])],
+      ['studios', 'studios_json', (value) => JSON.stringify(value ?? [])],
       ['certification', 'certification', scalar],
       ['certificationRegion', 'certification_region', scalar],
       ['ratingStatus', 'rating_status', scalar],
@@ -1037,35 +1098,43 @@ export class MediaRepository implements IMediaRepository {
     const transaction = this.db.transaction(() => {
       this.mergeLocatorCollision(item)
       stmt.run(
-      item.path,
-      item.filename,
-      item.durationSeconds,
-      item.isInterlude ? 1 : 0,
-      item.mediaType,
-      item.dateStart,
-      item.dateEnd,
-      item.codec,
-      item.width,
-      item.height,
-      item.warning,
-      item.mtime,
-      item.compatibility,
-      item.rootId ?? 'legacy',
-      item.relativePath ?? item.path,
-      item.libraryKind ?? 'other',
-      item.collectionTitle ?? item.filename,
-      item.policyEnabled === true ? 1 : 0,
-      item.playbackOverride === null || item.playbackOverride === undefined
-        ? null
-        : item.playbackOverride
-          ? 1
-          : 0,
+        item.path,
+        item.filename,
+        item.durationSeconds,
+        item.isInterlude ? 1 : 0,
+        item.mediaType,
+        item.dateStart,
+        item.dateEnd,
+        item.codec,
+        item.width,
+        item.height,
+        item.warning,
+        item.mtime,
+        item.compatibility,
+        item.rootId ?? 'legacy',
+        item.relativePath ?? item.path,
+        item.libraryKind ?? 'other',
+        item.collectionTitle ?? item.filename,
+        item.policyEnabled === true ? 1 : 0,
+        item.playbackOverride === null || item.playbackOverride === undefined
+          ? null
+          : item.playbackOverride
+            ? 1
+            : 0,
         (item.rootAvailable ?? true) ? 1 : 0,
         item.collectionId ?? null,
         item.seasonNumber ?? null,
         item.episodeNumber ?? null,
         item.episodeTitle ?? null
       )
+      // The indexer necessarily takes a snapshot of the collection before it
+      // probes a file. A parent can change the collection decision while that
+      // probe is running, so the snapshot's policyEnabled value may already be
+      // stale by the time this upsert lands. Re-derive linked rows from the
+      // authoritative collection in the same transaction.
+      if (item.collectionId != null) {
+        this.syncCollectionEligibility(item.collectionId)
+      }
     })
     transaction()
   }
@@ -1146,9 +1215,23 @@ export class MediaRepository implements IMediaRepository {
     enabled: boolean | null
   ): Promise<void> {
     if (!this.db) throw new Error('Repository not initialized')
-    this.db
-      .prepare('UPDATE media SET playback_override = ? WHERE id = ?')
-      .run(enabled === null ? null : enabled ? 1 : 0, id)
+    const transaction = this.db.transaction(() => {
+      this.db!
+        .prepare('UPDATE media SET playback_override = ? WHERE id = ?')
+        .run(enabled === null ? null : enabled ? 1 : 0, id)
+
+      if (enabled !== null) return
+      // "Use collection decision" must also repair rows written by an older
+      // scanner snapshot. Clearing the file override alone can otherwise
+      // expose a stale policy_enabled value until the next full scan/restart.
+      const row = this.db!
+        .prepare('SELECT collection_id FROM media WHERE id = ?')
+        .get(id) as { collection_id: number | null } | null
+      if (row?.collection_id != null) {
+        this.syncCollectionEligibility(row.collection_id)
+      }
+    })
+    transaction()
   }
 
   async restrictPlaybackToRoots(rootIds: string[]): Promise<number> {
@@ -1282,6 +1365,8 @@ export class MediaRepository implements IMediaRepository {
       posterPath: this.nullableString(row.poster_path),
       backdropPath: this.nullableString(row.backdrop_path),
       genres: this.parseStringArray(row.genres_json),
+      networks: this.parseStringArray(row.networks_json),
+      studios: this.parseStringArray(row.studios_json),
       certification: this.nullableString(row.certification),
       certificationRegion: this.nullableString(row.certification_region),
       ratingStatus: this.normalizeRatingStatus(row.rating_status),
@@ -1414,6 +1499,8 @@ export class MediaRepository implements IMediaRepository {
           (row.playback_override ?? row.policy_enabled ?? 0)
       ),
       collectionId: (row.collection_id as number | null) ?? null,
+      collectionIdentityKey:
+        (row.collection_identity_key as string | null) ?? null,
       seasonNumber: (row.season_number as number | null) ?? null,
       episodeNumber: (row.episode_number as number | null) ?? null,
       episodeTitle: (row.episode_title as string | null) ?? null,
@@ -1521,6 +1608,7 @@ export class MediaRepository implements IMediaRepository {
     const stmt = this.db.prepare(MEDIA_UPSERT_SQL)
 
     const transaction = this.db.transaction(() => {
+      const linkedCollectionIds = new Set<number>()
       for (const item of items) {
         this.mergeLocatorCollision(item)
         stmt.run(
@@ -1554,6 +1642,15 @@ export class MediaRepository implements IMediaRepository {
           item.episodeNumber ?? null,
           item.episodeTitle ?? null
         )
+        if (item.collectionId != null) {
+          linkedCollectionIds.add(item.collectionId)
+        }
+      }
+      // See upsertMedia: collection approval is authoritative over the
+      // indexer's earlier snapshot, including when approval happened while a
+      // long-running batch was probing files.
+      for (const collectionId of linkedCollectionIds) {
+        this.syncCollectionEligibility(collectionId)
       }
     })
     transaction()

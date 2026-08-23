@@ -16,8 +16,11 @@ interface CollectionLibraryControllerDeps {
   readonly metadata: Pick<
     MetadataEnrichmentService,
     'getState' | 'runPending' | 'confirmMatch' | 'retryCollection' | 'testConnection'
-  >
-  readonly metadataConfig: PublicMetadataConfig
+  > & {
+    /** Optional only for compatibility with isolated controller tests. */
+    getPublicConfig?: () => PublicMetadataConfig
+  }
+  readonly metadataConfig?: PublicMetadataConfig
   readonly refreshSchedules?: () => Promise<void>
 }
 
@@ -87,7 +90,7 @@ export function createCollectionLibraryController(
 
   controller.get('/api/v1/library/metadata', (c) =>
     c.json({
-      config: deps.metadataConfig,
+      config: currentMetadataConfig(deps),
       state: deps.metadata.getState(),
     })
   )
@@ -105,7 +108,7 @@ export function createCollectionLibraryController(
   })
 
   controller.post('/api/admin/v1/library/metadata/test', async (c) => {
-    if (!deps.metadataConfig.configured) {
+    if (!currentMetadataConfig(deps).configured) {
       return c.json({ ok: false, error: 'TMDB is not configured' }, 409)
     }
     try {
@@ -214,6 +217,14 @@ export function createCollectionLibraryController(
   })
 
   return controller
+}
+
+function currentMetadataConfig(
+  deps: Pick<CollectionLibraryControllerDeps, 'metadata' | 'metadataConfig'>
+): PublicMetadataConfig {
+  const config = deps.metadata.getPublicConfig?.() ?? deps.metadataConfig
+  if (!config) throw new Error('Metadata configuration is unavailable')
+  return config
 }
 
 async function listCollections(

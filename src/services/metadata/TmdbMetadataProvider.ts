@@ -8,6 +8,7 @@ import {
   type TmdbMovieReleaseDate,
   type TmdbMovieReleaseDateRegion,
   type TmdbMovieSearchResult,
+  type TmdbNamedEntity,
   type TmdbTVContentRating,
   type TmdbTVDetails,
   type TmdbTVSearchResult,
@@ -263,6 +264,8 @@ function mapMovieDetails(raw: TmdbMovieDetails): ProviderTitleDetails {
     ...candidate,
     ...optionalString('backdropPath', raw.backdrop_path),
     genres: mapGenres(raw.genres),
+    networks: [],
+    studios: mapNames(raw.production_companies),
   }
 }
 
@@ -273,6 +276,8 @@ function mapTVDetails(raw: TmdbTVDetails): ProviderTitleDetails {
     ...candidate,
     ...optionalString('backdropPath', raw.backdrop_path),
     genres: mapGenres(raw.genres),
+    networks: mapNames(raw.networks),
+    studios: mapNames(raw.production_companies),
   }
 }
 
@@ -285,6 +290,21 @@ function mapGenres(value: unknown): string[] {
         : null
     )
     .filter((name): name is string => name !== null)
+}
+
+function mapNames(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return [
+    ...new Set(
+      value
+        .map((item) =>
+          item && typeof item === 'object'
+            ? nonEmptyString((item as TmdbNamedEntity).name)
+            : null
+        )
+        .filter((name): name is string => name !== null)
+    ),
+  ]
 }
 
 function parseExternalId(value: string): number {

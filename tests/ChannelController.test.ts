@@ -86,6 +86,62 @@ describe('ChannelController', () => {
     expect(invalid.status).toBe(400)
   })
 
+  test('accepts numeric collection IDs in the station preview JSON API', async () => {
+    const channels = mock<ChannelService>()
+    channels.previewAutomatedStationBuild.mockResolvedValue({
+      collections: [],
+      collectionCount: 0,
+      eligibleFiles: 0,
+    })
+    const app = new Hono().route('/', createChannelController({ channels }))
+
+    const response = await app.request(
+      '/api/admin/v1/channels/auto-build/preview',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          id: 'custom-station',
+          name: 'Custom Station',
+          timezone: 'UTC',
+          preset: 'custom',
+          airtime: 'evening',
+          collectionIds: [42],
+        }),
+      }
+    )
+
+    expect(response.status).toBe(200)
+    expect(channels.previewAutomatedStationBuild).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collectionIds: [42],
+        preset: 'custom',
+        airtime: 'evening',
+      })
+    )
+  })
+
+  test('keeps channel administration available when automation catalog loading fails', async () => {
+    const channels = mock<ChannelService>()
+    channels.administrationSnapshot.mockReturnValue({
+      channels: [],
+      manuallyOffAir: [],
+      programmingGroups: [],
+      configurationError: null,
+    })
+    channels.stationAutomationCatalog.mockRejectedValue(
+      new Error('database busy')
+    )
+    const app = new Hono().route('/', createChannelController({ channels }))
+
+    const response = await app.request('/channels')
+
+    expect(response.status).toBe(200)
+    expect(await response.text()).toContain(
+      'Station automation catalog unavailable: database busy'
+    )
+  })
+
   test('parses the human-editable schedule format', () => {
     expect(
       parseChannelSlots(

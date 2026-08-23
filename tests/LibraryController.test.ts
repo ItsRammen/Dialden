@@ -46,12 +46,15 @@ describe('LibraryController', () => {
       body: formData,
     })
 
-    await app.request(req)
+    const response = await app.request(req)
 
     // It should update config to point session.introVideoId to 100
     expect(configService.update).toHaveBeenCalledWith({
       session: { introVideoId: 100 },
     })
+    expect(response.headers.get('HX-Trigger')).toBe(
+      'libraryEligibilityChanged'
+    )
   })
 
   test('POST /api/update-type sets Outro and updates Config', async () => {
@@ -168,6 +171,99 @@ describe('LibraryController', () => {
     expect(await response.text()).toContain('Playable')
   })
 
+  test('Use collection decision reports the inherited result and refreshes the active file filter', async () => {
+    mediaService.getById.mockResolvedValue({
+      id: 42,
+      path: '/media/tv/Bluey/episode.mkv',
+      filename: 'episode.mkv',
+      durationSeconds: 420,
+      isInterlude: false,
+      mediaType: 'video',
+      dateStart: null,
+      dateEnd: null,
+      codec: 'h264',
+      width: 1920,
+      height: 1080,
+      warning: null,
+      mtime: 1,
+      compatibility: 'compatible',
+      collectionId: 7,
+      policyEnabled: true,
+      playbackOverride: null,
+      rootAvailable: true,
+      playbackEnabled: true,
+    })
+    const formData = new FormData()
+    formData.append('mode', 'policy')
+
+    const response = await app.request('/api/playback-eligibility/42', {
+      method: 'POST',
+      body: formData,
+    })
+
+    expect(response.status).toBe(200)
+    expect(mediaService.updatePlaybackOverride).toHaveBeenCalledWith(42, null)
+    expect(mediaService.rescan).not.toHaveBeenCalled()
+    expect(playlistEngine.refreshCache).toHaveBeenCalled()
+    expect(response.headers.get('HX-Trigger')).toBe(
+      'libraryEligibilityChanged'
+    )
+    expect(await response.text()).toContain(
+      'Using collection decision: playable'
+    )
+  })
+
+  test.each([
+    {
+      rootAvailable: false,
+      durationSeconds: 420,
+      expected: 'the library root is offline or has not finished scanning',
+    },
+    {
+      rootAvailable: true,
+      durationSeconds: 0,
+      expected: 'the media probe has not produced a valid duration',
+    },
+  ])(
+    'explains the technical blocker after a parent file allow ($expected)',
+    async ({ rootAvailable, durationSeconds, expected }) => {
+      mediaService.getById.mockResolvedValue({
+        id: 42,
+        path: '/media/tv/Bluey/episode.mkv',
+        filename: 'episode.mkv',
+        durationSeconds,
+        isInterlude: false,
+        mediaType: 'video',
+        dateStart: null,
+        dateEnd: null,
+        codec: 'h264',
+        width: 1920,
+        height: 1080,
+        warning: null,
+        mtime: 1,
+        compatibility: 'compatible',
+        collectionId: 7,
+        policyEnabled: false,
+        playbackOverride: true,
+        rootAvailable,
+        playbackEnabled: false,
+      })
+      const formData = new FormData()
+      formData.append('mode', 'allow')
+
+      const response = await app.request('/api/playback-eligibility/42', {
+        method: 'POST',
+        body: formData,
+      })
+      const markup = await response.text()
+
+      expect(response.status).toBe(200)
+      expect(markup).toContain('Parent allow saved')
+      expect(markup).toContain(expected)
+      expect(markup).not.toContain('metadata scan')
+    }
+  )
+
   test('playback eligibility rejects partial IDs before any mutation or rescan', async () => {
     const formData = new FormData()
     formData.append('mode', 'allow')
@@ -253,6 +349,9 @@ describe('LibraryController', () => {
       warning: null,
       mtime: 1,
       compatibility: 'compatible',
+      collectionId: 7,
+      policyEnabled: true,
+      playbackOverride: null,
       playbackEnabled: true,
     }
     const approved = renderLibraryContent({
@@ -269,13 +368,27 @@ describe('LibraryController', () => {
       filter: 'blocked',
       search: '',
     })
+    const emptyBlocked = renderLibraryContent({
+      media: [],
+      mediaDirectory: '/media',
+      view: 'list',
+      filter: 'blocked',
+      search: '',
+      totalCount: 0,
+    })
 
     expect(approved).toContain('Playable files')
     expect(approved).toContain('Bluey episode.mkv')
+    expect(approved).toContain(
+      'Use collection decision — allows scheduling'
+    )
     expect(approved).not.toContain('Blocked episode.mkv')
     expect(blocked).toContain('Not Scheduled')
     expect(blocked).toContain('Blocked episode.mkv')
+    expect(blocked).not.toContain('No media indexed yet')
     expect(blocked).not.toContain('Bluey episode.mkv')
+    expect(emptyBlocked).toContain('No files matching filter')
+    expect(emptyBlocked).not.toContain('No media indexed yet')
   })
 
   test('Advanced Files requests a bounded page and preserves navigation filters', async () => {
@@ -332,6 +445,9 @@ describe('LibraryController', () => {
     expect(markup).toContain('page=3')
     expect(markup).toContain('search=Family%20%26%20Friends')
     expect(markup).toContain('✅ Playable')
+    expect(markup).toContain(
+      'hx-trigger="libraryEligibilityChanged from:body"'
+    )
     expect(markup).not.toContain('Kids 7')
     expect(mediaService.generateThumbnailsFor).toHaveBeenCalledWith(items)
     expect(mediaService.getAll).not.toHaveBeenCalled()
@@ -395,6 +511,18 @@ describe('LibraryController', () => {
     expect(response.status).toBe(400)
     expect(await response.text()).toContain('No valid files uploaded')
     expect(mediaService.rescan).not.toHaveBeenCalled()
+  })
+
+  test('media deletion refreshes the active paginated file catalog', async () => {
+    const response = await app.request('/api/media/42', {
+      method: 'DELETE',
+    })
+
+    expect(response.status).toBe(200)
+    expect(mediaService.delete).toHaveBeenCalledWith(42)
+    expect(response.headers.get('HX-Trigger')).toBe(
+      'libraryEligibilityChanged'
+    )
   })
 
   test('read-only mode blocks metadata deletion and hides delete controls', async () => {

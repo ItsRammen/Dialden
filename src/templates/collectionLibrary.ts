@@ -190,6 +190,10 @@ function count(value: number): string {
   return Math.max(0, Math.floor(value)).toLocaleString('en-US')
 }
 
+function quantity(value: number, singular: string, plural = `${singular}s`): string {
+  return `${count(value)} ${value === 1 ? singular : plural}`
+}
+
 function year(value: number | undefined): string {
   if (!Number.isInteger(value) || (value ?? 0) < 0) return ''
   return String(value)
@@ -230,22 +234,22 @@ function renderSummary(summary: CollectionLibrarySummaryViewModel): string {
         <a href="/library/tv" class="collection-summary-card">
           <span class="collection-summary-label">TV shows</span>
           <strong>${count(summary.tvCollections)}</strong>
-          <span>${count(summary.tvEpisodes)} episodes</span>
+          <span>${quantity(summary.tvEpisodes, 'episode')}</span>
         </a>
         <a href="/library/movies" class="collection-summary-card">
           <span class="collection-summary-label">Movies</span>
           <strong>${count(summary.movieCollections)}</strong>
-          <span>collections</span>
+          <span>${summary.movieCollections === 1 ? 'collection' : 'collections'}</span>
         </a>
         <a href="/library/interludes" class="collection-summary-card">
           <span class="collection-summary-label">Interludes</span>
           <strong>${count(summary.interludes)}</strong>
-          <span>items</span>
+          <span>${summary.interludes === 1 ? 'item' : 'items'}</span>
         </a>
         <a href="/library/review" class="collection-summary-card collection-summary-review">
           <span class="collection-summary-label">Needs review</span>
           <strong>${count(summary.reviewCollections)}</strong>
-          <span>collections</span>
+          <span>${summary.reviewCollections === 1 ? 'collection' : 'collections'}</span>
         </a>
       </div>
     </section>
@@ -367,8 +371,8 @@ function renderCollectionFacts(collection: CollectionCardViewModel): string {
   const displayYear = year(collection.year)
   if (displayYear) facts.push(displayYear)
   if (collection.kind === 'tv') {
-    facts.push(`${count(collection.seasonCount ?? 0)} seasons`)
-    facts.push(`${count(collection.episodeCount ?? 0)} episodes`)
+    facts.push(quantity(collection.seasonCount ?? 0, 'season'))
+    facts.push(quantity(collection.episodeCount ?? 0, 'episode'))
   } else {
     facts.push(`${count(collection.fileCount)} file${collection.fileCount === 1 ? '' : 's'}`)
   }
@@ -521,7 +525,7 @@ export function renderCollectionDetail(
                   ? `<ul>${seasons
                       .map((season) => {
                         const href = safeInternalHref(season.href) ?? '/library'
-                        return `<li><a href="${href}"><strong>${escapeHtml(season.label)}</strong><span>${count(season.episodeCount)} episodes</span></a></li>`
+                        return `<li><a href="${href}"><strong>${escapeHtml(season.label)}</strong><span>${quantity(season.episodeCount, 'episode')}</span></a></li>`
                       })
                       .join('')}</ul>`
                   : '<p class="collection-empty">No seasons indexed.</p>'
@@ -597,7 +601,7 @@ export function renderCollectionLibraryContent(
       <section class="collection-results" aria-labelledby="collection-results-title">
         <div class="collection-section-heading">
           <h2 id="collection-results-title">${heading}</h2>
-          <span>${count(collections.length)} collections</span>
+          <span>${quantity(collections.length, 'collection')}</span>
         </div>
         ${renderCollectionGrid(collections, view.emptyMessage ?? 'No collections match this view.')}
       </section>

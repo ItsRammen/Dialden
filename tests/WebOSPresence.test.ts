@@ -31,4 +31,16 @@ describe('LG webOS presence telemetry', () => {
     expect(script).toContain("return 'paused'")
     expect(script).toContain("return 'error'")
   })
+
+  test('bounds dense guide rendering and reports a truncated server window', () => {
+    const script = readFileSync(
+      join(import.meta.dir, '..', 'clients', 'webos', 'app.js'),
+      'utf8'
+    )
+
+    expect(script).toContain('var GUIDE_RENDER_LIMIT = 250')
+    expect(script).toContain('data.programs.slice(0, GUIDE_RENDER_LIMIT)')
+    expect(script).toContain('data.truncated === true')
+    expect(script).toContain('formatTime(data.coverageEnd)')
+  })
 })

@@ -101,7 +101,7 @@ export function createServer(daemon: ToastTVDaemon): ServerResult {
     channelService,
     indexer,
     metadataService,
-    daemon.getPublicMetadataConfig(),
+    () => daemon.getPublicMetadataConfig(),
     clientPresenceService
   )
 
@@ -176,7 +176,6 @@ export function createServer(daemon: ToastTVDaemon): ServerResult {
     library: collectionLibraryService,
     indexer,
     metadata: metadataService,
-    metadataConfig: daemon.getPublicMetadataConfig(),
     refreshSchedules: async () => {
       await daemon.getEngine().refreshCache(true)
       await playbackService.reconcilePrequeue()
@@ -193,8 +192,7 @@ export function createServer(daemon: ToastTVDaemon): ServerResult {
   })
   const artworkController = createArtworkController(artworkService)
   const metadataSettingsController = createMetadataSettingsController(
-    metadataService,
-    daemon.getPublicMetadataConfig()
+    metadataService
   )
   const clientPresenceController = createClientPresenceController({
     presence: clientPresenceService,

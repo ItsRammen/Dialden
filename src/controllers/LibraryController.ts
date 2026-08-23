@@ -271,6 +271,7 @@ export function createLibraryController(deps: LibraryControllerDeps) {
     const id = parseInt(c.req.param('id'), 10)
     if (!Number.isNaN(id)) {
       await media.delete(id)
+      c.header('HX-Trigger', 'libraryEligibilityChanged')
       // Return empty content (item removed) with OOB toast
       return c.html(`
         <div id="toast-container" hx-swap-oob="innerHTML">
@@ -288,6 +289,7 @@ export function createLibraryController(deps: LibraryControllerDeps) {
     const isInterlude = body['interlude'] === 'true'
     if (!Number.isNaN(id)) {
       await media.toggleInterlude(id, isInterlude)
+      c.header('HX-Trigger', 'libraryEligibilityChanged')
       return c.html(
         html`<div class="toast success">
           ${isInterlude ? 'Marked as interlude' : 'Marked as video'}
@@ -369,6 +371,7 @@ export function createLibraryController(deps: LibraryControllerDeps) {
       // Since template logic is complex (it checks both ID and Type),
       // let's assume successful update.
 
+      c.header('HX-Trigger', 'libraryEligibilityChanged')
       return c.html(`
         <div class="toast success">${message}</div>
         <span id="badge-${id}" class="media-type-badge" hx-swap-oob="true">${typeIcons[mediaType]}</span>
@@ -450,17 +453,32 @@ export function createLibraryController(deps: LibraryControllerDeps) {
     if (!item) return c.html(html`<div class="toast warning">Media not found</div>`, 404)
 
     const effective = item.playbackEnabled === true
-    const source = item.playbackOverride === null ? 'library policy' : 'parent override'
-    const pendingMetadata = override === true && !effective
+    const followsCollection = item.playbackOverride === null
+    const pendingTechnicalScan =
+      (followsCollection && item.policyEnabled === true && !effective) ||
+      (override === true && !effective)
+    const technicalBlocker =
+      item.rootAvailable !== true
+        ? 'the library root is offline or has not finished scanning'
+        : item.durationSeconds <= 0
+          ? 'the media probe has not produced a valid duration'
+          : 'the media availability check has not passed'
+    const message = followsCollection
+      ? item.policyEnabled === true && !effective
+        ? `Using collection decision: allowed, but ${technicalBlocker}`
+        : `Using collection decision: ${effective ? 'playable' : 'not scheduled'}`
+      : override === true && !effective
+        ? `Parent allow saved, but ${technicalBlocker}`
+        : `File override updated: ${effective ? 'playable' : 'not scheduled'}`
+    // Re-query the active Advanced Files filter. Without this event, an item
+    // that just became playable remained stranded under "Not Scheduled" (or
+    // vice versa) until a manual reload.
+    c.header('HX-Trigger', 'libraryEligibilityChanged')
     return c.html(`
       <span id="eligibility-${id}" class="status-pill ${effective ? 'active' : 'expired'}" hx-swap-oob="true">
         ${effective ? 'Playable' : 'Not schedulable'}
       </span>
-      <div class="toast ${pendingMetadata ? 'warning' : 'success'}">${
-        pendingMetadata
-          ? 'Parent allow saved; media remains unavailable until its metadata scan succeeds'
-          : `Playback eligibility updated (${source})`
-      }</div>
+      <div class="toast ${pendingTechnicalScan ? 'warning' : 'success'}">${message}</div>
     `)
   })
 

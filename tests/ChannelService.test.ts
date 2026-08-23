@@ -149,6 +149,303 @@ describe('ChannelService', () => {
     expect(await service.getNow('missing')).toBeNull()
   })
 
+  test('keeps an all-day station scheduled late in the day with one short video', async () => {
+    const repository = mock<IMediaRepository>()
+    repository.getAll.mockResolvedValue([
+      { ...video(1, 'Bluey (2018)'), durationSeconds: 30 },
+    ])
+    const allDayPolicy: LibraryPolicyDocument = {
+      ...policy,
+      channels: [
+        {
+          id: 'all-day',
+          name: 'All Day',
+          enabled: true,
+          timezone: 'UTC',
+          slots: [
+            {
+              days: ['sun'],
+              start: '00:00',
+              end: '24:00',
+              groups: ['comfort'],
+            },
+          ],
+        },
+      ],
+    }
+    const service = new ChannelService(repository, allDayPolicy, {
+      now: () => new Date('2026-08-23T23:59:15.000Z'),
+    })
+
+    const result = await service.getNow('all-day')
+
+    expect(result?.program?.mediaId).toBe(1)
+    expect(result?.program?.scheduledStart).toBe('2026-08-23T23:59:00.000Z')
+    expect(result?.program?.offsetSeconds).toBe(15)
+  })
+
+  test('keeps whole all-day episodes continuous across midnight', async () => {
+    const repository = mock<IMediaRepository>()
+    repository.getAll.mockResolvedValue([
+      { ...video(1, 'Bluey (2018)'), durationSeconds: 420 },
+    ])
+    const allDayPolicy: LibraryPolicyDocument = {
+      ...policy,
+      channels: [
+        {
+          id: 'continuous',
+          name: 'Continuous Station',
+          enabled: true,
+          timezone: 'UTC',
+          slots: [
+            {
+              days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'],
+              start: '00:00',
+              end: '24:00',
+              groups: ['comfort'],
+            },
+          ],
+        },
+      ],
+    }
+    const now = new Date('2026-08-23T23:57:00.000Z')
+    const service = new ChannelService(repository, allDayPolicy, {
+      now: () => now,
+    })
+
+    const result = await service.getNow('continuous')
+    const startMs = Date.parse(result?.program?.scheduledStart ?? '')
+    const endMs = Date.parse(result?.program?.scheduledEnd ?? '')
+
+    expect(result?.program?.mediaId).toBe(1)
+    expect(startMs).toBeLessThanOrEqual(now.getTime())
+    expect(endMs).toBeGreaterThan(now.getTime())
+    expect(endMs - startMs).toBe(420_000)
+  })
+
+  test('handles a five-second all-day video without exhausting the schedule builder', async () => {
+    const repository = mock<IMediaRepository>()
+    repository.getAll.mockResolvedValue([
+      { ...video(1, 'Bluey (2018)'), durationSeconds: 5 },
+    ])
+    const allDayPolicy: LibraryPolicyDocument = {
+      ...policy,
+      channels: [
+        {
+          id: 'short-loop',
+          name: 'Short Loop Station',
+          enabled: true,
+          timezone: 'UTC',
+          slots: [
+            {
+              days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'],
+              start: '00:00',
+              end: '24:00',
+              groups: ['comfort'],
+            },
+          ],
+        },
+      ],
+    }
+    const service = new ChannelService(repository, allDayPolicy, {
+      now: () => new Date('2026-08-23T12:00:00.000Z'),
+    })
+
+    const now = await service.getNow('short-loop')
+    const guide = await service.getGuide('short-loop', 1)
+
+    expect(now?.program?.mediaId).toBe(1)
+    expect(guide?.programs.length).toBeGreaterThan(0)
+    expect(guide?.programs.length).toBeLessThanOrEqual(20_000)
+    expect(guide?.truncated).toBe(false)
+    expect(Date.parse(guide?.coverageEnd ?? '')).toBeGreaterThanOrEqual(
+      Date.parse(guide?.requestedEnd ?? '')
+    )
+  })
+
+  test('marks a safety-capped guide as truncated with an exact coverage boundary', async () => {
+    const repository = mock<IMediaRepository>()
+    repository.getAll.mockResolvedValue([
+      { ...video(1, 'Bluey (2018)'), durationSeconds: 1 },
+    ])
+    const allDayPolicy: LibraryPolicyDocument = {
+      ...policy,
+      channels: [
+        {
+          id: 'one-second-loop',
+          name: 'One Second Loop',
+          enabled: true,
+          timezone: 'UTC',
+          slots: [
+            {
+              days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'],
+              start: '00:00',
+              end: '24:00',
+              groups: ['comfort'],
+            },
+          ],
+        },
+      ],
+    }
+    const service = new ChannelService(repository, allDayPolicy, {
+      now: () => new Date('2026-08-23T12:00:00.000Z'),
+    })
+
+    const guide = await service.getGuide('one-second-loop', 24)
+
+    expect(guide?.programs).toHaveLength(20_000)
+    expect(guide?.truncated).toBe(true)
+    expect(guide?.coverageEnd).toBe(
+      guide?.programs[guide.programs.length - 1]?.scheduledEnd
+    )
+    expect(Date.parse(guide?.coverageEnd ?? '')).toBeLessThan(
+      Date.parse(guide?.requestedEnd ?? '')
+    )
+  })
+
+  test('changes the timeline revision when collection group assignments change', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'toasttv-channel-revision-'))
+    try {
+      const repository = mock<IMediaRepository>()
+      repository.getAll.mockResolvedValue([
+        video(1, 'Bluey (2018)'),
+        video(2, 'Numberblocks'),
+      ])
+      const mappedChannel = {
+        id: 'mapped',
+        name: 'Mapped Station',
+        enabled: true,
+        timezone: 'UTC',
+        slots: [
+          {
+            days: ['sun'] as const,
+            start: '00:00',
+            end: '24:00',
+            groups: ['generated'],
+          },
+        ],
+      }
+      const store = new ChannelConfigurationStore(
+        join(directory, 'channels.json')
+      )
+      store.save({
+        channels: [mappedChannel],
+        manuallyOffAir: [],
+        collectionGroups: [
+          {
+            rootId: 'tv',
+            collectionTitle: 'Bluey (2018)',
+            groups: ['generated'],
+          },
+        ],
+      })
+      const clock = { now: () => new Date('2026-08-23T12:00:00.000Z') }
+      const bluey = await new ChannelService(
+        repository,
+        policy,
+        clock,
+        store
+      ).getNow('mapped')
+
+      store.save({
+        channels: [mappedChannel],
+        manuallyOffAir: [],
+        collectionGroups: [
+          {
+            rootId: 'tv',
+            collectionTitle: 'Numberblocks',
+            groups: ['generated'],
+          },
+        ],
+      })
+      const numberblocks = await new ChannelService(
+        repository,
+        policy,
+        clock,
+        store
+      ).getNow('mapped')
+
+      expect(bluey?.program?.mediaId).toBe(1)
+      expect(numberblocks?.program?.mediaId).toBe(2)
+      expect(bluey?.timelineRevision).not.toBe(numberblocks?.timelineRevision)
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  test('uses durable collection identity without trusting a reused SQLite ID', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'toasttv-channel-identity-'))
+    try {
+      const channel = {
+        id: 'durable',
+        name: 'Durable Station',
+        enabled: true,
+        timezone: 'UTC',
+        slots: [
+          {
+            days: ['sun'] as const,
+            start: '00:00',
+            end: '24:00',
+            groups: ['generated'],
+          },
+        ],
+      }
+      const store = new ChannelConfigurationStore(
+        join(directory, 'channels.json')
+      )
+      store.save({
+        channels: [channel],
+        manuallyOffAir: [],
+        collectionGroups: [
+          {
+            collectionId: 1,
+            collectionIdentityKey: 'bluey-stable',
+            libraryKind: 'tv',
+            rootId: 'tv',
+            collectionTitle: 'Bluey (2018)',
+            groups: ['generated'],
+          },
+        ],
+      })
+      const clock = { now: () => new Date('2026-08-23T12:00:00.000Z') }
+      const reusedIdRepository = mock<IMediaRepository>()
+      reusedIdRepository.getAll.mockResolvedValue([
+        {
+          ...video(2, 'Numberblocks'),
+          collectionId: 1,
+          collectionIdentityKey: 'numberblocks-stable',
+        },
+      ])
+      const renamedCollectionRepository = mock<IMediaRepository>()
+      renamedCollectionRepository.getAll.mockResolvedValue([
+        {
+          ...video(3, 'Bluey Renamed'),
+          collectionId: 77,
+          collectionIdentityKey: 'bluey-stable',
+        },
+      ])
+
+      expect(
+        (await new ChannelService(
+          reusedIdRepository,
+          policy,
+          clock,
+          store
+        ).getNow('durable'))?.program
+      ).toBeNull()
+      expect(
+        (await new ChannelService(
+          renamedCollectionRepository,
+          policy,
+          clock,
+          store
+        ).getNow('durable'))?.program?.mediaId
+      ).toBe(3)
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
   test('applies channel edits immediately and restores persisted off-air state', () => {
     const directory = mkdtempSync(join(tmpdir(), 'toasttv-channel-service-'))
     try {

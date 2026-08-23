@@ -9,6 +9,7 @@
   var POLL_INTERVAL_MS = 30000;
   var PRESENCE_INTERVAL_MS = 15000;
   var DRIFT_LIMIT_SECONDS = 8;
+  var GUIDE_RENDER_LIMIT = 250;
   var RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 15000, 30000];
 
   var state = {
@@ -643,8 +644,17 @@
         elements.guideMessage.textContent = 'The guide is unavailable right now.';
         return;
       }
-      elements.guideMessage.textContent = data.programs.length ? '' : 'Nothing else is scheduled in the next eight hours.';
-      renderGuide(data.programs, guideRequestId, channel.id);
+      var visiblePrograms = data.programs.slice(0, GUIDE_RENDER_LIMIT);
+      if (!data.programs.length) {
+        elements.guideMessage.textContent = 'Nothing else is scheduled in the next eight hours.';
+      } else if (data.truncated === true) {
+        elements.guideMessage.textContent = 'This unusually dense guide was shortened at ' + formatTime(data.coverageEnd) + '.';
+      } else if (data.programs.length > GUIDE_RENDER_LIMIT) {
+        elements.guideMessage.textContent = 'Showing the first ' + GUIDE_RENDER_LIMIT + ' programs.';
+      } else {
+        elements.guideMessage.textContent = '';
+      }
+      renderGuide(visiblePrograms, guideRequestId, channel.id);
     });
   }
 

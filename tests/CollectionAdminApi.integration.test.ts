@@ -3,6 +3,7 @@ import { Hono } from 'hono'
 import {
   loadMetadataConfig,
   toPublicMetadataConfig,
+  type PublicMetadataConfig,
 } from '../src/config/metadata'
 import { createCollectionLibraryController } from '../src/controllers/CollectionLibraryController'
 import { MediaRepository } from '../src/repositories/MediaRepository'
@@ -29,6 +30,7 @@ describe('collection administration API integration', () => {
   let app: Hono
   let collectionId: number
   let refreshCount: number
+  let metadataConfig: PublicMetadataConfig
 
   beforeEach(async () => {
     repository = new MediaRepository(':memory:')
@@ -47,6 +49,9 @@ describe('collection administration API integration', () => {
     refreshCount = 0
 
     const secret = 'must-not-leave-the-server'
+    metadataConfig = toPublicMetadataConfig(
+      loadMetadataConfig({ TMDB_API_KEY: secret })
+    )
     const controller = createCollectionLibraryController({
       library: new CollectionLibraryService(repository),
       indexer: {
@@ -70,10 +75,8 @@ describe('collection administration API integration', () => {
         confirmMatch: async () => null,
         retryCollection: async () => null,
         testConnection: async () => {},
+        getPublicConfig: () => metadataConfig,
       },
-      metadataConfig: toPublicMetadataConfig(
-        loadMetadataConfig({ TMDB_API_KEY: secret })
-      ),
       refreshSchedules: async () => {
         refreshCount++
       },
@@ -146,5 +149,27 @@ describe('collection administration API integration', () => {
       },
       state: { status: 'idle' },
     })
+  })
+
+  test('reads live metadata configuration instead of a startup snapshot', async () => {
+    const initial = (await (
+      await app.request('/api/v1/library/metadata')
+    ).json()) as { config: { configured: boolean } }
+    expect(initial.config.configured).toBe(true)
+
+    metadataConfig = toPublicMetadataConfig(loadMetadataConfig({}))
+    const response = await app.request('/api/v1/library/metadata')
+
+    expect(response.status).toBe(200)
+    const updated = (await response.json()) as {
+      config: { configured: boolean }
+    }
+    expect(updated.config.configured).toBe(false)
+
+    const testResponse = await app.request(
+      '/api/admin/v1/library/metadata/test',
+      { method: 'POST' }
+    )
+    expect(testResponse.status).toBe(409)
   })
 })

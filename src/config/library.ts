@@ -295,7 +295,7 @@ export function validateLibraryChannels(input: unknown): LibraryChannelPolicy[] 
         ),
       ]
       const startMinutes = parseScheduleTime(slot.start)
-      const endMinutes = parseScheduleTime(slot.end)
+      const endMinutes = parseScheduleTime(slot.end, true)
       if (endMinutes <= startMinutes) {
         throw new Error(`Channel ${id} slots cannot cross midnight`)
       }
@@ -317,8 +317,8 @@ export function validateLibraryChannels(input: unknown): LibraryChannelPolicy[] 
         const right = slots[rightIndex] as ChannelScheduleSlot
         const sharesDay = left.days.some((day) => right.days.includes(day))
         const overlaps =
-          parseScheduleTime(left.start) < parseScheduleTime(right.end) &&
-          parseScheduleTime(right.start) < parseScheduleTime(left.end)
+          parseScheduleTime(left.start) < parseScheduleTime(right.end, true) &&
+          parseScheduleTime(right.start) < parseScheduleTime(left.end, true)
         if (sharesDay && overlaps) {
           throw new Error(
             `Channel ${id} slots ${leftIndex} and ${rightIndex} overlap`
@@ -345,12 +345,16 @@ function normalizeProgrammingGroup(value: unknown, errorMessage: string): string
   return group
 }
 
-function parseScheduleTime(value: string): number {
+function parseScheduleTime(value: string, allowDayEnd = false): number {
   const match = /^(\d{2}):(\d{2})$/.exec(value)
   if (!match) throw new Error(`Invalid schedule time: ${value}`)
   const hour = Number(match[1])
   const minute = Number(match[2])
-  if (hour > 23 || minute > 59) {
+  if (
+    minute > 59 ||
+    hour > 24 ||
+    (hour === 24 && (!allowDayEnd || minute !== 0))
+  ) {
     throw new Error(`Invalid schedule time: ${value}`)
   }
   return hour * 60 + minute

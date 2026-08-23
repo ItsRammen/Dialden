@@ -137,9 +137,11 @@ TV/movie collections, the files were indexed through the old combined
 discarding an old `media.db`; rebuilding it is the cleanest migration when the
 legacy file rows are no longer needed.
 
-The template uses the bundled Kids 7 rating policy. Set an optional TMDB API
-key in the Unraid template to match collections and evaluate certifications;
-without one, new collections safely remain in **Needs Review**. Parent
+The template uses the bundled Kids 7 rating policy. After first start, open
+**Settings → Metadata** to save an optional TMDB API key for collection matching
+and certification checks; without one, new collections safely remain in
+**Needs Review**. The advanced Unraid variables are only first-start bootstrap
+defaults. Parent
 allow/block overrides, cached metadata, artwork, and the media index persist
 beneath appdata. The image serves the browser reference client at `/tv/`; the
 same client can be packaged and sideloaded on an LG TV.
@@ -203,12 +205,14 @@ or invalid, ToastTV logs the problem and continues with those roots fail-closed
 instead of broadening access.
 
 TMDB enrichment runs separately from filesystem scanning and caches collection
-metadata in SQLite. Configure `TMDB_API_KEY`, `RATING_REGION` (default `US`),
-optional comma-separated `RATING_FALLBACK_REGIONS`, and `TMDB_LANGUAGE`
-(default `en-US`) in `.env` or the Unraid template. The secret is used only on
-the server and is never returned by the client/admin configuration APIs. A
-rating-region order change immediately returns cached certifications to review
-and refreshes their retained TMDB matches before automatic playback can resume.
+metadata in SQLite. Open **Settings → Metadata** to save the API key, language,
+rating region, fallback regions, and request timeout in persistent appdata; the
+running provider is updated without restarting. Matching environment variables
+remain optional first-start defaults for older Compose and Unraid setups, but a
+saved configuration takes precedence. The secret stays server-side and is never
+returned by the browser, TV client, or public configuration APIs. A rating-region
+order change immediately returns cached certifications to review and refreshes
+their retained TMDB matches before automatic playback can resume.
 
 The main `/library` page is collection-first: it summarizes TV shows, movies,
 interludes, and collections needing review. TV and movie views support search,
@@ -243,6 +247,8 @@ GET /api/v1/channels/:id/now
 GET /api/v1/channels/:id/guide?hours=8
 GET|HEAD /api/v1/media/:id/stream
 GET|POST /api/admin/v1/channels
+POST /api/admin/v1/channels/auto-build/preview
+POST /api/admin/v1/channels/auto-build
 PUT|DELETE /api/admin/v1/channels/:id
 POST /api/admin/v1/channels/:id/enabled
 POST /api/admin/v1/channels/:id/on-air
@@ -257,15 +263,30 @@ than a trusted identity. Do not expose either interface to the public internet.
 
 The policy seeds Kids Club, Nature & Discovery, and Family Movie Night in the
 `Asia/Taipei` timezone. Open **Channels** to create, edit, enable, disable, or
-delete channels and configure timezone and schedule slots that select existing
-programming groups. Collection-to-group membership is still defined by exact
-root/collection entries in `kids-7.library.json`; the channel editor does not
-assign shows or movies to groups, and policy edits require a restart.
-Edits take effect without restarting the server and are atomically persisted to
-`/app/data/channels.json`; manual off-air state is persisted there as well.
+delete channels and configure timezone and schedule slots. **Auto-build a
+station** can preview and generate an editable station from playable
+collections, TMDB genres, original networks, production studios, or selected
+shows/movies. Presets include all playable shows, family animation, movie night,
+and a clearly unofficial Nickelodeon-style personal mix. Brand-style presets
+filter only the user's parent-allowed local files; they are not affiliated with a
+broadcaster and do not reproduce an original or historical network schedule.
+The individual selector stays browser-bounded and can search titles, genres,
+networks, and studios while retaining already checked collections.
+Generated stations can use all-day, before/after-school, evening, or weekend-
+morning airtime templates; every generated slot remains editable afterward.
+
+Auto-build persists its exact collection-to-group assignments alongside live
+channel definitions and manual off-air state in `/app/data/channels.json`.
+Original policy groups remain available, and policy edits still require a
+restart. Existing matched TMDB collections are queued once for direct metadata
+refresh after the network/studio schema migration, preserving locked matches
+and parent overrides. Edits and generated stations otherwise take effect
+without restarting the server.
 Timelines are deterministic across restarts and return the current media ID,
 start/end timestamps, live offset, and a server-approved playback URL. The
-stream endpoint supports HTTP Range requests for seeking. **Go off air** only
+guide includes `requestedEnd`, `coverageEnd`, and `truncated` so an extreme
+short-clip schedule cannot silently exceed the bounded response size. The stream
+endpoint supports HTTP Range requests for seeking. **Go off air** only
 pauses a valid schedule. An enabled channel with no eligible items is shown as
 **No programming** and links to its configuration instead of offering a false
 "Go on air" remedy.

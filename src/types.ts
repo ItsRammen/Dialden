@@ -59,6 +59,10 @@ export interface MediaCollection {
   readonly posterPath: string | null
   readonly backdropPath: string | null
   readonly genres: readonly string[]
+  /** Original broadcasters/platform networks supplied by the metadata provider. */
+  readonly networks?: readonly string[]
+  /** Production companies/studios supplied by the metadata provider. */
+  readonly studios?: readonly string[]
   readonly certification: string | null
   readonly certificationRegion: string | null
   readonly ratingStatus: MetadataRatingStatus
@@ -102,6 +106,8 @@ export interface CollectionListOptions {
   readonly limit?: number
   readonly offset?: number
   readonly presentOnly?: boolean
+  /** Only collections with at least one currently schedulable media row. */
+  readonly scheduleEligibleOnly?: boolean
 }
 
 export interface CollectionMetadataUpdate {
@@ -116,6 +122,8 @@ export interface CollectionMetadataUpdate {
   readonly posterPath?: string | null
   readonly backdropPath?: string | null
   readonly genres?: readonly string[]
+  readonly networks?: readonly string[]
+  readonly studios?: readonly string[]
   readonly certification?: string | null
   readonly certificationRegion?: string | null
   readonly ratingStatus?: MetadataRatingStatus
@@ -240,6 +248,8 @@ export interface MediaItem {
   readonly rootAvailable?: boolean
   readonly playbackEnabled?: boolean
   readonly collectionId?: number | null
+  /** Durable collection identity from (root, kind, identity key). */
+  readonly collectionIdentityKey?: string | null
   readonly seasonNumber?: number | null
   readonly episodeNumber?: number | null
   readonly episodeTitle?: string | null

@@ -39,7 +39,7 @@ import type {
   ResolvedLibraryConfig,
 } from './config/library'
 import {
-  loadMetadataConfig,
+  loadPersistedMetadataConfig,
   toPublicMetadataConfig,
   type MetadataRuntimeConfig,
   type PublicMetadataConfig,
@@ -134,6 +134,7 @@ export class ToastTVDaemon {
   }
 
   getPublicMetadataConfig(): PublicMetadataConfig {
+    if (this.metadataService) return this.metadataService.getPublicConfig()
     if (!this.metadataConfig) throw new Error('Daemon not initialized')
     return toPublicMetadataConfig(this.metadataConfig)
   }
@@ -278,7 +279,7 @@ export class ToastTVDaemon {
       this.hardwareService ?? undefined
     )
 
-    this.metadataConfig = loadMetadataConfig()
+    this.metadataConfig = await loadPersistedMetadataConfig(this.repository)
     const metadataProvider = new TmdbMetadataProvider({
       apiKey: this.metadataConfig.tmdbApiKey,
       requestTimeoutMs: this.metadataConfig.requestTimeoutMs,

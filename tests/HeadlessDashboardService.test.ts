@@ -45,6 +45,7 @@ const publicConfig: PublicMetadataConfig = {
   language: 'en-US',
   preferredRatingRegion: 'US',
   fallbackRatingRegions: [],
+  requestTimeoutMs: 10_000,
 }
 
 function metadataState(
