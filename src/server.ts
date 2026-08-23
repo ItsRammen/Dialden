@@ -20,8 +20,9 @@ import { createSettingsController } from './controllers/SettingsController'
 import { createDashboardController } from './controllers/DashboardController'
 import { EventsController } from './controllers/EventsController'
 import { createHealthController } from './controllers/HealthController'
-import { getDataDirectory } from './config/paths'
+import { getDataDirectory, getDataPath } from './config/paths'
 import { ChannelService } from './services/ChannelService'
+import { ChannelConfigurationStore } from './services/ChannelConfigurationStore'
 import { createChannelController } from './controllers/ChannelController'
 import { MediaDeliveryService } from './services/MediaDeliveryService'
 import { createMediaController } from './controllers/MediaController'
@@ -75,7 +76,12 @@ export function createServer(daemon: ToastTVDaemon): ServerResult {
   const dashboardEventService = new DashboardEventService()
   const channelService = new ChannelService(
     daemon.getRepository(),
-    daemon.getLibraryPolicy()
+    daemon.getLibraryPolicy(),
+    undefined,
+    new ChannelConfigurationStore(
+      getDataPath('channels.json'),
+      daemon.getLibraryPolicy()?.channels ?? []
+    )
   )
   const mediaDeliveryService = new MediaDeliveryService(
     daemon.getRepository(),

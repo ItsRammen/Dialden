@@ -42,6 +42,12 @@ export class HeadlessDashboardService {
     const metadata = this.metadata.getState()
     const presence = this.presence?.getSnapshot()
     const warnings: HeadlessDashboardWarningViewModel[] = []
+    const channelConfigurationError =
+      this.channels.administrationSnapshot?.().configurationError ?? null
+    const libraryRootMisconfigured =
+      summary.totalFiles > 0 &&
+      summary.tvCollections === 0 &&
+      summary.movieCollections === 0
     const metadataDegraded =
       this.metadataConfig.configured &&
       (metadata.providerHealth === 'degraded' ||
@@ -68,6 +74,40 @@ export class HeadlessDashboardService {
         href: '/library/review',
         actionLabel: 'Review approvals',
       })
+    }
+    if (libraryRootMisconfigured) {
+      warnings.push({
+        severity: 'critical',
+        message: `${summary.totalFiles.toLocaleString('en-US')} files are indexed, but none belong to managed TV or movie collections. Configure TOASTTV_TV_MEDIA and TOASTTV_MOVIE_MEDIA, then rescan.`,
+        href: '/library/files',
+        actionLabel: 'Inspect indexed files',
+      })
+    }
+    if (channelList.length === 0) {
+      warnings.push({
+        severity: 'critical',
+        message: 'No enabled channels are configured.',
+        href: '/channels',
+        actionLabel: 'Manage channels',
+      })
+    }
+    if (channelConfigurationError) {
+      warnings.push({
+        severity: 'critical',
+        message: `Saved channel configuration was rejected: ${channelConfigurationError}`,
+        href: '/channels',
+        actionLabel: 'Repair channels',
+      })
+    }
+    for (const { channel, now } of channelStates) {
+      if (channel.onAir && !now?.program && !now?.next) {
+        warnings.push({
+          severity: 'warning',
+          message: `${channel.name} has no eligible programming. Check its slots, programming groups, library approvals, and media availability.`,
+          href: `/channels?edit=${encodeURIComponent(channel.id)}#editor`,
+          actionLabel: 'Configure channel',
+        })
+      }
     }
     if (summary.metadataReviewCollections > 0) {
       warnings.push({
@@ -116,6 +156,9 @@ export class HeadlessDashboardService {
       server: {
         status:
           scan.status === 'failed' ||
+          libraryRootMisconfigured ||
+          channelList.length === 0 ||
+          channelConfigurationError !== null ||
           summary.probeFailedFiles > 0 ||
           metadataDegraded
             ? 'degraded'
@@ -123,9 +166,15 @@ export class HeadlessDashboardService {
         statusMessage:
           scan.status === 'failed'
             ? 'The most recent library scan failed.'
-            : metadataDegraded
-              ? 'Metadata enrichment needs attention.'
-              : undefined,
+            : libraryRootMisconfigured
+              ? 'Indexed media is not attached to managed TV or movie roots.'
+              : channelConfigurationError
+                ? 'Saved channel configuration was rejected.'
+                : channelList.length === 0
+                  ? 'No enabled channels are configured.'
+                  : metadataDegraded
+                    ? 'Metadata enrichment needs attention.'
+                    : undefined,
         uptimeLabel: formatUptime(process.uptime()),
       },
       channels: channelStates.map(({ channel, now }) =>
@@ -206,13 +255,19 @@ function channelModel(
         ? 'on_air'
         : next
           ? 'scheduled'
-          : 'off_air',
+          : 'no_program',
     timezone: channel.timezone,
     now: program ? programModel(program, channel.timezone) : null,
     next: next ? programModel(next, channel.timezone) : null,
     guideHref: `/api/v1/channels/${encodeURIComponent(channel.id)}/guide`,
-    onAirAction: `/channels/${encodeURIComponent(channel.id)}/on-air`,
-    offAirAction: `/channels/${encodeURIComponent(channel.id)}/off-air`,
+    manageHref: `/channels?edit=${encodeURIComponent(channel.id)}#editor`,
+    onAirAction: channel.manuallyOffAir
+      ? `/channels/${encodeURIComponent(channel.id)}/on-air`
+      : undefined,
+    offAirAction:
+      channel.onAir && (program || next)
+        ? `/channels/${encodeURIComponent(channel.id)}/off-air`
+        : undefined,
     viewerCount: viewerCount ?? 0,
   }
 }

@@ -130,6 +130,6 @@ describe("UpdateService", () => {
 	test("should report isUpdating as false initially", () => {
 		const service = new UpdateService(client);
 		expect(service.isUpdating).toBe(false);
-		expect(service.currentVersion).toBe("0.6.4");
+		expect(service.currentVersion).toBe("0.6.5");
 	});
 });

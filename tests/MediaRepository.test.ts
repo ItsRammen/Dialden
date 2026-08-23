@@ -569,4 +569,62 @@ describe('MediaRepository', () => {
     const item = (await repo.getAll())[0]
     expect(item?.mediaType).toBe('intro')
   })
+
+  test('pages and filters more than 250 advanced-library files in SQLite', async () => {
+    await repo.upsertBatch(
+      Array.from({ length: 275 }, (_, index) => {
+        const number = index + 1
+        const filename = `file-${String(number).padStart(3, '0')}.mp4`
+        return createInput({
+          path: `/videos/${filename}`,
+          filename,
+          relativePath: filename,
+          collectionTitle: number % 40 === 0 ? 'Needle Collection' : 'Other',
+          policyEnabled: number % 2 === 0,
+          isInterlude: number % 3 === 0,
+          mediaType: number % 3 === 0 ? 'interlude' : 'video',
+        })
+      })
+    )
+
+    const lastPage = await repo.getMediaPage({
+      filter: 'all',
+      limit: 100,
+      offset: 200,
+    })
+    expect(lastPage.total).toBe(275)
+    expect(lastPage.items).toHaveLength(75)
+    expect(lastPage.items[0]?.filename).toBe('file-201.mp4')
+    expect(lastPage.items.at(-1)?.filename).toBe('file-275.mp4')
+
+    const playable = await repo.getMediaPage({
+      filter: 'approved',
+      limit: 100,
+      offset: 0,
+    })
+    expect(playable.total).toBe(137)
+    expect(playable.items).toHaveLength(100)
+    expect(playable.items.every((item) => item.playbackEnabled === true)).toBe(
+      true
+    )
+
+    const interludes = await repo.getMediaPage({
+      filter: 'interludes',
+      limit: 100,
+      offset: 0,
+    })
+    expect(interludes.total).toBe(91)
+    expect(interludes.items.every((item) => item.isInterlude)).toBe(true)
+
+    const search = await repo.getMediaPage({
+      filter: 'all',
+      search: 'needle',
+      limit: 100,
+      offset: 0,
+      prioritizedIds: [240],
+    })
+    expect(search.total).toBe(6)
+    expect(search.items).toHaveLength(6)
+    expect(search.items[0]?.filename).toBe('file-240.mp4')
+  })
 })

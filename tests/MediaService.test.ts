@@ -80,6 +80,42 @@ describe('MediaService', () => {
     expect(sorted[4]?.id).toBe(1) // Zebra
   })
 
+  test('getPage clamps an out-of-range request to the final bounded page', async () => {
+    const finalItems = [createItem(201, 'file-201.mp4')]
+    repo.getMediaPage
+      .mockResolvedValueOnce({ items: [], total: 275 })
+      .mockResolvedValueOnce({ items: finalItems, total: 275 })
+
+    const result = await service.getPage({
+      filter: 'videos',
+      search: 'family',
+      page: 99,
+      pageSize: 100,
+      prioritizedIds: [3, 4],
+    })
+
+    expect(repo.getMediaPage).toHaveBeenNthCalledWith(1, {
+      filter: 'videos',
+      search: 'family',
+      limit: 100,
+      offset: 9800,
+      prioritizedIds: [3, 4],
+    })
+    expect(repo.getMediaPage).toHaveBeenNthCalledWith(2, {
+      filter: 'videos',
+      search: 'family',
+      limit: 100,
+      offset: 200,
+      prioritizedIds: [3, 4],
+    })
+    expect(result).toEqual({
+      items: finalItems,
+      total: 275,
+      page: 3,
+      pageSize: 100,
+    })
+  })
+
   test('updateType() enforces singleton for intro', async () => {
     await service.updateType(10, 'intro')
 

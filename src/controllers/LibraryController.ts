@@ -11,7 +11,7 @@ import type { ConfigService } from '../services/ConfigService'
 import type { PlaylistEngine } from '../services/PlaylistEngine'
 import type { PlaybackService } from '../services/PlaybackService'
 import { renderLibrary, renderLibraryContent } from '../templates/library'
-import type { MediaType } from '../types'
+import type { MediaFileListFilter, MediaType } from '../types'
 import { isAbsolute, posix, relative, resolve } from 'node:path'
 import { lstatSync } from 'node:fs'
 
@@ -23,17 +23,14 @@ interface LibraryControllerDeps {
   mediaWritable?: boolean
 }
 
+const ADVANCED_FILES_PAGE_SIZE = 100
+
 export function createLibraryController(deps: LibraryControllerDeps) {
   const { config, media, playlist, playback, mediaWritable = true } = deps
   const controller = new Hono()
 
   // Helper to parse library query params
-  type LibraryFilter =
-    | 'all'
-    | 'approved'
-    | 'blocked'
-    | 'videos'
-    | 'interludes'
+  type LibraryFilter = MediaFileListFilter
   const parseView = (value: unknown): 'list' | 'grid' =>
     value === 'grid' ? 'grid' : 'list'
   const parseFilter = (value: unknown): LibraryFilter =>
@@ -42,33 +39,57 @@ export function createLibraryController(deps: LibraryControllerDeps) {
     )
       ? (value as LibraryFilter)
       : 'approved'
+  const parsePage = (value: unknown): number => {
+    const raw = String(value ?? '')
+    if (!/^\d+$/.test(raw)) return 1
+    const page = Number(raw)
+    return Number.isSafeInteger(page) && page > 0 ? page : 1
+  }
   const getLibraryParams = (c: {
     req: { query: (k: string) => string | undefined }
   }) => ({
     view: parseView(c.req.query('view')),
     filter: parseFilter(c.req.query('filter')),
     search: c.req.query('search') ?? '',
+    page: parsePage(c.req.query('page')),
   })
+  const libraryReturnUrl = (params: ReturnType<typeof getLibraryParams>) =>
+    `/library/files?view=${params.view}&filter=${params.filter}&search=${encodeURIComponent(params.search)}&page=${params.page}`
+
+  const loadPage = async (
+    params: ReturnType<typeof getLibraryParams>,
+    appConfig: Awaited<ReturnType<ConfigService['get']>>
+  ) => {
+    const page = await media.getPage({
+      ...params,
+      pageSize: ADVANCED_FILES_PAGE_SIZE,
+      prioritizedIds: [
+        appConfig.session.introVideoId,
+        appConfig.session.outroVideoId,
+        appConfig.session.offAirAssetId,
+      ].filter((id): id is number => id !== null),
+    })
+    void media.generateThumbnailsFor(page.items).catch(() => {})
+    return page
+  }
 
   // --- Pages ---
 
   controller.get('/library/files', async (c) => {
-    const allMedia = await media.getAll()
     const appConfig = await config.get()
-    const { view, filter, search } = getLibraryParams(c)
-
-    // Generate thumbnails in background (non-blocking)
-    void media.generateThumbnails()
+    const params = getLibraryParams(c)
+    const page = await loadPage(params, appConfig)
 
     return c.html(
       renderLibrary({
-        media: allMedia,
+        media: page.items,
         config: appConfig,
         mediaDirectory: media.getMediaDirectory(),
         mediaWritable,
-        view,
-        filter,
-        search,
+        ...params,
+        page: page.page,
+        pageSize: page.pageSize,
+        totalCount: page.total,
       })
     )
   })
@@ -76,19 +97,20 @@ export function createLibraryController(deps: LibraryControllerDeps) {
   // --- Partials ---
 
   controller.get('/partials/library', async (c) => {
-    const allMedia = await media.getAll()
     const appConfig = await config.get()
-    const { view, filter, search } = getLibraryParams(c)
-    void media.generateThumbnails()
+    const params = getLibraryParams(c)
+    const page = await loadPage(params, appConfig)
+    c.header('HX-Push-Url', libraryReturnUrl({ ...params, page: page.page }))
     return c.html(
       renderLibraryContent({
-        media: allMedia,
+        media: page.items,
         config: appConfig,
         mediaDirectory: media.getMediaDirectory(),
         mediaWritable,
-        view,
-        filter,
-        search,
+        ...params,
+        page: page.page,
+        pageSize: page.pageSize,
+        totalCount: page.total,
       })
     )
   })
@@ -107,24 +129,27 @@ export function createLibraryController(deps: LibraryControllerDeps) {
       return c.html(`<div class="toast success">Scanned ${count} files</div>`)
     }
 
-    const allMedia = await media.getAll()
     const appConfig = await config.get()
-    const view = parseView(body['view'])
-    const filter = parseFilter(body['filter'])
-    const search = (body['search'] as string) ?? ''
-
-    void media.generateThumbnails()
+    const params = {
+      view: parseView(body['view']),
+      filter: parseFilter(body['filter']),
+      search: (body['search'] as string) ?? '',
+      page: parsePage(body['page']),
+    }
+    const page = await loadPage(params, appConfig)
+    c.header('HX-Push-Url', libraryReturnUrl({ ...params, page: page.page }))
 
     // Return library content with OOB toast
     return c.html(`
       ${renderLibraryContent({
-        media: allMedia,
+        media: page.items,
         config: appConfig,
         mediaDirectory: media.getMediaDirectory(),
         mediaWritable,
-        view,
-        filter,
-        search,
+        ...params,
+        page: page.page,
+        pageSize: page.pageSize,
+        totalCount: page.total,
       })}
       <div id="toast-container" hx-swap-oob="innerHTML">
         <div class="toast success">Scanned ${count} files</div>
@@ -146,6 +171,7 @@ export function createLibraryController(deps: LibraryControllerDeps) {
     const view = parseView(body['view'])
     const filter = parseFilter(body['filter'])
     const search = (body['search'] as string) ?? ''
+    const requestedPage = parsePage(body['page'])
 
     if (!files) {
       return c.html(html`<div class="toast warning">No files uploaded</div>`)
@@ -210,20 +236,22 @@ export function createLibraryController(deps: LibraryControllerDeps) {
 
     // Rescan after upload
     await media.rescan()
-    const allMedia = await media.getAll()
     const appConfig = await config.get()
-    void media.generateThumbnails()
+    const params = { view, filter, search, page: requestedPage }
+    const page = await loadPage(params, appConfig)
+    c.header('HX-Push-Url', libraryReturnUrl({ ...params, page: page.page }))
 
     // Return library content with OOB toast
     return c.html(`
       ${renderLibraryContent({
-        media: allMedia,
+        media: page.items,
         config: appConfig,
         mediaDirectory: media.getMediaDirectory(),
         mediaWritable,
-        view,
-        filter,
-        search,
+        ...params,
+        page: page.page,
+        pageSize: page.pageSize,
+        totalCount: page.total,
       })}
       <div id="toast-container" hx-swap-oob="innerHTML">
         <div class="toast success">Uploaded ${uploaded} files</div>

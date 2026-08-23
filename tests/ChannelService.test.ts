@@ -1,9 +1,13 @@
 import { describe, expect, test } from 'bun:test'
 import { mock } from 'jest-mock-extended'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { IMediaRepository } from '../src/repositories/IMediaRepository'
 import type { LibraryPolicyDocument } from '../src/config/library'
 import type { MediaItem } from '../src/types'
 import { ChannelService } from '../src/services/ChannelService'
+import { ChannelConfigurationStore } from '../src/services/ChannelConfigurationStore'
 
 const policy: LibraryPolicyDocument = {
   version: 1,
@@ -143,5 +147,53 @@ describe('ChannelService', () => {
     expect(result?.program).toBeNull()
     expect(result?.next?.scheduledStart).toBe('2026-08-23T22:30:00.000Z')
     expect(await service.getNow('missing')).toBeNull()
+  })
+
+  test('applies channel edits immediately and restores persisted off-air state', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'toasttv-channel-service-'))
+    try {
+      const repository = mock<IMediaRepository>()
+      const store = new ChannelConfigurationStore(
+        join(directory, 'channels.json'),
+        policy.channels
+      )
+      const service = new ChannelService(repository, policy, undefined, store)
+      service.create({
+        id: 'cartoons',
+        name: 'Cartoon Classics',
+        enabled: true,
+        timezone: 'America/New_York',
+        slots: [
+          {
+            days: ['sat'],
+            start: '08:00',
+            end: '10:00',
+            groups: ['comfort'],
+          },
+        ],
+      })
+
+      expect(service.list().channels.map((channel) => channel.id)).toEqual([
+        'kids-club',
+        'cartoons',
+      ])
+      expect(service.setOnAir('cartoons', false)).toBe(true)
+      expect(
+        service.list().channels.find((channel) => channel.id === 'cartoons')
+      ).toMatchObject({ onAir: false, manuallyOffAir: true })
+
+      const restored = new ChannelService(repository, policy, undefined, store)
+      expect(restored.isOnAir('cartoons')).toBe(false)
+      expect(restored.setEnabled('cartoons', false)).toBe(true)
+      expect(restored.list().channels.map((channel) => channel.id)).not.toContain(
+        'cartoons'
+      )
+      expect(restored.delete('cartoons')).toBe(true)
+      expect(
+        restored.administrationSnapshot().channels.map((channel) => channel.id)
+      ).toEqual(['kids-club'])
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
   })
 })

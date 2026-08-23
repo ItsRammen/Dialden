@@ -101,8 +101,9 @@ The mascots **Penny & Chip** are ready to run your station.
 
 The Docker server runs the management application without MPV, HDMI-CEC, or
 Raspberry Pi hardware detection. It supports independent read-only TV and
-movie roots, a default-deny Kids 7 library, and deterministic read-only channel
-schedules. Seerr/Overseerr is intentionally not part of this stage.
+movie roots, a default-deny Kids 7 library, and deterministic channel playback
+APIs backed by editable schedules. Seerr/Overseerr is intentionally not part of
+this stage.
 
 #### Unraid template
 
@@ -127,6 +128,14 @@ TV Shows: /mnt/user/Plex/TV Shows (read-only)
 Movies:   /mnt/user/Plex/Movies (read-only)
 Web UI:   http://TOWER:1993
 ```
+
+For an existing container created from an earlier template, also verify that
+the container targets are exactly `/media/tv` and `/media/movies`, then force an
+image update and rescan. If ToastTV reports thousands of indexed files but zero
+TV/movie collections, the files were indexed through the old combined
+`/media` root and cannot be scheduled as collections. Back up appdata before
+discarding an old `media.db`; rebuilding it is the cleanest migration when the
+legacy file rows are no longer needed.
 
 The template uses the bundled Kids 7 rating policy. Set an optional TMDB API
 key in the Unraid template to match collections and evaluate certifications;
@@ -163,7 +172,8 @@ The admin UI defaults to `http://127.0.0.1:1993`; health status is at
 not expose this port to the internet or an untrusted network. To reach it from
 a trusted home LAN, explicitly set `TOASTTV_BIND_ADDRESS=0.0.0.0` in `.env`.
 
-SQLite, thumbnails, cached artwork, and parent overrides use the `toasttv-data` Docker volume.
+SQLite, thumbnails, cached artwork, parent overrides, editable channel
+definitions, and manual off-air state use the `toasttv-data` Docker volume.
 TV, movies, interludes, and policy are separate read-only bind mounts. Back up
 the data volume with the container stopped before copying raw SQLite files;
 `docker compose down -v` deletes it.
@@ -180,12 +190,14 @@ root, valid positive duration, and effective `allow` decision can enter an
 automatic schedule.
 
 The policy is intentionally conservative and is loaded once at process start.
-Restart the container after editing it. Compose mounts the repository copy at
+Restart the container after editing rating rules or collection-to-group
+membership. Compose mounts the repository copy at
 `/app/config/kids-7.library.json`; Unraid seeds an editable persistent copy at
 `/mnt/user/appdata/toasttv/kids-7.library.json` and reads it through
 `/app/data/kids-7.library.json`. Back up that file with appdata. `TZ` controls
-container logs and legacy date handling; channel slot timezones are the
-per-channel `timezone` values in this policy. If `TOASTTV_LIBRARY_POLICY` is unset,
+container logs and legacy date handling. The policy seeds channel timezones and
+slots; after the first channel edit, effective channel definitions come from
+`/app/data/channels.json`. If `TOASTTV_LIBRARY_POLICY` is unset,
 managed roots boot review-only. If a configured policy is missing, unreadable,
 or invalid, ToastTV logs the problem and continues with those roots fail-closed
 instead of broadening access.
@@ -202,8 +214,9 @@ The main `/library` page is collection-first: it summarizes TV shows, movies,
 interludes, and collections needing review. TV and movie views support search,
 approval and metadata filters, collection-level bulk approve/block actions, and
 show pages grouped by season. Raw filenames and probe details remain available
-under **Advanced Media Details** and at `/library/files`; they are no longer the
-primary approval workflow. Use **Library → Needs Review** to approve, block, or
+under **Advanced Media Details** and at `/library/files`; they are loaded in
+server-filtered pages of at most 100 files and are no longer the primary
+approval workflow. Use **Library → Needs Review** to approve, block, or
 return a collection to the Kids 7 policy, and **Review → Metadata** to confirm an
 ambiguous TMDB result or retry an unmatched collection.
 
@@ -229,6 +242,11 @@ GET /api/v1/channels
 GET /api/v1/channels/:id/now
 GET /api/v1/channels/:id/guide?hours=8
 GET|HEAD /api/v1/media/:id/stream
+GET|POST /api/admin/v1/channels
+PUT|DELETE /api/admin/v1/channels/:id
+POST /api/admin/v1/channels/:id/enabled
+POST /api/admin/v1/channels/:id/on-air
+POST /api/admin/v1/channels/:id/off-air
 ```
 
 Collection-oriented read APIs are available under `/api/v1/library`; mutating
@@ -238,11 +256,19 @@ authentication, and TV presence heartbeats are operational telemetry rather
 than a trusted identity. Do not expose either interface to the public internet.
 
 The policy seeds Kids Club, Nature & Discovery, and Family Movie Night in the
-`Asia/Taipei` timezone. Timelines are deterministic across restarts and return
-the current media ID, start/end timestamps, live offset, and a server-approved
-playback URL. The stream endpoint supports HTTP Range requests for seeking.
-**Go off air** temporarily suppresses a channel timeline; that manual switch is
-process-local in this milestone and returns to on-air after a container restart.
+`Asia/Taipei` timezone. Open **Channels** to create, edit, enable, disable, or
+delete channels and configure timezone and schedule slots that select existing
+programming groups. Collection-to-group membership is still defined by exact
+root/collection entries in `kids-7.library.json`; the channel editor does not
+assign shows or movies to groups, and policy edits require a restart.
+Edits take effect without restarting the server and are atomically persisted to
+`/app/data/channels.json`; manual off-air state is persisted there as well.
+Timelines are deterministic across restarts and return the current media ID,
+start/end timestamps, live offset, and a server-approved playback URL. The
+stream endpoint supports HTTP Range requests for seeking. **Go off air** only
+pauses a valid schedule. An enabled channel with no eligible items is shown as
+**No programming** and links to its configuration instead of offering a false
+"Go on air" remedy.
 
 `/api/v1/health` currently checks SQLite and FFmpeg only. It does not prove the
 mounts are readable or that the first scan finished. Watch the Dashboard or

@@ -14,6 +14,8 @@ import type {
   CollectionUpsertInput,
   LibrarySummary,
   MediaCollection,
+  MediaFileListOptions,
+  MediaFilePage,
   OverrideDecision,
   PolicyDecision,
 } from '../types'
@@ -41,6 +43,9 @@ export interface IMediaRepository {
    * Get all media items sorted by filename
    */
   getAll(): Promise<MediaItem[]>
+
+  /** Query one bounded, filtered page for the Advanced Files UI. */
+  getMediaPage(options: MediaFileListOptions): Promise<MediaFilePage>
 
   /**
    * Get a single media item by ID

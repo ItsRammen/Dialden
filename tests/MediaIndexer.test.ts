@@ -11,6 +11,7 @@ import type {
   IMediaProbe,
   MediaConfig,
   InterludeConfig,
+  LibraryScanEvent,
 } from '../src/types'
 
 describe('MediaIndexer', () => {
@@ -233,6 +234,78 @@ describe('MediaIndexer', () => {
         }),
       ])
     )
+  })
+
+  test('coalesces per-file progress events while preserving root and terminal state', async () => {
+    const files = Array.from(
+      { length: 40 },
+      (_, index) => `/media/videos/show-${index}.mp4`
+    )
+    fs.listFiles.mockImplementation((directory) =>
+      directory === '/media/videos' ? files : []
+    )
+
+    let clockMs = 0
+    probe.getMetadata.mockImplementation(async () => {
+      // Four probes complete per batch. At 25 ms each, the indexer sees a
+      // sustained one-second scan without making this test wait in real time.
+      clockMs += 25
+      return {
+        durationSeconds: 60,
+        codec: 'h264',
+        width: 1920,
+        height: 1080,
+        fps: 30,
+        bitrateMbps: 10,
+      }
+    })
+    indexer = new MediaIndexer(
+      mediaConfig,
+      interludeConfig,
+      repo,
+      fs,
+      probe,
+      undefined,
+      undefined,
+      { nowMs: () => clockMs }
+    )
+
+    const received: Array<{ event: LibraryScanEvent; atMs: number }> = []
+    indexer.onScanEvent((event) => {
+      received.push({ event, atMs: clockMs })
+    })
+
+    expect(await indexer.scanAll()).toBe(40)
+
+    const progress = received.filter(
+      ({ event }) => event.type === 'library.scan.progress'
+    )
+    expect(progress).toHaveLength(6)
+    for (let index = 1; index < progress.length; index++) {
+      expect(
+        (progress[index]?.atMs ?? 0) - (progress[index - 1]?.atMs ?? 0)
+      ).toBeGreaterThanOrEqual(200)
+    }
+
+    const rootCompleted = received.filter(
+      ({ event }) => event.type === 'library.scan.root.completed'
+    )
+    expect(rootCompleted).toHaveLength(2)
+    expect(rootCompleted[0]?.event.state.processedFiles).toBe(40)
+    expect(rootCompleted[1]?.event.state.processedFiles).toBe(40)
+
+    const completed = received.filter(
+      ({ event }) => event.type === 'library.scan.completed'
+    )
+    expect(completed).toHaveLength(1)
+    expect(completed[0]?.event.state).toMatchObject({
+      status: 'completed',
+      discoveredFiles: 40,
+      processedFiles: 40,
+      indexedFiles: 40,
+      failedFiles: 0,
+    })
+    expect(received.at(-1)?.event.type).toBe('library.scan.completed')
   })
 
   test('uses the stable locator to preserve metadata across a root path change', async () => {

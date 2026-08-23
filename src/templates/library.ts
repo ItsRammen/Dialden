@@ -5,19 +5,54 @@
  * Uses pure HTMX for all interactions - no page reloads or inline JS.
  */
 
-import type { MediaItem, MediaType } from '../types'
+import type { MediaFileListFilter, MediaItem, MediaType } from '../types'
 import type { AppConfig } from '../repositories/ConfigRepository'
 import { renderLayout } from './layout'
 import { escapeHtml, formatTime } from './utils'
 
 export interface LibraryProps {
-  media: MediaItem[]
+  media: readonly MediaItem[]
   config?: AppConfig
   mediaDirectory: string
   mediaWritable?: boolean
   view: 'list' | 'grid'
-  filter: 'all' | 'approved' | 'blocked' | 'videos' | 'interludes'
+  filter: MediaFileListFilter
   search: string
+  /** Current one-based page. Optional for small direct template consumers. */
+  page?: number
+  pageSize?: number
+  /** Total rows matching the database query, not only this page. */
+  totalCount?: number
+}
+
+interface LibraryNavigationState {
+  readonly view: 'list' | 'grid'
+  readonly filter: MediaFileListFilter
+  readonly search: string
+  readonly page: number
+}
+
+function libraryHref(
+  base: '/library/files' | '/partials/library',
+  state: LibraryNavigationState
+): string {
+  return `${base}?view=${state.view}&filter=${state.filter}&search=${encodeURIComponent(state.search)}&page=${state.page}`
+}
+
+function renderLibraryLink(
+  label: string,
+  state: LibraryNavigationState,
+  className: string,
+  title?: string
+): string {
+  const href = escapeHtml(libraryHref('/library/files', state))
+  const partial = escapeHtml(libraryHref('/partials/library', state))
+  return `<a href="${href}"
+             hx-get="${partial}"
+             hx-target="#library-content"
+             hx-swap="outerHTML"
+             hx-push-url="${href}"
+             class="${escapeHtml(className)}"${title ? ` title="${escapeHtml(title)}"` : ''}>${label}</a>`
 }
 
 /**
@@ -41,9 +76,11 @@ export function renderLibraryContent(props: LibraryProps): string {
     view,
     filter,
     search,
+    page = 1,
+    pageSize = 100,
+    totalCount,
   } = props
   const safeSearch = escapeHtml(search)
-  const encodedSearch = encodeURIComponent(search)
   const safeMediaDirectory = escapeHtml(mediaDirectory)
 
   // Apply filter
@@ -89,6 +126,10 @@ export function renderLibraryContent(props: LibraryProps): string {
 
   const videos = filteredMedia.filter((m) => !m.isInterlude)
   const interludes = filteredMedia.filter((m) => m.isInterlude)
+  const total = totalCount ?? filteredMedia.length
+  const pageCount = Math.max(1, Math.ceil(total / pageSize))
+  const currentPage = Math.max(1, Math.min(page, pageCount))
+  const navigation = { view, filter, search, page: currentPage }
 
   // Build content based on filter
   let mediaContent = ''
@@ -105,7 +146,8 @@ export function renderLibraryContent(props: LibraryProps): string {
       videos,
       view,
       config,
-      mediaWritable
+      mediaWritable,
+      total
     )
   } else if (filter === 'interludes') {
     mediaContent = renderMediaSection(
@@ -114,22 +156,24 @@ export function renderLibraryContent(props: LibraryProps): string {
       interludes,
       view,
       config,
-      mediaWritable
+      mediaWritable,
+      total
     )
   } else {
     mediaContent = renderMediaSection(
-      filter === 'approved' ? 'Kids 7 Approved' : 'Not Scheduled',
+      filter === 'approved' ? 'Playable files' : 'Not Scheduled',
       filter === 'approved' ? '✅' : '🔒',
       filteredMedia,
       view,
       config,
-      mediaWritable
+      mediaWritable,
+      total
     )
   }
 
   return `
     <div class="library" id="library-content">
-      <h1>Media Library (${filteredMedia.length})</h1>
+      <h1>Media Library (${total})</h1>
       
       <!-- Toolbar -->
       <div class="library-toolbar">
@@ -149,33 +193,26 @@ export function renderLibraryContent(props: LibraryProps): string {
           <input type="hidden" name="filter" value="${filter}">
           ${
             search
-              ? `<button type="button" class="search-clear" 
-                              hx-get="/partials/library?view=${view}&filter=${filter}" 
+              ? `<button type="button" class="search-clear"
+                              hx-get="${escapeHtml(libraryHref('/partials/library', { ...navigation, search: '', page: 1 }))}"
                               hx-target="#library-content" 
-                              hx-swap="outerHTML">×</button>`
+                              hx-swap="outerHTML"
+                              hx-push-url="${escapeHtml(libraryHref('/library/files', { ...navigation, search: '', page: 1 }))}">×</button>`
               : ''
           }
         </div>
         
-        <div class="filter-buttons"
-             hx-boost="true"
-             hx-target="#library-content"
-             hx-swap="outerHTML"
-             hx-push-url="false">
-          <a href="/partials/library?view=${view}&filter=all&search=${encodedSearch}" class="btn btn-small ${filter === 'all' ? 'active' : ''}">All Media</a>
-          <a href="/partials/library?view=${view}&filter=approved&search=${encodedSearch}" class="btn btn-small ${filter === 'approved' ? 'active' : ''}">✅ Kids 7</a>
-          <a href="/partials/library?view=${view}&filter=blocked&search=${encodedSearch}" class="btn btn-small ${filter === 'blocked' ? 'active' : ''}">🔒 Not Scheduled</a>
-          <a href="/partials/library?view=${view}&filter=videos&search=${encodedSearch}" class="btn btn-small ${filter === 'videos' ? 'active' : ''}">📺 Videos</a>
-          <a href="/partials/library?view=${view}&filter=interludes&search=${encodedSearch}" class="btn btn-small ${filter === 'interludes' ? 'active' : ''}">🎬 Interludes</a>
+        <div class="filter-buttons">
+          ${renderLibraryLink('All Media', { ...navigation, filter: 'all', page: 1 }, `btn btn-small ${filter === 'all' ? 'active' : ''}`)}
+          ${renderLibraryLink('✅ Playable', { ...navigation, filter: 'approved', page: 1 }, `btn btn-small ${filter === 'approved' ? 'active' : ''}`)}
+          ${renderLibraryLink('🔒 Not Scheduled', { ...navigation, filter: 'blocked', page: 1 }, `btn btn-small ${filter === 'blocked' ? 'active' : ''}`)}
+          ${renderLibraryLink('📺 Videos', { ...navigation, filter: 'videos', page: 1 }, `btn btn-small ${filter === 'videos' ? 'active' : ''}`)}
+          ${renderLibraryLink('🎬 Interludes', { ...navigation, filter: 'interludes', page: 1 }, `btn btn-small ${filter === 'interludes' ? 'active' : ''}`)}
         </div>
         
-        <div class="view-buttons"
-             hx-boost="true"
-             hx-target="#library-content"
-             hx-swap="outerHTML"
-             hx-push-url="false">
-          <a href="/partials/library?view=list&filter=${filter}&search=${encodedSearch}" class="btn btn-small ${view === 'list' ? 'active' : ''}" title="List view">☰</a>
-          <a href="/partials/library?view=grid&filter=${filter}&search=${encodedSearch}" class="btn btn-small ${view === 'grid' ? 'active' : ''}" title="Grid view">⊞</a>
+        <div class="view-buttons">
+          ${renderLibraryLink('☰', { ...navigation, view: 'list' }, `btn btn-small ${view === 'list' ? 'active' : ''}`, 'List view')}
+          ${renderLibraryLink('⊞', { ...navigation, view: 'grid' }, `btn btn-small ${view === 'grid' ? 'active' : ''}`, 'Grid view')}
         </div>
       </div>
       
@@ -212,6 +249,7 @@ export function renderLibraryContent(props: LibraryProps): string {
         <input type="hidden" name="view" value="${view}">
         <input type="hidden" name="filter" value="${filter}">
         <input type="hidden" name="search" value="${safeSearch}">
+        <input type="hidden" name="page" value="${currentPage}">
       </div>`
           : `<div class="dropzone">
         <div class="dropzone-content">
@@ -233,8 +271,44 @@ export function renderLibraryContent(props: LibraryProps): string {
             : mediaContent
         }
       </div>
+      ${renderMediaPagination(navigation, total, pageSize)}
     </div>
   `
+}
+
+function renderMediaPagination(
+  state: LibraryNavigationState,
+  total: number,
+  pageSize: number
+): string {
+  if (total <= 0) return ''
+  const pageCount = Math.max(1, Math.ceil(total / pageSize))
+  const start = (state.page - 1) * pageSize + 1
+  const end = Math.min(total, state.page * pageSize)
+  const previous =
+    state.page > 1
+      ? renderLibraryLink(
+          '← Previous',
+          { ...state, page: state.page - 1 },
+          'btn btn-small',
+          'Previous page'
+        )
+      : '<span></span>'
+  const next =
+    state.page < pageCount
+      ? renderLibraryLink(
+          'Next →',
+          { ...state, page: state.page + 1 },
+          'btn btn-small',
+          'Next page'
+        )
+      : '<span></span>'
+
+  return `<nav class="library-pagination" aria-label="Advanced files pages">
+    ${previous}
+    <span>Showing ${start}–${end} of ${total} files · Page ${state.page} of ${pageCount}</span>
+    ${next}
+  </nav>`
 }
 
 /**
@@ -469,14 +543,15 @@ export function renderDatePicker(
 function renderMediaSection(
   title: string,
   icon: string,
-  items: MediaItem[],
+  items: readonly MediaItem[],
   view: 'list' | 'grid',
   config?: AppConfig,
-  mediaWritable = true
+  mediaWritable = true,
+  totalCount = items.length
 ): string {
   return `
     <section class="media-section">
-      <h2>${icon} ${title} (${items.length})</h2>
+      <h2>${icon} ${title} (${totalCount})</h2>
       <div class="${view === 'grid' ? 'media-grid' : 'media-list'}">
         ${items.length === 0 ? '<p class="empty-list">No files matching filter</p>' : items.map((item) => renderMediaItem(item, view, config, mediaWritable)).join('')}
       </div>

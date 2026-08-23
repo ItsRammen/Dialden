@@ -70,11 +70,12 @@ function metadataState(
 function dashboard(
   state: MetadataJobState,
   persistedErrors: readonly MediaCollection[] = [],
-  config: PublicMetadataConfig = publicConfig
+  config: PublicMetadataConfig = publicConfig,
+  summaryOverrides: Partial<LibrarySummary> = {}
 ): HeadlessDashboardService {
   const repository = {
     async getLibrarySummary() {
-      return summary
+      return { ...summary, ...summaryOverrides }
     },
     async getAll() {
       return []
@@ -105,7 +106,13 @@ describe('headless dashboard metadata health', () => {
     expect(view.metadata.statusMessage).toContain(
       'no successful provider request has been observed'
     )
-    expect(view.server.status).toBe('online')
+    expect(view.server.status).toBe('degraded')
+    expect(view.warnings).toContainEqual({
+      severity: 'critical',
+      message: 'No enabled channels are configured.',
+      href: '/channels',
+      actionLabel: 'Manage channels',
+    })
   })
 
   test('shows connected only after the service reports an observed success', async () => {
@@ -151,5 +158,24 @@ describe('headless dashboard metadata health', () => {
     expect(view.warnings?.some((warning) => warning.severity === 'critical')).toBe(
       true
     )
+  })
+
+  test('warns when files were indexed through the legacy root instead of managed collections', async () => {
+    const view = await dashboard(
+      metadataState({ providerHealth: 'connected' }),
+      [],
+      publicConfig,
+      { totalFiles: 20_976 }
+    ).build()
+
+    expect(view.server.status).toBe('degraded')
+    expect(
+      view.warnings?.some(
+        (warning) =>
+          warning.severity === 'critical' &&
+          warning.message.includes('20,976 files are indexed') &&
+          warning.message.includes('TOASTTV_TV_MEDIA')
+      )
+    ).toBe(true)
   })
 })

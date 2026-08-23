@@ -153,6 +153,29 @@ describe('collection library template', () => {
     expect(review).toContain('Multiple likely matches require confirmation.')
   })
 
+  test('explains legacy-root indexing instead of presenting an unexplained empty library', () => {
+    const markup = renderCollectionLibraryContent(
+      library({
+        activeView: 'summary',
+        summary: {
+          tvCollections: 0,
+          tvEpisodes: 0,
+          movieCollections: 0,
+          interludes: 0,
+          reviewCollections: 0,
+          totalFiles: 20_976,
+        },
+        collections: [],
+      })
+    )
+
+    expect(markup).toContain('20,976 files were indexed')
+    expect(markup).toContain('TOASTTV_TV_MEDIA')
+    expect(markup).toContain('TOASTTV_MOVIE_MEDIA')
+    expect(markup).toContain('/media/tv')
+    expect(markup).toContain('/media/movies')
+  })
+
   test('escapes provider and filesystem-derived values and drops unsafe URLs', () => {
     const hostile = '<svg onload=alert(1)>'
     const markup = renderCollectionLibraryContent(

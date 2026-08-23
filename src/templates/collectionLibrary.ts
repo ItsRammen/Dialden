@@ -25,6 +25,7 @@ export interface CollectionLibrarySummaryViewModel {
   readonly movieCollections: number
   readonly interludes: number
   readonly reviewCollections: number
+  readonly totalFiles?: number
 }
 
 export interface CollectionMetadataViewModel {
@@ -212,9 +213,19 @@ function safePosterUrl(value: string | undefined): string | null {
 }
 
 function renderSummary(summary: CollectionLibrarySummaryViewModel): string {
+  const legacyRootWarning =
+    (summary.totalFiles ?? 0) > 0 &&
+    summary.tvCollections === 0 &&
+    summary.movieCollections === 0
+      ? `<div class="collection-config-warning" role="alert">
+          <strong>${count(summary.totalFiles ?? 0)} files were indexed without managed TV or movie roots.</strong>
+          <span>Mount the libraries at <code>/media/tv</code> and <code>/media/movies</code>, set <code>TOASTTV_TV_MEDIA</code> and <code>TOASTTV_MOVIE_MEDIA</code>, then rescan. Files indexed only through legacy <code>/media</code> cannot become show or movie collections.</span>
+        </div>`
+      : ''
   return `
     <section class="collection-summary" aria-labelledby="collection-summary-title">
       <h2 id="collection-summary-title" class="collection-visually-hidden">Library summary</h2>
+      ${legacyRootWarning}
       <div class="collection-summary-grid">
         <a href="/library/tv" class="collection-summary-card">
           <span class="collection-summary-label">TV shows</span>

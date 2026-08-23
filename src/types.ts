@@ -245,6 +245,29 @@ export interface MediaItem {
   readonly episodeTitle?: string | null
 }
 
+/** Filters supported by the file-level Advanced Files catalog. */
+export type MediaFileListFilter =
+  | 'all'
+  | 'approved'
+  | 'blocked'
+  | 'videos'
+  | 'interludes'
+
+/** Bounded database query for one page of the file-level catalog. */
+export interface MediaFileListOptions {
+  readonly filter: MediaFileListFilter
+  readonly search?: string
+  readonly limit: number
+  readonly offset: number
+  /** Configured singleton assets that should remain at the top of the list. */
+  readonly prioritizedIds?: readonly number[]
+}
+
+export interface MediaFilePage {
+  readonly items: readonly MediaItem[]
+  readonly total: number
+}
+
 export interface PlaybackStatus {
   readonly isPlaying: boolean
   readonly state: 'playing' | 'paused' | 'stopped'

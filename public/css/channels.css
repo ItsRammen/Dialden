@@ -1,0 +1,209 @@
+.channel-admin {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.channel-admin-hero,
+.channel-admin-editor,
+.channel-admin-card {
+  background: rgba(15, 52, 96, 0.82);
+  border: var(--border-cartoon);
+  border-radius: var(--border-radius);
+  box-shadow: var(--shadow-cartoon);
+}
+
+.channel-admin-hero,
+.channel-admin-editor {
+  padding: 1.25rem;
+}
+
+.channel-admin-hero,
+.channel-admin-editor > header,
+.channel-admin-card > header,
+.channel-admin-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.channel-admin-eyebrow {
+  color: var(--toast-teal);
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.channel-admin-link,
+.channel-admin-actions a,
+.channel-admin-editor a {
+  color: var(--toast-yellow);
+  font-weight: 800;
+}
+
+.channel-admin-alert {
+  margin: 0;
+  padding: 0.9rem 1rem;
+  border-radius: 0.65rem;
+}
+
+.channel-admin-alert-error {
+  background: rgba(255, 79, 110, 0.18);
+  border: 1px solid #ff8b9f;
+}
+
+.channel-admin-alert-success {
+  background: rgba(31, 211, 145, 0.16);
+  border: 1px solid var(--toast-green);
+}
+
+.channel-admin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 1rem;
+}
+
+.channel-admin-card {
+  padding: 1rem;
+}
+
+.channel-admin-card h2 {
+  margin-bottom: 0.2rem;
+}
+
+.channel-admin-state {
+  padding: 0.25rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.channel-admin-state-enabled {
+  color: var(--toast-green);
+  background: rgba(31, 211, 145, 0.14);
+}
+
+.channel-admin-state-off,
+.channel-admin-state-disabled {
+  color: var(--toast-yellow);
+  background: rgba(255, 210, 63, 0.14);
+}
+
+.channel-admin-card dl {
+  display: grid;
+  gap: 0.45rem;
+  margin: 1rem 0;
+}
+
+.channel-admin-card dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.channel-admin-card dt {
+  color: var(--text-secondary);
+}
+
+.channel-admin-card dd {
+  font-weight: 700;
+}
+
+.channel-admin-actions {
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.channel-admin-actions form {
+  margin: 0;
+}
+
+.channel-admin-actions button,
+.channel-admin-editor button {
+  width: auto;
+}
+
+.channel-admin-danger {
+  color: #ffafbc;
+}
+
+.channel-admin-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 1rem;
+}
+
+.channel-admin-editor form,
+.channel-admin-editor label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.channel-admin-editor form {
+  gap: 1rem;
+}
+
+.channel-admin-editor input,
+.channel-admin-editor textarea {
+  width: 100%;
+}
+
+.channel-admin-editor textarea {
+  min-height: 12rem;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.channel-admin-checkbox {
+  flex-direction: row !important;
+  align-items: center;
+  align-self: end;
+  min-height: 2.75rem;
+}
+
+.channel-admin-checkbox input {
+  width: auto;
+}
+
+.channel-admin-help,
+.channel-admin-editor small,
+.channel-admin-groups p {
+  color: var(--text-secondary);
+}
+
+.channel-admin-groups {
+  padding: 0.9rem;
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 0.65rem;
+}
+
+.channel-admin-groups div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.55rem;
+}
+
+.channel-admin-groups code {
+  padding: 0.2rem 0.4rem;
+  border-radius: 0.3rem;
+  background: rgba(0, 0, 0, 0.24);
+}
+
+.channel-admin-empty {
+  padding: 1.25rem;
+  border: 1px dashed rgba(255, 255, 255, 0.35);
+  border-radius: var(--border-radius);
+}
+
+@media (max-width: 640px) {
+  .channel-admin-hero,
+  .channel-admin-editor > header {
+    flex-direction: column;
+  }
+}

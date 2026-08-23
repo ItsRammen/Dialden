@@ -16,6 +16,8 @@ import type {
   CollectionUpsertInput,
   LibrarySummary,
   MediaCollection,
+  MediaFileListOptions,
+  MediaFilePage,
   MetadataCandidateRecord,
   MetadataMatchStatus,
   MetadataRatingStatus,
@@ -740,6 +742,84 @@ export class MediaRepository implements IMediaRepository {
       `)
       .all(id) as Array<Record<string, unknown>>
     return rows.map((row) => this.rowToMediaItem(row))
+  }
+
+  async getMediaPage(options: MediaFileListOptions): Promise<MediaFilePage> {
+    if (!this.db) throw new Error('Repository not initialized')
+
+    // Keep the database boundary bounded even if a non-HTTP caller supplies
+    // unexpected values. The Advanced Files controller currently requests 100.
+    const limit = Number.isSafeInteger(options.limit)
+      ? Math.max(1, Math.min(250, options.limit))
+      : 100
+    const offset = Number.isSafeInteger(options.offset)
+      ? Math.max(0, options.offset)
+      : 0
+    const conditions: string[] = []
+    const bindings: Array<string | number> = []
+    const playableSql = `
+      root_available = 1
+      AND duration_seconds > 0
+      AND COALESCE(playback_override, policy_enabled, 0) = 1
+    `
+
+    switch (options.filter) {
+      case 'approved':
+        conditions.push(`(${playableSql})`)
+        break
+      case 'blocked':
+        conditions.push(`NOT (${playableSql})`)
+        break
+      case 'videos':
+        conditions.push('is_interlude = 0')
+        break
+      case 'interludes':
+        conditions.push('is_interlude = 1')
+        break
+      case 'all':
+        break
+    }
+
+    if (options.search) {
+      // instr() treats %, _ and backslashes literally, matching the former
+      // in-memory substring search without exposing LIKE wildcard behavior.
+      conditions.push(`(
+        instr(lower(filename), lower(?)) > 0
+        OR instr(lower(COALESCE(collection_title, '')), lower(?)) > 0
+      )`)
+      bindings.push(options.search, options.search)
+    }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
+    const prioritizedIds = [...new Set(options.prioritizedIds ?? [])].filter(
+      (id) => Number.isSafeInteger(id) && id > 0
+    )
+    const priorityOrder =
+      prioritizedIds.length > 0
+        ? `CASE id ${prioritizedIds
+            .map((_, index) => `WHEN ? THEN ${index}`)
+            .join(' ')} ELSE ${prioritizedIds.length} END,`
+        : ''
+
+    const totalRow = this.db
+      .prepare(`SELECT COUNT(*) AS count FROM media ${where}`)
+      .get(...bindings) as { count: number }
+    const rows = this.db
+      .prepare(`
+        SELECT ${MEDIA_COLUMNS}
+        FROM media
+        ${where}
+        ORDER BY ${priorityOrder} filename COLLATE NOCASE, id
+        LIMIT ? OFFSET ?
+      `)
+      .all(...bindings, ...prioritizedIds, limit, offset) as Array<
+      Record<string, unknown>
+    >
+
+    return {
+      items: rows.map((row) => this.rowToMediaItem(row)),
+      total: Number(totalRow.count),
+    }
   }
 
   async getLibrarySummary(): Promise<LibrarySummary> {

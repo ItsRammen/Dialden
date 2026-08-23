@@ -74,6 +74,7 @@
 }
 
 .headless-server-offline strong,
+.headless-status-no_program,
 .headless-status-unavailable,
 .headless-metadata-offline {
   color: #ff8b9f;

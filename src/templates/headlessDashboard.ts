@@ -13,6 +13,7 @@ export interface HeadlessServerViewModel {
 export type ChannelOperationalStatus =
   | 'on_air'
   | 'off_air'
+  | 'no_program'
   | 'scheduled'
   | 'unavailable'
 
@@ -32,6 +33,7 @@ export interface HeadlessChannelViewModel {
   readonly now: HeadlessChannelProgramViewModel | null
   readonly next: HeadlessChannelProgramViewModel | null
   readonly guideHref: string
+  readonly manageHref?: string
   readonly onAirAction?: string
   readonly offAirAction?: string
   readonly viewerCount?: number
@@ -126,7 +128,8 @@ const CHANNEL_STATUS: Record<
   { label: string; icon: string }
 > = {
   on_air: { label: 'On air', icon: '●' },
-  off_air: { label: 'Off air', icon: '○' },
+  off_air: { label: 'Manually off air', icon: '○' },
+  no_program: { label: 'No programming', icon: '!' },
   scheduled: { label: 'Scheduled', icon: '◷' },
   unavailable: { label: 'Unavailable', icon: '!' },
 }
@@ -197,6 +200,7 @@ function renderProgram(
 function renderChannel(channel: HeadlessChannelViewModel): string {
   const status = CHANNEL_STATUS[channel.status]
   const guideHref = safeInternalHref(channel.guideHref)
+  const manageHref = safeInternalHref(channel.manageHref)
   const onAirAction = safeInternalHref(channel.onAirAction)
   const offAirAction = safeInternalHref(channel.offAirAction)
 
@@ -227,10 +231,11 @@ function renderChannel(channel: HeadlessChannelViewModel): string {
             ? `<a class="headless-card-link" href="${guideHref}" aria-label="Open the ${escapeHtml(channel.name)} guide">Guide</a>`
             : ''
         }
+        ${manageHref ? `<a class="headless-card-link" href="${manageHref}">Configure</a>` : ''}
         ${
           channel.status === 'off_air' && onAirAction
-            ? `<form method="post" action="${onAirAction}"><button type="submit">Go on air</button></form>`
-            : channel.status !== 'off_air' && offAirAction
+            ? `<form method="post" action="${onAirAction}"><button type="submit">Resume schedule</button></form>`
+            : (channel.status === 'on_air' || channel.status === 'scheduled') && offAirAction
               ? `<form method="post" action="${offAirAction}"><button type="submit">Go off air</button></form>`
               : ''
         }
@@ -355,6 +360,7 @@ export function renderHeadlessDashboardContent(
             <p class="headless-eyebrow">Channels</p>
             <h2 id="headless-channels-title">Now and next</h2>
           </div>
+          <a class="headless-card-link" href="/channels">Manage channels</a>
         </div>
         <div class="headless-channel-grid">
           ${

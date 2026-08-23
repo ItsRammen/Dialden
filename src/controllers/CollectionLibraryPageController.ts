@@ -297,6 +297,7 @@ function summaryModel(
     movieCollections: summary.movieCollections,
     interludes: summary.interludeFiles,
     reviewCollections: summary.reviewCollections,
+    totalFiles: summary.totalFiles,
   }
 }
 

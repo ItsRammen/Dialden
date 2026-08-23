@@ -44,6 +44,7 @@ export function renderLayout(
     <div class="nav-links">
       <a href="/">Dashboard</a>
       <a href="/library">Library</a>
+      <a href="/channels">Channels</a>
       <a href="/settings">Settings</a>
     </div>
   </nav>

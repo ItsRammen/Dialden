@@ -5,7 +5,12 @@ import type {
   LibraryPolicyDocument,
   ScheduleDay,
 } from '../config/library'
+import { validateLibraryChannels } from '../config/library'
 import { cleanFilename } from '../utils/cleanFilename'
+import type {
+  ChannelConfigurationSnapshot,
+  ChannelConfigurationStore,
+} from './ChannelConfigurationStore'
 
 export interface ChannelClock {
   now(): Date
@@ -17,6 +22,14 @@ export interface ChannelSummary {
   readonly enabled: boolean
   readonly timezone: string
   readonly onAir: boolean
+  readonly manuallyOffAir: boolean
+}
+
+export interface ChannelAdministrationSnapshot {
+  readonly channels: readonly LibraryChannelPolicy[]
+  readonly manuallyOffAir: readonly string[]
+  readonly programmingGroups: readonly string[]
+  readonly configurationError: string | null
 }
 
 export interface ScheduledProgram {
@@ -75,22 +88,41 @@ const DAY_NAMES: ScheduleDay[] = [
 ]
 
 export class ChannelService {
-  private readonly channels: readonly LibraryChannelPolicy[]
+  private channels: LibraryChannelPolicy[]
   private readonly groupsByCollection = new Map<string, ReadonlySet<string>>()
-  private readonly manuallyOffAir = new Set<string>()
+  private manuallyOffAir = new Set<string>()
+  private configurationError: string | null = null
 
   constructor(
     private readonly repository: IMediaRepository,
     policy: LibraryPolicyDocument | null,
-    private readonly clock: ChannelClock = SYSTEM_CLOCK
+    private readonly clock: ChannelClock = SYSTEM_CLOCK,
+    private readonly configurationStore?: Pick<
+      ChannelConfigurationStore,
+      'load' | 'save'
+    >
   ) {
-    this.channels = policy?.channels ?? []
+    this.channels = validateLibraryChannels(policy?.channels ?? [])
     for (const [rootId, root] of Object.entries(policy?.roots ?? {})) {
       for (const collection of root.collections) {
         this.groupsByCollection.set(
           this.collectionKey(rootId, collection.name),
           new Set(collection.groups ?? [])
         )
+      }
+    }
+    if (this.configurationStore) {
+      try {
+        const snapshot = this.configurationStore.load()
+        this.channels = validateLibraryChannels(snapshot.channels)
+        this.manuallyOffAir = new Set(snapshot.manuallyOffAir)
+      } catch (error) {
+        // A malformed persisted schedule must never broaden playback. Keep no
+        // configured channels and expose the error through the admin surface.
+        this.channels = []
+        this.manuallyOffAir.clear()
+        this.configurationError = safeMessage(error)
+        console.error(`Channel configuration rejected: ${this.configurationError}`)
       }
     }
   }
@@ -108,14 +140,80 @@ export class ChannelService {
           enabled,
           timezone,
           onAir: !this.manuallyOffAir.has(id),
+          manuallyOffAir: this.manuallyOffAir.has(id),
         })),
     }
   }
 
+  administrationSnapshot(): ChannelAdministrationSnapshot {
+    return {
+      channels: this.channels.map((channel) => ({
+        ...channel,
+        slots: channel.slots.map((slot) => ({
+          ...slot,
+          days: [...slot.days],
+          groups: [...slot.groups],
+        })),
+      })),
+      manuallyOffAir: [...this.manuallyOffAir].sort(),
+      programmingGroups: [
+        ...new Set(
+          [...this.groupsByCollection.values()].flatMap((groups) => [...groups])
+        ),
+      ].sort((left, right) =>
+        left === right ? 0 : left < right ? -1 : 1
+      ),
+      configurationError: this.configurationError,
+    }
+  }
+
+  create(channel: LibraryChannelPolicy): LibraryChannelPolicy {
+    if (this.channels.some((existing) => existing.id === channel.id)) {
+      throw new Error(`Channel ${channel.id} already exists`)
+    }
+    const next = validateLibraryChannels([...this.channels, channel])
+    this.persistAndApply(next, this.manuallyOffAir)
+    return next.find((item) => item.id === channel.id) as LibraryChannelPolicy
+  }
+
+  update(
+    channelId: string,
+    channel: LibraryChannelPolicy
+  ): LibraryChannelPolicy | null {
+    const index = this.channels.findIndex((existing) => existing.id === channelId)
+    if (index < 0) return null
+    if (channel.id !== channelId) {
+      throw new Error('A channel ID cannot be changed after creation')
+    }
+    const next = [...this.channels]
+    next[index] = channel
+    const validated = validateLibraryChannels(next)
+    this.persistAndApply(validated, this.manuallyOffAir)
+    return validated[index] ?? null
+  }
+
+  delete(channelId: string): boolean {
+    if (!this.channels.some((channel) => channel.id === channelId)) return false
+    const next = this.channels.filter((channel) => channel.id !== channelId)
+    const offAir = new Set(this.manuallyOffAir)
+    offAir.delete(channelId)
+    this.persistAndApply(next, offAir)
+    return true
+  }
+
+  setEnabled(channelId: string, enabled: boolean): boolean {
+    const channel = this.channels.find((item) => item.id === channelId)
+    if (!channel) return false
+    this.update(channelId, { ...channel, enabled })
+    return true
+  }
+
   setOnAir(channelId: string, onAir: boolean): boolean {
     if (!this.getChannel(channelId)) return false
-    if (onAir) this.manuallyOffAir.delete(channelId)
-    else this.manuallyOffAir.add(channelId)
+    const offAir = new Set(this.manuallyOffAir)
+    if (onAir) offAir.delete(channelId)
+    else offAir.add(channelId)
+    this.persistAndApply(this.channels, offAir)
     return true
   }
 
@@ -240,6 +338,20 @@ export class ChannelService {
         (channel) => channel.id === channelId && channel.enabled
       ) ?? null
     )
+  }
+
+  private persistAndApply(
+    channels: readonly LibraryChannelPolicy[],
+    manuallyOffAir: ReadonlySet<string>
+  ): void {
+    const snapshot: ChannelConfigurationSnapshot = {
+      channels,
+      manuallyOffAir: [...manuallyOffAir],
+    }
+    this.configurationStore?.save(snapshot)
+    this.channels = validateLibraryChannels(channels)
+    this.manuallyOffAir = new Set(snapshot.manuallyOffAir)
+    this.configurationError = null
   }
 
   private buildWindow(
@@ -504,4 +616,8 @@ export class ChannelService {
   private pad(value: number): string {
     return value.toString().padStart(2, '0')
   }
+}
+
+function safeMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }

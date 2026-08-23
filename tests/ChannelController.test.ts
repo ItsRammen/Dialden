@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import { mock } from 'jest-mock-extended'
 import { Hono } from 'hono'
-import { createChannelController } from '../src/controllers/ChannelController'
+import {
+  createChannelController,
+  parseChannelSlots,
+} from '../src/controllers/ChannelController'
 import type { ChannelService } from '../src/services/ChannelService'
 
 describe('ChannelController', () => {
@@ -17,6 +20,7 @@ describe('ChannelController', () => {
           enabled: true,
           timezone: 'Asia/Taipei',
           onAir: true,
+          manuallyOffAir: false,
         },
       ],
     })
@@ -45,5 +49,61 @@ describe('ChannelController', () => {
       expect(response.status).toBe(400)
     }
     expect(channels.getGuide).not.toHaveBeenCalled()
+  })
+
+  test('validates and creates channels through the guarded admin surface', async () => {
+    const channels = mock<ChannelService>()
+    channels.create.mockImplementation((channel) => channel)
+    const app = new Hono().route('/', createChannelController({ channels }))
+    const input = {
+      id: 'cartoon-classics',
+      name: 'Cartoon Classics',
+      enabled: true,
+      timezone: 'America/New_York',
+      slots: [
+        {
+          days: ['sat'],
+          start: '08:00',
+          end: '10:00',
+          groups: ['comfort'],
+        },
+      ],
+    }
+
+    const response = await app.request('/api/admin/v1/channels', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+    })
+    expect(response.status).toBe(201)
+    expect(channels.create).toHaveBeenCalledWith(input)
+
+    const invalid = await app.request('/api/admin/v1/channels', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...input, timezone: 'not-a-timezone' }),
+    })
+    expect(invalid.status).toBe(400)
+  })
+
+  test('parses the human-editable schedule format', () => {
+    expect(
+      parseChannelSlots(
+        'mon,tue,wed | 06:30-08:30 | comfort,learning\nsat | 08:00-10:00 | adventure'
+      )
+    ).toEqual([
+      {
+        days: ['mon', 'tue', 'wed'],
+        start: '06:30',
+        end: '08:30',
+        groups: ['comfort', 'learning'],
+      },
+      {
+        days: ['sat'],
+        start: '08:00',
+        end: '10:00',
+        groups: ['adventure'],
+      },
+    ])
   })
 })

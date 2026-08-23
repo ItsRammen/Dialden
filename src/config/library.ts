@@ -121,10 +121,10 @@ function readPolicy(path: string): LibraryPolicyDocument {
 
       const groups = Array.isArray(collection.groups)
         ? collection.groups.map((group) => {
-            if (typeof group !== 'string' || !group.trim()) {
-              throw new Error(`Collection ${name} contains an invalid group`)
-            }
-            return group.trim()
+            return normalizeProgrammingGroup(
+              group,
+              `Collection ${name} contains an invalid group`
+            )
           })
         : undefined
 
@@ -187,98 +187,162 @@ function readPolicy(path: string): LibraryPolicyDocument {
     }
   }
 
-  let channels: LibraryChannelPolicy[] | undefined
-  if (candidate.channels !== undefined) {
-    if (!Array.isArray(candidate.channels)) {
-      throw new Error('Library policy channels must be an array')
-    }
-    const channelIds = new Set<string>()
-    channels = candidate.channels.map((rawChannel, channelIndex) => {
-      if (!rawChannel || typeof rawChannel !== 'object') {
-        throw new Error(`channels[${channelIndex}] must be an object`)
-      }
-      const value = rawChannel as {
-        id?: unknown
-        name?: unknown
-        enabled?: unknown
-        timezone?: unknown
-        slots?: unknown
-      }
-      const id = typeof value.id === 'string' ? value.id.trim() : ''
-      const name = typeof value.name === 'string' ? value.name.trim() : ''
-      const timezone =
-        typeof value.timezone === 'string' ? value.timezone.trim() : ''
-      if (!/^[a-z0-9][a-z0-9_-]*$/i.test(id) || !name || !timezone) {
-        throw new Error(`channels[${channelIndex}] has invalid identity fields`)
-      }
-      if (channelIds.has(id)) throw new Error(`Duplicate channel ID: ${id}`)
-      channelIds.add(id)
-      try {
-        new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format()
-      } catch {
-        throw new Error(`Channel ${id} has invalid timezone: ${timezone}`)
-      }
-      if (!Array.isArray(value.slots)) {
-        throw new Error(`Channel ${id} must define slots`)
-      }
-
-      const slots = value.slots.map((rawSlot, slotIndex) => {
-        if (!rawSlot || typeof rawSlot !== 'object') {
-          throw new Error(`Channel ${id} slot ${slotIndex} must be an object`)
-        }
-        const slot = rawSlot as {
-          days?: unknown
-          start?: unknown
-          end?: unknown
-          groups?: unknown
-        }
-        if (
-          !Array.isArray(slot.days) ||
-          !Array.isArray(slot.groups) ||
-          typeof slot.start !== 'string' ||
-          typeof slot.end !== 'string'
-        ) {
-          throw new Error(`Channel ${id} slot ${slotIndex} is incomplete`)
-        }
-        const days = slot.days.map((day) => {
-          if (
-            typeof day !== 'string' ||
-            !['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'].includes(day)
-          ) {
-            throw new Error(`Channel ${id} slot ${slotIndex} has invalid day`)
-          }
-          return day as ScheduleDay
-        })
-        const groups = slot.groups.map((group) => {
-          if (typeof group !== 'string' || !group.trim()) {
-            throw new Error(`Channel ${id} slot ${slotIndex} has invalid group`)
-          }
-          return group.trim()
-        })
-        const startMinutes = parseScheduleTime(slot.start)
-        const endMinutes = parseScheduleTime(slot.end)
-        if (endMinutes <= startMinutes) {
-          throw new Error(`Channel ${id} slots cannot cross midnight`)
-        }
-        return {
-          days,
-          start: slot.start,
-          end: slot.end,
-          groups,
-        }
-      })
-
-      return {
-        id,
-        name,
-        enabled: value.enabled !== false,
-        timezone,
-        slots,
-      }
-    })
-  }
+  const channels =
+    candidate.channels === undefined
+      ? undefined
+      : validateLibraryChannels(candidate.channels)
 
   return { version: 1, profile, roots, channels }
+}
+
+/**
+ * Validate the user-editable portion of a library policy. Keeping this parser
+ * shared means channel edits can be applied live without accepting a looser
+ * schema than the startup policy loader.
+ */
+export function validateLibraryChannels(input: unknown): LibraryChannelPolicy[] {
+  if (!Array.isArray(input)) {
+    throw new Error('Channels must be an array')
+  }
+  if (input.length > 100) {
+    throw new Error('At most 100 channels may be configured')
+  }
+
+  const channelIds = new Set<string>()
+  return input.map((rawChannel, channelIndex) => {
+    if (!rawChannel || typeof rawChannel !== 'object') {
+      throw new Error(`channels[${channelIndex}] must be an object`)
+    }
+    const value = rawChannel as {
+      id?: unknown
+      name?: unknown
+      enabled?: unknown
+      timezone?: unknown
+      slots?: unknown
+    }
+    const id = typeof value.id === 'string' ? value.id.trim() : ''
+    const name = typeof value.name === 'string' ? value.name.trim() : ''
+    const timezone =
+      typeof value.timezone === 'string' ? value.timezone.trim() : ''
+    if (
+      !/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(id) ||
+      !name ||
+      name.length > 100 ||
+      !timezone ||
+      timezone.length > 100
+    ) {
+      throw new Error(`channels[${channelIndex}] has invalid identity fields`)
+    }
+    if (value.enabled !== undefined && typeof value.enabled !== 'boolean') {
+      throw new Error(`Channel ${id} enabled must be a boolean`)
+    }
+    if (channelIds.has(id)) throw new Error(`Duplicate channel ID: ${id}`)
+    channelIds.add(id)
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format()
+    } catch {
+      throw new Error(`Channel ${id} has invalid timezone: ${timezone}`)
+    }
+    if (!Array.isArray(value.slots)) {
+      throw new Error(`Channel ${id} must define slots`)
+    }
+    if (value.slots.length > 200) {
+      throw new Error(`Channel ${id} has too many schedule slots`)
+    }
+
+    const slots = value.slots.map((rawSlot, slotIndex) => {
+      if (!rawSlot || typeof rawSlot !== 'object') {
+        throw new Error(`Channel ${id} slot ${slotIndex} must be an object`)
+      }
+      const slot = rawSlot as {
+        days?: unknown
+        start?: unknown
+        end?: unknown
+        groups?: unknown
+      }
+      if (
+        !Array.isArray(slot.days) ||
+        !Array.isArray(slot.groups) ||
+        typeof slot.start !== 'string' ||
+        typeof slot.end !== 'string'
+      ) {
+        throw new Error(`Channel ${id} slot ${slotIndex} is incomplete`)
+      }
+      if (slot.days.length === 0 || slot.groups.length === 0) {
+        throw new Error(`Channel ${id} slot ${slotIndex} needs days and groups`)
+      }
+      const days = [
+        ...new Set(
+          slot.days.map((day) => {
+            if (
+              typeof day !== 'string' ||
+              !['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'].includes(day)
+            ) {
+              throw new Error(`Channel ${id} slot ${slotIndex} has invalid day`)
+            }
+            return day as ScheduleDay
+          })
+        ),
+      ]
+      const groups = [
+        ...new Set(
+          slot.groups.map((group) => {
+            return normalizeProgrammingGroup(
+              group,
+              `Channel ${id} slot ${slotIndex} has invalid group`
+            )
+          })
+        ),
+      ]
+      const startMinutes = parseScheduleTime(slot.start)
+      const endMinutes = parseScheduleTime(slot.end)
+      if (endMinutes <= startMinutes) {
+        throw new Error(`Channel ${id} slots cannot cross midnight`)
+      }
+      return {
+        days,
+        start: slot.start,
+        end: slot.end,
+        groups,
+      }
+    })
+
+    for (let leftIndex = 0; leftIndex < slots.length; leftIndex++) {
+      const left = slots[leftIndex] as ChannelScheduleSlot
+      for (
+        let rightIndex = leftIndex + 1;
+        rightIndex < slots.length;
+        rightIndex++
+      ) {
+        const right = slots[rightIndex] as ChannelScheduleSlot
+        const sharesDay = left.days.some((day) => right.days.includes(day))
+        const overlaps =
+          parseScheduleTime(left.start) < parseScheduleTime(right.end) &&
+          parseScheduleTime(right.start) < parseScheduleTime(left.end)
+        if (sharesDay && overlaps) {
+          throw new Error(
+            `Channel ${id} slots ${leftIndex} and ${rightIndex} overlap`
+          )
+        }
+      }
+    }
+
+    return {
+      id,
+      name,
+      enabled: value.enabled !== false,
+      timezone,
+      slots,
+    }
+  })
+}
+
+function normalizeProgrammingGroup(value: unknown, errorMessage: string): string {
+  const group = typeof value === 'string' ? value.trim() : ''
+  if (!group || group.length > 64 || /[|,\r\n]/.test(group)) {
+    throw new Error(errorMessage)
+  }
+  return group
 }
 
 function parseScheduleTime(value: string): number {

@@ -67,8 +67,11 @@ The upstream baseline exposes:
 - static assets and thumbnails.
 
 The current fork additionally exposes `GET /api/v1/health`, deterministic
-channel list/now/guide responses, and `GET`/`HEAD` direct media delivery with
-single-range support. It serves the browser reference client at `/tv/`, and the
+channel list/now/guide responses, same-origin channel administration at
+`/channels` and `/api/admin/v1/channels`, and `GET`/`HEAD` direct media delivery
+with single-range support. Channel definitions and manual off-air switches are
+applied live and stored atomically in `/app/data/channels.json`. It serves the
+browser reference client at `/tv/`, and the
 same files form the packaged webOS client. In Docker headless mode it keeps
 management routes available but returns `503` from legacy local-playback
 mutations, disables media upload and catalog deletion for the read-only library,
@@ -94,6 +97,7 @@ Classification:
 | File scan | `src/services/MediaIndexer.ts` | A/B | Root discovery, collection detection, changed-file probing, and scan state | Keep independent from online enrichment and retain fail-closed root/probe gates |
 | Metadata enrichment | `src/services/metadata/*`, `src/clients/TmdbClient.ts` | A | Cached, sequential TMDB matching, rating resolution, and policy evaluation | Keep behind `MetadataProvider`; never call providers per episode or page view |
 | Collection library | `src/services/CollectionLibraryService.ts`, collection controllers/templates | A | Collection summary/search/review, season detail, and parent actions | Primary library workflow; retain the flat file view as an advanced fallback |
+| Channel administration | `src/services/ChannelService.ts`, `src/services/ChannelConfigurationStore.ts`, `src/controllers/ChannelController.ts`, `src/templates/channelAdministration.ts` | A | Computed channel timelines plus live CRUD, enable/off-air controls, and atomic JSON persistence | Preserve the API/editor; normalize only if revision history or transactional schedule generation requires it |
 | Filesystem/probe | `src/clients/FilesystemClient.ts` | A | Recursive file listing/watch and ffprobe | Retain after root validation and richer probe data |
 | Thumbnail generation | `src/clients/ThumbnailClient.ts` | A | FFmpeg thumbnails under data directory | Retain with configurable persistent root |
 | Media business logic | `src/services/MediaService.ts` | A | List, type/date updates, logo and media deletion | Retain after read-only mount and path-safety work |
@@ -236,8 +240,11 @@ records the collection migration; older per-file explicit overrides are
 preserved, while old automatically generated policy booleans are not promoted
 to trusted collection approval.
 
-There are still no durable channel, program, timeline, authenticated client,
-credential, capability, pairing, probe-cache, or transcode-job tables.
+Channel definitions and manual off-air switches are durable in
+`/app/data/channels.json`, but there are still no channel, program, timeline,
+authenticated client, credential, capability, pairing, probe-cache, or
+transcode-job tables. Computed program rows and timeline revisions remain
+unmaterialized.
 
 ### Database implications for the target schedule design
 
@@ -286,9 +293,9 @@ The current fork fixes immediate data-loss/correctness defects from the audited 
 - each show/movie is grouped into a persistent collection before files are upserted. Existing explicit parent overrides survive migration and rescans, while legacy automatic allowlist results are recalculated;
 - filesystem probing is independent of approval, and online metadata matching is a separate cached sequential job. Missing TMDB configuration or any uncertain/error state resolves to review;
 - the configurable Kids 7 rating policy stores `allow`, `review`, or `block` plus its reason. Only a current root, positive duration, and effective `allow` decision can enter playback or scheduling;
-- the Kids 7 policy also defines deterministic clock-driven channels and read-only `channels`, `now`, and bounded `guide` endpoints. Generated timelines are currently computed rather than durably materialized.
+- the Kids 7 policy seeds deterministic clock-driven channels and collection-to-group membership. `ChannelConfigurationStore` applies an editable appdata override, including persistent manual off-air switches, while `channels`, `now`, and bounded `guide` remain read-only playback endpoints. Generated timelines are currently computed rather than durably materialized.
 
-The following persistence work remains before durable/materialized channel scheduling:
+The following persistence work remains before normalized/materialized channel scheduling:
 
 - fps/bitrate are probed but not stored, and container/audio facts are not collected;
 - headless indexing still uses the transitional default compatibility label rather than a versioned neutral probe record;
@@ -299,13 +306,17 @@ The following persistence work remains before durable/materialized channel sched
 
 ## 9. Existing scheduling and timeline behavior
 
-The repository now has a first deterministic `ChannelService` driven by
-policy-defined day/time/group slots, an injected clock, exact timezone-to-UTC
-conversion, and stable seeded ordering. `/api/v1/channels`,
-`/api/v1/channels/:id/now`, and `/api/v1/channels/:id/guide` expose this computed
-timeline. This is deliberately smaller than the target model: there are no
-durable schedule/program tables or atomic materialized revisions yet, and the
-legacy local-player queue remains session-random rather than channel-time based.
+The repository now has a deterministic `ChannelService` driven by day/time/group
+slots, an injected clock, exact timezone-to-UTC conversion, and stable seeded
+ordering. The policy supplies defaults; the browser/admin CRUD surface applies
+changes live and atomically stores channel definitions plus manual off-air state
+in `/app/data/channels.json`. `/api/v1/channels`,
+`/api/v1/channels/:id/now`, and `/api/v1/channels/:id/guide` expose the computed
+timeline. This is deliberately smaller than the target model: collection group
+membership still comes only from exact startup-policy root/collection entries,
+there is no group-assignment editor, there are no schedule/program tables or
+atomic materialized revisions, and the legacy local-player queue remains
+session-random rather than channel-time based.
 
 Interludes are chosen randomly when a per-session count reaches a configured frequency. Seasonal eligibility comes from filename-derived `MM-DD` ranges and SQLite filtering. `SystemDateTimeProvider.today()` uses a UTC ISO date, while `SessionManager` uses host-local date/hour. Docker `TZ`, seasonal selection, and quota reset can therefore disagree.
 
@@ -529,7 +540,7 @@ The initial headless milestone now provides:
 - collection-first TV/movie indexing, cached sequential TMDB enrichment, configurable rating policy, persistent parent overrides, and metadata/approval review queues;
 - fail-closed collection eligibility, independent probing, root-availability gating, and deterministic Kids 7 channel/now/guide APIs;
 - collection/season library pages, separate scan and metadata progress over SSE, cached size-restricted artwork, and a headless dashboard backed by real channel/library/client state;
-- ephemeral webOS client heartbeats and per-channel on-air/off-air controls using broadcast terminology rather than physical-TV power state;
+- ephemeral webOS client heartbeats plus editable channel CRUD and persistent per-channel on-air/off-air controls using broadcast terminology rather than physical-TV power state;
 - `/api/v1/health` checking SQLite access and the FFmpeg toolchain;
 - shutdown stops the playback loop and watcher, retains and awaits the background scan task, and prevents that task from starting a watcher after shutdown begins.
 
@@ -541,6 +552,7 @@ The legacy Pi path remains the default outside the container. Shutdown is not ye
 /app/data/
   config.json       bootstrap seed/input when present
   media.db          SQLite catalog and settings
+  channels.json     editable channel definitions and manual off-air switches; created on first mutation
   logo.png          mutable management UI logo
   thumbnails/       generated thumbnails
   artwork/          cached provider-sized TMDB collection artwork
@@ -552,16 +564,19 @@ The legacy Pi path remains the default outside the container. Shutdown is not ye
 /media/tv          read-only TV library
 /media/movies      read-only movie library
 /media/interludes  read-only optional interludes
-/app/data/kids-7.library.json  persistent rating/profile, programming-group, and channel policy
+/app/data/kids-7.library.json  seeded persistent policy; active for Unraid and image-default deployments
+/app/config/kids-7.library.json  active read-only repository policy in the supplied Compose deployment
 ```
 
-The named `toasttv-data` volume preserves the implemented `/app/data` contents across container recreation. `TOASTTV_DATA` is the root for mutable generated paths, `TOASTTV_DATABASE` can override its database, `TOASTTV_CONFIG` selects the bootstrap JSON, and media remains a separate mount. The image creates `/media` before dropping privileges but does not change ownership of a user-supplied runtime bind mount. The runtime user is UID/GID `1000`, so a host/NAS library must grant that identity or a supplemental group file read and directory traverse permissions; the README includes the Compose `group_add` pattern.
+The named `toasttv-data` volume preserves the implemented `/app/data` contents across container recreation. `TOASTTV_DATA` is the root for mutable generated paths, `TOASTTV_DATABASE` can override its database, `TOASTTV_CONFIG` selects the bootstrap JSON, and the TV, movie, and interlude roots remain separate read-only mounts. The image creates `/media` before dropping privileges but does not change ownership of a user-supplied runtime bind mount. The runtime user is UID/GID `1000`, so a host/NAS library must grant that identity or a supplemental group file read and directory traverse permissions; the README includes the Compose `group_add` pattern.
 
 The image seeds `kids-7.library.json` into appdata only when it is missing, so
 Unraid policy edits survive image replacement. Container `TZ` controls logs and
-legacy date handling; channel schedule timezones live in that policy. Manual
-on-air/off-air state is intentionally process-local in this milestone and
-returns to on-air after restart.
+legacy date handling. The policy seeds channel definitions; after an edit,
+effective channel timezones and slots plus manual on-air/off-air state are
+atomically stored in `channels.json` and restored at startup. The supplied
+Compose file explicitly selects its separate read-only `/app/config` policy;
+its seeded appdata copy is not active unless `TOASTTV_LIBRARY_POLICY` is changed.
 
 ### Target normalized persistent layout
 
@@ -658,7 +673,7 @@ Local pause never changes channel time. On resume, the first implementation shou
 
 | Priority | Risk | Impact | Mitigation |
 |---|---|---|---|
-| P0 | Computed channel timelines are not durably materialized | Policy-defined now/guide is restart-deterministic, but atomic schedule revisions and auditability are missing | Add durable schedule rules/program revisions without changing the current channel contract |
+| P0 | Computed channel timelines are not durably materialized | Editable channel definitions are durable JSON, but generated program windows, atomic revisions, and audit/history are missing | Add program revisions and auditability without breaking the current editor or channel contract |
 | P1 | Legacy absolute paths remain stored for local playback | Remote delivery now uses canonical root-relative resolution, but the legacy Pi player still consumes the catalog path | Keep the remote resolver as the only client delivery boundary and migrate legacy local playback separately |
 | P0 | Management mutation routes remain unauthenticated | A LAN peer can alter catalog/configuration | Separate admin/playback APIs and introduce admin authorization; in-container self-update is already disabled |
 | P0 | Incorrect automatic metadata match could apply the wrong rating | Unsafe content could be allowed from unrelated metadata | Auto-confirm only a unique exact normalized title/year/type match; send fuzzy, conflicting, missing, and unrated results to review and retain manual lock |
@@ -727,8 +742,9 @@ Exit condition: management HTTP boots without MPV/CEC/Pi hardware; SQLite and ge
 
 ### Stage 3: channel timeline core
 
-- Evolve the implemented policy/clock-driven channel sequence into durable programming rules independent of `PlaylistEngine`.
-- Add durable `schedules`/`programming_rules`, channels, and revisioned generated-program persistence.
+- Preserve the implemented editor/API and optionally normalize its durable JSON channel definitions when database transactions or history are required.
+- Add normalized/versioned schedule and programming-rule records, materialized program windows, atomic revision activation, and audit/history.
+- Add a collection-to-programming-group editor/API and persistence model; today exact policy entries are loaded only at startup.
 - Split the implemented injected-clock `ChannelService` into durable schedule generation and timeline lookup layers.
 - Define screen-time policy scope and persistence.
 - Add tests for exact start/end, sub-second mid-program `offsetMs`, interludes, empty/missing media, rolling-window regeneration, atomic revision activation, day/timezone/DST, restart determinism, and multi-channel independence.
@@ -803,6 +819,8 @@ Exit condition: management HTTP boots without MPV/CEC/Pi hardware; SQLite and ge
 - [x] Scan/probe progress and separate metadata progress are exposed through API, UI, and dashboard SSE events.
 - [x] The About UI contains the TMDB-approved logo and required attribution notice.
 - [x] Deterministic Kids 7 channel list/now/guide endpoints are implemented and clock-tested.
+- [x] Browser/admin channel CRUD is applied live and atomically persisted to `/app/data/channels.json`.
+- [x] Manual off-air state is restored across process and container restarts.
 - [x] Batch upserts persist computed compatibility.
 - [x] Background scan is retained/awaited and cannot start a watcher after shutdown begins.
 - [x] Docker image builds and a headless container boot smoke test serves `/tv/`,

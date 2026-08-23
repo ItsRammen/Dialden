@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'bun:test'
-import { resolve } from 'node:path'
-import { loadLibraryConfig } from '../src/config/library'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import {
+  loadLibraryConfig,
+  validateLibraryChannels,
+} from '../src/config/library'
 
 describe('library configuration', () => {
   test('legacy single-root mode remains unrestricted', () => {
@@ -46,5 +51,86 @@ describe('library configuration', () => {
         TOASTTV_MOVIE_MEDIA: '/media/movies',
       })
     ).toThrow(/overlap/i)
+  })
+
+  test('rejects overlapping slots that would create two simultaneous timelines', () => {
+    expect(() =>
+      validateLibraryChannels([
+        {
+          id: 'kids',
+          name: 'Kids',
+          enabled: true,
+          timezone: 'UTC',
+          slots: [
+            {
+              days: ['mon'],
+              start: '08:00',
+              end: '10:00',
+              groups: ['comfort'],
+            },
+            {
+              days: ['mon'],
+              start: '09:00',
+              end: '11:00',
+              groups: ['learning'],
+            },
+          ],
+        },
+      ])
+    ).toThrow(/overlap/i)
+  })
+
+  test('rejects group delimiters that the channel editor cannot round-trip', () => {
+    for (const group of ['family,movies', 'family|movies', 'family\nmovies']) {
+      expect(() =>
+        validateLibraryChannels([
+          {
+            id: 'kids',
+            name: 'Kids',
+            enabled: true,
+            timezone: 'UTC',
+            slots: [
+              {
+                days: ['mon'],
+                start: '08:00',
+                end: '10:00',
+                groups: [group],
+              },
+            ],
+          },
+        ])
+      ).toThrow(/invalid group/i)
+    }
+  })
+
+  test('rejects the same group delimiters in a loaded collection policy', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'toasttv-policy-groups-'))
+    try {
+      const policyPath = join(directory, 'library.json')
+      writeFileSync(
+        policyPath,
+        JSON.stringify({
+          version: 1,
+          roots: {
+            tv: {
+              collections: [
+                { name: 'Example Show', groups: ['family,movies'] },
+              ],
+            },
+            movies: { collections: [] },
+          },
+        })
+      )
+
+      expect(() =>
+        loadLibraryConfig('/media', {
+          TOASTTV_TV_MEDIA: '/media/tv',
+          TOASTTV_MOVIE_MEDIA: '/media/movies',
+          TOASTTV_LIBRARY_POLICY: policyPath,
+        })
+      ).toThrow(/invalid group/i)
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
   })
 })

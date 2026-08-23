@@ -135,4 +135,27 @@ describe('headless dashboard template', () => {
     expect(markup).not.toContain('//evil.example')
     expect(markup).toContain('&lt;img src=x onerror=alert(1)&gt;')
   })
+
+  test('does not present go-on-air as a fix for an empty schedule', () => {
+    const markup = renderHeadlessDashboardContent(
+      dashboard({
+        channels: [
+          {
+            id: 'empty',
+            name: 'Empty Channel',
+            status: 'no_program',
+            now: null,
+            next: null,
+            guideHref: '/api/v1/channels/empty/guide',
+            manageHref: '/channels?edit=empty#editor',
+          },
+        ],
+      })
+    )
+
+    expect(markup).toContain('No programming')
+    expect(markup).toContain('Configure')
+    expect(markup).not.toContain('Go on air')
+    expect(markup).not.toContain('Resume schedule')
+  })
 })

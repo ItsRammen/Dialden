@@ -270,12 +270,78 @@ describe('LibraryController', () => {
       search: '',
     })
 
-    expect(approved).toContain('Kids 7 Approved')
+    expect(approved).toContain('Playable files')
     expect(approved).toContain('Bluey episode.mkv')
     expect(approved).not.toContain('Blocked episode.mkv')
     expect(blocked).toContain('Not Scheduled')
     expect(blocked).toContain('Blocked episode.mkv')
     expect(blocked).not.toContain('Bluey episode.mkv')
+  })
+
+  test('Advanced Files requests a bounded page and preserves navigation filters', async () => {
+    const items: MediaItem[] = Array.from({ length: 100 }, (_, index) => ({
+      id: index + 101,
+      path: `/media/file-${index + 101}.mp4`,
+      filename: `file-${index + 101}.mp4`,
+      durationSeconds: 60,
+      isInterlude: false,
+      mediaType: 'video',
+      dateStart: null,
+      dateEnd: null,
+      codec: 'h264',
+      width: 1920,
+      height: 1080,
+      warning: null,
+      mtime: 1,
+      compatibility: 'compatible',
+      playbackEnabled: true,
+    }))
+    configService.get.mockResolvedValue({
+      session: {
+        introVideoId: null,
+        outroVideoId: null,
+        offAirAssetId: null,
+      },
+    } as any)
+    mediaService.getPage.mockResolvedValue({
+      items,
+      total: 275,
+      page: 2,
+      pageSize: 100,
+    })
+    mediaService.generateThumbnailsFor.mockResolvedValue()
+    mediaService.getMediaDirectory.mockReturnValue('/media')
+
+    const response = await app.request(
+      '/library/files?view=grid&filter=videos&search=Family%20%26%20Friends&page=2'
+    )
+    const markup = await response.text()
+
+    expect(response.status).toBe(200)
+    expect(mediaService.getPage).toHaveBeenCalledWith({
+      view: 'grid',
+      filter: 'videos',
+      search: 'Family & Friends',
+      page: 2,
+      pageSize: 100,
+      prioritizedIds: [],
+    })
+    expect(markup).toContain('Media Library (275)')
+    expect(markup).toContain('Showing 101–200 of 275 files · Page 2 of 3')
+    expect(markup).toContain('page=1')
+    expect(markup).toContain('page=3')
+    expect(markup).toContain('search=Family%20%26%20Friends')
+    expect(markup).toContain('✅ Playable')
+    expect(markup).not.toContain('Kids 7')
+    expect(mediaService.generateThumbnailsFor).toHaveBeenCalledWith(items)
+    expect(mediaService.getAll).not.toHaveBeenCalled()
+
+    const partial = await app.request(
+      '/partials/library?view=grid&filter=videos&search=Family%20%26%20Friends&page=2'
+    )
+    expect(partial.headers.get('HX-Push-Url')).toBe(
+      '/library/files?view=grid&filter=videos&search=Family%20%26%20Friends&page=2'
+    )
   })
 
   test('POST /api/upload rejects writes when media is mounted read-only', async () => {

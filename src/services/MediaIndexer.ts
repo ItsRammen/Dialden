@@ -30,6 +30,16 @@ import {
   type CollectionIdentity,
 } from '../domain/CollectionIdentity'
 
+const SCAN_PROGRESS_EVENT_INTERVAL_MS = 200
+
+interface ScanEventClock {
+  nowMs(): number
+}
+
+const MONOTONIC_SCAN_EVENT_CLOCK: ScanEventClock = {
+  nowMs: () => performance.now(),
+}
+
 export class MediaIndexer {
   private scanPromise: Promise<number> | null = null
   private rescanRequested = false
@@ -53,6 +63,7 @@ export class MediaIndexer {
     error: null,
   }
   private hardwareProfile: HardwareProfile | null = null
+  private lastProgressEventAtMs: number | null = null
 
   constructor(
     private readonly mediaConfig: MediaConfig,
@@ -61,7 +72,8 @@ export class MediaIndexer {
     private readonly filesystem: IFileSystem,
     private readonly mediaProbe: IMediaProbe,
     private readonly thumbnailClient?: IThumbnailClient,
-    private readonly hardwareDetection?: IHardwareDetectionService
+    private readonly hardwareDetection?: IHardwareDetectionService,
+    private readonly scanEventClock: ScanEventClock = MONOTONIC_SCAN_EVENT_CLOCK
   ) {
     // Cache hardware profile for compatibility checking
     if (this.hardwareDetection) {
@@ -142,6 +154,10 @@ export class MediaIndexer {
   }
 
   private async scanOnce(): Promise<number> {
+    // Each authoritative pass gets one immediate discovery update. Subsequent
+    // per-file updates are coalesced so a large library cannot flood SSE
+    // clients with tens of thousands of DOM updates in a few seconds.
+    this.lastProgressEventAtMs = null
     this.scanState = {
       status: 'discovering',
       currentRoot: null,
@@ -552,6 +568,20 @@ export class MediaIndexer {
   }
 
   private async emitScanEvent(type: LibraryScanEventType): Promise<void> {
+    if (type === 'library.scan.progress') {
+      const nowMs = this.scanEventClock.nowMs()
+      if (
+        this.lastProgressEventAtMs !== null &&
+        nowMs - this.lastProgressEventAtMs < SCAN_PROGRESS_EVENT_INTERVAL_MS
+      ) {
+        return
+      }
+      this.lastProgressEventAtMs = nowMs
+    }
+
+    // Started, root-completed, completed, and failed events are never
+    // throttled. They carry the current full state, so listeners always see
+    // the final counters even when intermediate progress was coalesced.
     const event: LibraryScanEvent = { type, state: this.getScanState() }
     for (const listener of this.scanEventListeners) {
       try {
