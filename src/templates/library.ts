@@ -8,14 +8,15 @@
 import type { MediaItem, MediaType } from '../types'
 import type { AppConfig } from '../repositories/ConfigRepository'
 import { renderLayout } from './layout'
-import { formatTime } from './utils'
+import { escapeHtml, formatTime } from './utils'
 
 export interface LibraryProps {
   media: MediaItem[]
   config?: AppConfig
   mediaDirectory: string
+  mediaWritable?: boolean
   view: 'list' | 'grid'
-  filter: 'all' | 'videos' | 'interludes'
+  filter: 'all' | 'approved' | 'blocked' | 'videos' | 'interludes'
   search: string
 }
 
@@ -32,7 +33,18 @@ export function renderLibrary(props: LibraryProps): string {
  * Used for htmx partial updates (search, filter changes).
  */
 export function renderLibraryContent(props: LibraryProps): string {
-  const { media, config, mediaDirectory, view, filter, search } = props
+  const {
+    media,
+    config,
+    mediaDirectory,
+    mediaWritable = true,
+    view,
+    filter,
+    search,
+  } = props
+  const safeSearch = escapeHtml(search)
+  const encodedSearch = encodeURIComponent(search)
+  const safeMediaDirectory = escapeHtml(mediaDirectory)
 
   // Apply filter
   let filteredMedia = media
@@ -40,13 +52,19 @@ export function renderLibraryContent(props: LibraryProps): string {
     filteredMedia = media.filter((m) => !m.isInterlude)
   } else if (filter === 'interludes') {
     filteredMedia = media.filter((m) => m.isInterlude)
+  } else if (filter === 'approved') {
+    filteredMedia = media.filter((m) => m.playbackEnabled !== false)
+  } else if (filter === 'blocked') {
+    filteredMedia = media.filter((m) => m.playbackEnabled === false)
   }
 
   // Apply search
   if (search) {
     const searchLower = search.toLowerCase()
-    filteredMedia = filteredMedia.filter((m) =>
-      m.filename.toLowerCase().includes(searchLower)
+    filteredMedia = filteredMedia.filter(
+      (m) =>
+        m.filename.toLowerCase().includes(searchLower) ||
+        (m.collectionTitle ?? '').toLowerCase().includes(searchLower)
     )
   }
 
@@ -77,18 +95,35 @@ export function renderLibraryContent(props: LibraryProps): string {
   if (filter === 'all') {
     mediaContent = `
       <div class="${view === 'grid' ? 'media-grid' : 'media-list'}">
-        ${filteredMedia.length === 0 ? '<p class="empty-list">No media files</p>' : filteredMedia.map((item) => renderMediaItem(item, view, config)).join('')}
+        ${filteredMedia.length === 0 ? '<p class="empty-list">No media files</p>' : filteredMedia.map((item) => renderMediaItem(item, view, config, mediaWritable)).join('')}
       </div>
     `
   } else if (filter === 'videos') {
-    mediaContent = renderMediaSection('Videos', '📺', videos, view, config)
-  } else {
+    mediaContent = renderMediaSection(
+      'Videos',
+      '📺',
+      videos,
+      view,
+      config,
+      mediaWritable
+    )
+  } else if (filter === 'interludes') {
     mediaContent = renderMediaSection(
       'Interludes',
       '🎬',
       interludes,
       view,
-      config
+      config,
+      mediaWritable
+    )
+  } else {
+    mediaContent = renderMediaSection(
+      filter === 'approved' ? 'Kids 7 Approved' : 'Not Scheduled',
+      filter === 'approved' ? '✅' : '🔒',
+      filteredMedia,
+      view,
+      config,
+      mediaWritable
     )
   }
 
@@ -103,7 +138,7 @@ export function renderLibraryContent(props: LibraryProps): string {
                  id="search-input"
                  name="search"
                  placeholder="Search..." 
-                 value="${search}"
+                 value="${safeSearch}"
                  autocomplete="off"
                  hx-get="/partials/library"
                  hx-trigger="input changed delay:300ms"
@@ -127,9 +162,11 @@ export function renderLibraryContent(props: LibraryProps): string {
              hx-target="#library-content"
              hx-swap="outerHTML"
              hx-push-url="false">
-          <a href="/partials/library?view=${view}&filter=all&search=${search}" class="btn btn-small ${filter === 'all' ? 'active' : ''}">All Media</a>
-          <a href="/partials/library?view=${view}&filter=videos&search=${search}" class="btn btn-small ${filter === 'videos' ? 'active' : ''}">📺 Videos</a>
-          <a href="/partials/library?view=${view}&filter=interludes&search=${search}" class="btn btn-small ${filter === 'interludes' ? 'active' : ''}">🎬 Interludes</a>
+          <a href="/partials/library?view=${view}&filter=all&search=${encodedSearch}" class="btn btn-small ${filter === 'all' ? 'active' : ''}">All Media</a>
+          <a href="/partials/library?view=${view}&filter=approved&search=${encodedSearch}" class="btn btn-small ${filter === 'approved' ? 'active' : ''}">✅ Kids 7</a>
+          <a href="/partials/library?view=${view}&filter=blocked&search=${encodedSearch}" class="btn btn-small ${filter === 'blocked' ? 'active' : ''}">🔒 Not Scheduled</a>
+          <a href="/partials/library?view=${view}&filter=videos&search=${encodedSearch}" class="btn btn-small ${filter === 'videos' ? 'active' : ''}">📺 Videos</a>
+          <a href="/partials/library?view=${view}&filter=interludes&search=${encodedSearch}" class="btn btn-small ${filter === 'interludes' ? 'active' : ''}">🎬 Interludes</a>
         </div>
         
         <div class="view-buttons"
@@ -137,12 +174,14 @@ export function renderLibraryContent(props: LibraryProps): string {
              hx-target="#library-content"
              hx-swap="outerHTML"
              hx-push-url="false">
-          <a href="/partials/library?view=list&filter=${filter}&search=${search}" class="btn btn-small ${view === 'list' ? 'active' : ''}" title="List view">☰</a>
-          <a href="/partials/library?view=grid&filter=${filter}&search=${search}" class="btn btn-small ${view === 'grid' ? 'active' : ''}" title="Grid view">⊞</a>
+          <a href="/partials/library?view=list&filter=${filter}&search=${encodedSearch}" class="btn btn-small ${view === 'list' ? 'active' : ''}" title="List view">☰</a>
+          <a href="/partials/library?view=grid&filter=${filter}&search=${encodedSearch}" class="btn btn-small ${view === 'grid' ? 'active' : ''}" title="Grid view">⊞</a>
         </div>
       </div>
       
-      <!-- Upload Dropzone -->
+      ${
+        mediaWritable
+          ? `<!-- Upload Dropzone -->
       <div class="dropzone"
            hx-post="/api/upload"
            hx-target="#library-content"
@@ -158,9 +197,9 @@ export function renderLibraryContent(props: LibraryProps): string {
           <span class="dropzone-or">or</span>
           <label class="btn btn-primary">
             Choose Files
-            <input type="file" 
-                   name="files" 
-                   multiple 
+            <input type="file"
+                   name="files"
+                   multiple
                    accept="video/*"
                    style="display: none"
                    hx-trigger="change"
@@ -172,8 +211,16 @@ export function renderLibraryContent(props: LibraryProps): string {
         </div>
         <input type="hidden" name="view" value="${view}">
         <input type="hidden" name="filter" value="${filter}">
-        <input type="hidden" name="search" value="${search}">
-      </div>
+        <input type="hidden" name="search" value="${safeSearch}">
+      </div>`
+          : `<div class="dropzone">
+        <div class="dropzone-content">
+          <span class="dropzone-icon">🔒</span>
+          <span class="dropzone-text">Media is mounted read-only</span>
+          <span class="dropzone-or">Add files on the Docker host, then rescan.</span>
+        </div>
+      </div>`
+      }
 
       <div id="media-container">
         ${
@@ -181,7 +228,7 @@ export function renderLibraryContent(props: LibraryProps): string {
             ? `<div class="empty-state">
                <span class="empty-icon">📺</span>
                <p>No videos yet</p>
-               <p class="empty-hint">Drop files above or add to <code>${mediaDirectory}</code></p>
+               <p class="empty-hint">${mediaWritable ? 'Drop files above or add to' : 'Add files on the host mount for'} <code>${safeMediaDirectory}</code></p>
              </div>`
             : mediaContent
         }
@@ -197,7 +244,8 @@ export function renderLibraryContent(props: LibraryProps): string {
 export function renderMediaItem(
   item: MediaItem,
   view: 'list' | 'grid',
-  config?: AppConfig
+  config?: AppConfig,
+  mediaWritable = true
 ): string {
   const status = getDateStatus(item)
   const thumbnailUrl = `/thumbnails/${item.id}.jpg`
@@ -238,6 +286,9 @@ export function renderMediaItem(
     return ''
   }
   const compatBadge = getCompatibilityBadge()
+  const safeFilename = escapeHtml(item.filename)
+  const safeCollection = escapeHtml(item.collectionTitle ?? '')
+  const eligibilityBadge = renderEligibilityBadge(item)
 
   if (view === 'grid') {
     return `
@@ -246,14 +297,17 @@ export function renderMediaItem(
           <span class="media-card-duration">${formatTime(item.durationSeconds)}</span>
           ${status ? `<span class="status-pill ${status.class}">${status.label}</span>` : ''}
           ${compatBadge}
+          ${eligibilityBadge}
           <span class="media-type-badge" id="badge-${item.id}">${MEDIA_TYPE_ICONS[displayType]}</span>
         </div>
         <div class="media-card-info">
-          <span class="media-card-name">${item.filename}</span>
+          <span class="media-card-name">${safeFilename}</span>
+          ${safeCollection && safeCollection !== safeFilename ? `<span class="media-collection-name">${safeCollection}</span>` : ''}
         </div>
         <div class="media-card-actions">
           ${renderTypeSelect(item, displayType)}
-          ${renderDeleteButton(item)}
+          ${renderEligibilitySelect(item)}
+          ${mediaWritable ? renderDeleteButton(item) : ''}
         </div>
       </div>
     `
@@ -264,12 +318,15 @@ export function renderMediaItem(
       <div class="media-item-main">
         <div class="media-thumb" style="background-image: url('${thumbnailUrl}')"></div>
         <span class="media-icon" id="badge-${item.id}">${MEDIA_TYPE_ICONS[displayType]}</span>
-        <span class="media-name">${item.filename}</span>
+        <span class="media-name">${safeFilename}</span>
+        ${safeCollection && safeCollection !== safeFilename ? `<span class="media-collection-name">${safeCollection}</span>` : ''}
         ${compatBadge}
+        ${eligibilityBadge}
         ${status ? `<span class="status-pill ${status.class}">${status.label}</span>` : ''}
         <span class="media-duration">${formatTime(item.durationSeconds)}</span>
         ${renderTypeSelect(item, displayType)}
-        ${renderDeleteButton(item)}
+        ${renderEligibilitySelect(item)}
+        ${mediaWritable ? renderDeleteButton(item) : ''}
       </div>
       ${renderDatePicker(item, displayType)}
     </div>
@@ -325,13 +382,40 @@ function renderTypeSelect(item: MediaItem, displayType: MediaType): string {
   `
 }
 
+function renderEligibilityBadge(item: MediaItem): string {
+  const effective = item.playbackEnabled !== false
+  return `<span id="eligibility-${item.id}" class="status-pill ${effective ? 'active' : 'expired'}">${effective ? 'Kids 7 approved' : 'Not scheduled'}</span>`
+}
+
+function renderEligibilitySelect(item: MediaItem): string {
+  const mode =
+    item.playbackOverride === null || item.playbackOverride === undefined
+      ? 'policy'
+      : item.playbackOverride
+        ? 'allow'
+        : 'block'
+  return `
+    <select class="type-select"
+            name="mode"
+            aria-label="Playback eligibility for ${escapeHtml(item.filename)}"
+            hx-post="/api/playback-eligibility/${item.id}"
+            hx-trigger="change"
+            hx-target="#toast-container"
+            hx-swap="innerHTML">
+      <option value="policy" ${mode === 'policy' ? 'selected' : ''}>Use Kids 7 policy</option>
+      <option value="allow" ${mode === 'allow' ? 'selected' : ''}>Parent approve</option>
+      <option value="block" ${mode === 'block' ? 'selected' : ''}>Never schedule</option>
+    </select>
+  `
+}
+
 function renderDeleteButton(item: MediaItem): string {
   return `
     <button class="btn btn-danger btn-small"
             hx-delete="/api/media/${item.id}"
             hx-target="#media-${item.id}"
             hx-swap="outerHTML"
-            hx-confirm="Delete ${item.filename}?">
+            hx-confirm="Delete ${escapeHtml(item.filename)}?">
       ✕
     </button>
   `
@@ -352,18 +436,18 @@ export function renderDatePicker(
       <input type="text" 
              class="date-input-compact" 
              name="dateStart"
-             value="${item.dateStart ?? ''}" 
-             placeholder="DD-MM"
+             value="${escapeHtml(item.dateStart ?? '')}"
+             placeholder="MM-DD"
              pattern="\\d{2}-\\d{2}"
-             title="Format: DD-MM (e.g. 01-12)">
+             title="Format: MM-DD (e.g. 12-01)">
       <span class="date-separator">→</span>
       <input type="text" 
              class="date-input-compact" 
              name="dateEnd"
-             value="${item.dateEnd ?? ''}" 
-             placeholder="DD-MM"
+             value="${escapeHtml(item.dateEnd ?? '')}"
+             placeholder="MM-DD"
              pattern="\\d{2}-\\d{2}"
-             title="Format: DD-MM (e.g. 28-02)">
+             title="Format: MM-DD (e.g. 02-28)">
       ${
         item.dateStart || item.dateEnd
           ? `
@@ -387,13 +471,14 @@ function renderMediaSection(
   icon: string,
   items: MediaItem[],
   view: 'list' | 'grid',
-  config?: AppConfig
+  config?: AppConfig,
+  mediaWritable = true
 ): string {
   return `
     <section class="media-section">
       <h2>${icon} ${title} (${items.length})</h2>
       <div class="${view === 'grid' ? 'media-grid' : 'media-list'}">
-        ${items.length === 0 ? '<p class="empty-list">No files matching filter</p>' : items.map((item) => renderMediaItem(item, view, config)).join('')}
+        ${items.length === 0 ? '<p class="empty-list">No files matching filter</p>' : items.map((item) => renderMediaItem(item, view, config, mediaWritable)).join('')}
       </div>
     </section>
   `

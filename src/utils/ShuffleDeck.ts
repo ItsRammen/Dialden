@@ -47,6 +47,11 @@ export class ShuffleDeck<T> {
     this.shuffle()
   }
 
+  /** Remove matching items from the current cycle without changing universe. */
+  discardWhere(predicate: (item: T) => boolean): void {
+    this.deck = this.deck.filter((item) => !predicate(item))
+  }
+
   private shuffle(): void {
     this.deck = [...this.items]
     // Fisher-Yates Shuffle

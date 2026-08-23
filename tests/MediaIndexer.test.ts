@@ -40,7 +40,10 @@ describe('MediaIndexer', () => {
     repo.upsertMedia.mockResolvedValue()
     repo.upsertBatch.mockResolvedValue()
     repo.getByPaths.mockResolvedValue(new Map()) // All files are new by default
+    repo.getByRootRelativePaths.mockResolvedValue(new Map())
+    repo.getAll.mockResolvedValue([])
     repo.removeNotInPaths.mockResolvedValue(0)
+    repo.removeNotInRootPaths.mockResolvedValue(0)
     fs.exists.mockReturnValue(true)
     fs.listFiles.mockReturnValue([]) // Default to empty list
     fs.getMtime.mockReturnValue(Date.now()) // Current timestamp
@@ -113,6 +116,348 @@ describe('MediaIndexer', () => {
 
     expect(result).toBe(0)
     expect(repo.upsertBatch).not.toHaveBeenCalled()
+  })
+
+  test('scanAll reconciles a readable root that is intentionally empty', async () => {
+    repo.getAll.mockResolvedValue([
+      {
+        id: 42,
+        path: '/media/videos/existing.mp4',
+        filename: 'existing.mp4',
+        durationSeconds: 60,
+        isInterlude: false,
+        mediaType: 'video',
+        dateStart: null,
+        dateEnd: null,
+        codec: 'h264',
+        width: 1920,
+        height: 1080,
+        warning: null,
+        mtime: 123,
+        compatibility: 'compatible',
+      },
+    ])
+
+    const result = await indexer.scanAll()
+
+    expect(result).toBe(0)
+    expect(repo.removeNotInPaths).not.toHaveBeenCalled()
+    expect(repo.removeNotInRootPaths).toHaveBeenCalledWith('media', [])
+    expect(repo.removeNotInRootPaths).toHaveBeenCalledWith('interludes', [])
+  })
+
+  test('scanAll preserves an unavailable root while reconciling healthy roots', async () => {
+    const multiRootConfig: MediaConfig = {
+      ...mediaConfig,
+      roots: [
+        { id: 'tv', directory: '/media/tv', kind: 'tv' },
+        { id: 'movies', directory: '/media/movies', kind: 'movie' },
+      ],
+    }
+    fs.exists.calledWith('/media/tv').mockReturnValue(false)
+    fs.exists.calledWith('/media/movies').mockReturnValue(true)
+    fs.listFiles.mockReturnValue([])
+
+    indexer = new MediaIndexer(
+      multiRootConfig,
+      interludeConfig,
+      repo,
+      fs,
+      probe
+    )
+    await indexer.scanAll()
+
+    expect(repo.removeNotInRootPaths).not.toHaveBeenCalledWith('tv', [])
+    expect(repo.removeNotInRootPaths).toHaveBeenCalledWith('movies', [])
+  })
+
+  test('managed roots index all files but probe only approved collections', async () => {
+    const multiRootConfig: MediaConfig = {
+      ...mediaConfig,
+      roots: [
+        {
+          id: 'tv',
+          directory: '/media/tv',
+          kind: 'tv',
+          approvedCollections: ['Bluey (2018)'],
+        },
+      ],
+    }
+    fs.listFiles
+      .mockReturnValueOnce([
+        '/media/tv/Bluey (2018)/Season 01/Bluey - S01E01.mkv',
+        '/media/tv/South Park/Season 01/South Park - S01E01.mkv',
+      ])
+      .mockReturnValueOnce([])
+
+    indexer = new MediaIndexer(
+      multiRootConfig,
+      interludeConfig,
+      repo,
+      fs,
+      probe
+    )
+    await indexer.scanAll()
+
+    expect(probe.getMetadata).toHaveBeenCalledTimes(1)
+    expect(probe.getMetadata).toHaveBeenCalledWith(
+      '/media/tv/Bluey (2018)/Season 01/Bluey - S01E01.mkv'
+    )
+    const batch = repo.upsertBatch.mock.calls[0]?.[0]
+    expect(batch).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          rootId: 'tv',
+          relativePath: 'Bluey (2018)/Season 01/Bluey - S01E01.mkv',
+          libraryKind: 'tv',
+          collectionTitle: 'Bluey (2018)',
+          policyEnabled: true,
+        }),
+        expect.objectContaining({
+          collectionTitle: 'South Park',
+          policyEnabled: false,
+          durationSeconds: 0,
+        }),
+      ])
+    )
+  })
+
+  test('uses the stable locator to preserve metadata across a root path change', async () => {
+    const existing = {
+      id: 17,
+      path: '/old-tv/Manual Pick/episode.mkv',
+      filename: 'episode.mkv',
+      durationSeconds: 720,
+      isInterlude: false,
+      mediaType: 'video' as const,
+      dateStart: null,
+      dateEnd: null,
+      codec: 'hevc',
+      width: 3840,
+      height: 2160,
+      warning: 'Requires a compatible client',
+      mtime: 123,
+      compatibility: 'incompatible' as const,
+      rootId: 'tv',
+      relativePath: 'Manual Pick/episode.mkv',
+      libraryKind: 'tv' as const,
+      collectionTitle: 'Manual Pick',
+      policyEnabled: false,
+      playbackOverride: true,
+      rootAvailable: true,
+      playbackEnabled: true,
+    }
+    const managedConfig: MediaConfig = {
+      ...mediaConfig,
+      roots: [
+        {
+          id: 'tv',
+          directory: '/media/tv',
+          kind: 'tv',
+          approvedCollections: [],
+        },
+      ],
+    }
+    fs.listFiles.mockImplementation((directory) =>
+      directory === '/media/tv'
+        ? ['/media/tv/Manual Pick/episode.mkv']
+        : []
+    )
+    fs.getMtime.mockReturnValue(123)
+    repo.getByRootRelativePaths.mockResolvedValue(
+      new Map([['Manual Pick/episode.mkv', existing]])
+    )
+
+    indexer = new MediaIndexer(
+      managedConfig,
+      interludeConfig,
+      repo,
+      fs,
+      probe
+    )
+    await indexer.scanAll()
+
+    expect(probe.getMetadata).not.toHaveBeenCalled()
+    expect(repo.upsertBatch.mock.calls[0]?.[0]?.[0]).toEqual(
+      expect.objectContaining({
+        path: '/media/tv/Manual Pick/episode.mkv',
+        durationSeconds: 720,
+        codec: 'hevc',
+        width: 3840,
+        height: 2160,
+        mtime: 123,
+        compatibility: 'incompatible',
+        playbackOverride: true,
+      })
+    )
+  })
+
+  test('preserves stale metadata and mtime for an unchanged unapproved row', async () => {
+    const existing = {
+      id: 18,
+      path: '/media/tv/Blocked Show/episode.mkv',
+      filename: 'episode.mkv',
+      durationSeconds: 900,
+      isInterlude: false,
+      mediaType: 'video' as const,
+      dateStart: null,
+      dateEnd: null,
+      codec: 'hevc',
+      width: 3840,
+      height: 2160,
+      warning: 'Requires a compatible client',
+      mtime: 123,
+      compatibility: 'incompatible' as const,
+      rootId: 'tv',
+      relativePath: 'Blocked Show/episode.mkv',
+      libraryKind: 'tv' as const,
+      collectionTitle: 'Blocked Show',
+      policyEnabled: false,
+      playbackOverride: null,
+      rootAvailable: true,
+      playbackEnabled: false,
+    }
+    const managedConfig: MediaConfig = {
+      ...mediaConfig,
+      roots: [
+        {
+          id: 'tv',
+          directory: '/media/tv',
+          kind: 'tv',
+          approvedCollections: [],
+        },
+      ],
+    }
+    fs.listFiles.mockImplementation((directory) =>
+      directory === '/media/tv'
+        ? ['/media/tv/Blocked Show/episode.mkv']
+        : []
+    )
+    fs.getMtime.mockReturnValue(999)
+    repo.getByRootRelativePaths.mockResolvedValue(
+      new Map([['Blocked Show/episode.mkv', existing]])
+    )
+    indexer = new MediaIndexer(
+      managedConfig,
+      interludeConfig,
+      repo,
+      fs,
+      probe
+    )
+
+    await indexer.scanAll()
+
+    expect(probe.getMetadata).not.toHaveBeenCalled()
+    expect(repo.upsertBatch.mock.calls[0]?.[0]?.[0]).toEqual(
+      expect.objectContaining({
+        durationSeconds: 900,
+        codec: 'hevc',
+        compatibility: 'incompatible',
+        mtime: 123,
+        playbackOverride: null,
+      })
+    )
+  })
+
+  test('coalesces a concurrent rescan and performs a fresh pass', async () => {
+    const managedConfig: MediaConfig = {
+      ...mediaConfig,
+      roots: [
+        {
+          id: 'tv',
+          directory: '/media/tv',
+          kind: 'tv',
+          approvedCollections: ['Bluey'],
+        },
+      ],
+    }
+    fs.listFiles.mockImplementation((directory) =>
+      directory === '/media/tv' ? ['/media/tv/Bluey/episode.mkv'] : []
+    )
+    let releaseProbe!: (value: {
+      durationSeconds: number
+      codec: string | null
+      width: number | null
+      height: number | null
+      fps: number | null
+      bitrateMbps: number | null
+    }) => void
+    let markStarted!: () => void
+    const started = new Promise<void>((resolve) => (markStarted = resolve))
+    const pendingProbe = new Promise<{
+      durationSeconds: number
+      codec: string | null
+      width: number | null
+      height: number | null
+      fps: number | null
+      bitrateMbps: number | null
+    }>((resolve) => (releaseProbe = resolve))
+    const metadata = {
+      durationSeconds: 420,
+      codec: 'h264',
+      width: 1920,
+      height: 1080,
+      fps: 24,
+      bitrateMbps: 4,
+    }
+    probe.getMetadata
+      .mockImplementationOnce(async () => {
+        markStarted()
+        return pendingProbe
+      })
+      .mockResolvedValue(metadata)
+
+    indexer = new MediaIndexer(
+      managedConfig,
+      interludeConfig,
+      repo,
+      fs,
+      probe
+    )
+    const first = indexer.scanAll()
+    await started
+    const concurrent = indexer.scanAll()
+    releaseProbe(metadata)
+
+    expect(await first).toBe(1)
+    expect(await concurrent).toBe(1)
+    expect(repo.upsertBatch).toHaveBeenCalledTimes(2)
+  })
+
+  test('keeps a newly unreadable approved file out of playback and retries later', async () => {
+    const managedConfig: MediaConfig = {
+      ...mediaConfig,
+      roots: [
+        {
+          id: 'tv',
+          directory: '/media/tv',
+          kind: 'tv',
+          approvedCollections: ['Bluey'],
+        },
+      ],
+    }
+    fs.listFiles.mockImplementation((directory) =>
+      directory === '/media/tv' ? ['/media/tv/Bluey/broken.mkv'] : []
+    )
+    probe.getMetadata.mockRejectedValue(new Error('transient ffprobe failure'))
+    indexer = new MediaIndexer(
+      managedConfig,
+      interludeConfig,
+      repo,
+      fs,
+      probe
+    )
+
+    await indexer.scanAll()
+
+    expect(repo.upsertBatch.mock.calls[0]?.[0]?.[0]).toEqual(
+      expect.objectContaining({
+        durationSeconds: 0,
+        policyEnabled: false,
+        rootAvailable: false,
+        mtime: null,
+      })
+    )
   })
 
   test('scanAll marks interludes correctly', async () => {

@@ -18,6 +18,10 @@ import { createLibraryController } from './controllers/LibraryController'
 import { createSettingsController } from './controllers/SettingsController'
 import { createDashboardController } from './controllers/DashboardController'
 import { EventsController } from './controllers/EventsController'
+import { createHealthController } from './controllers/HealthController'
+import { getDataDirectory } from './config/paths'
+import { ChannelService } from './services/ChannelService'
+import { createChannelController } from './controllers/ChannelController'
 
 export interface ServerResult {
   app: Hono
@@ -33,6 +37,10 @@ export function createServer(daemon: ToastTVDaemon): ServerResult {
   const updateService = daemon.getUpdateService()
   const thumbnailClient = new ThumbnailClient()
   const dashboardEventService = new DashboardEventService()
+  const channelService = new ChannelService(
+    daemon.getRepository(),
+    daemon.getLibraryPolicy()
+  )
 
   // Inject event service for SSE dashboard updates
   playbackService.setEventService(dashboardEventService)
@@ -46,7 +54,7 @@ export function createServer(daemon: ToastTVDaemon): ServerResult {
 
   // --- Mount Static Files ---
   app.use('/*', serveStatic({ root: './public' }))
-  app.use('/thumbnails/*', serveStatic({ root: './data' }))
+  app.use('/thumbnails/*', serveStatic({ root: getDataDirectory() }))
 
   // --- Mount Controllers ---
   const playbackController = createPlaybackController({
@@ -58,6 +66,8 @@ export function createServer(daemon: ToastTVDaemon): ServerResult {
     config: configService,
     media: mediaService,
     playlist: daemon.getEngine(),
+    playback: playbackService,
+    mediaWritable: !daemon.isMediaReadOnly,
   })
 
   const settingsController = createSettingsController({
@@ -72,6 +82,14 @@ export function createServer(daemon: ToastTVDaemon): ServerResult {
     media: mediaService,
   })
 
+  const healthController = createHealthController({
+    database: daemon.getRepository(),
+  })
+
+  const channelController = createChannelController({
+    channels: channelService,
+  })
+
   const eventsController = new EventsController(
     playbackService,
     dashboardEventService
@@ -82,6 +100,8 @@ export function createServer(daemon: ToastTVDaemon): ServerResult {
   app.route('/', libraryController)
   app.route('/', settingsController)
   app.route('/', dashboardController)
+  app.route('/', healthController)
+  app.route('/', channelController)
 
   // SSE endpoint for real-time dashboard updates
   app.get('/events/dashboard', (c) => eventsController.handleDashboardSSE(c))

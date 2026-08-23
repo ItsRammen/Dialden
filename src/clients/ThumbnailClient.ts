@@ -7,16 +7,16 @@
 import { existsSync, mkdirSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { spawn } from 'bun'
+import { getDataPath } from '../config/paths'
 
-const THUMBNAIL_DIR = './data/thumbnails'
 const THUMBNAIL_WIDTH = 320
 const THUMBNAIL_TIME = '00:00:05' // 5 seconds into video
 
 export class ThumbnailClient {
-  constructor() {
+  constructor(private readonly thumbnailDirectory = getDataPath('thumbnails')) {
     // Ensure thumbnail directory exists
-    if (!existsSync(THUMBNAIL_DIR)) {
-      mkdirSync(THUMBNAIL_DIR, { recursive: true })
+    if (!existsSync(this.thumbnailDirectory)) {
+      mkdirSync(this.thumbnailDirectory, { recursive: true })
     }
   }
 
@@ -46,7 +46,7 @@ export class ThumbnailClient {
   }
 
   private getThumbnailPath(videoId: number): string {
-    return join(THUMBNAIL_DIR, `${videoId}.jpg`)
+    return join(this.thumbnailDirectory, `${videoId}.jpg`)
   }
 
   private async generateThumbnail(
@@ -87,11 +87,14 @@ export class ThumbnailClient {
   /**
    * Generate thumbnails for multiple videos
    */
-  async generateAll(items: Array<{ id: number; path: string }>): Promise<void> {
+  async generateAll(
+    items: ReadonlyArray<{ id: number; path: string }>,
+    maxItems = Number.POSITIVE_INFINITY
+  ): Promise<void> {
     // First, count how many are missing
-    const missing = items.filter(
-      (item) => !existsSync(this.getThumbnailPath(item.id))
-    )
+    const missing = items
+      .filter((item) => !existsSync(this.getThumbnailPath(item.id)))
+      .slice(0, maxItems)
 
     if (missing.length === 0) return // Nothing to do, stay quiet
 

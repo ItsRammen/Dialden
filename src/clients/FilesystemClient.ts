@@ -4,9 +4,15 @@
  * Thin wrappers around OS/CLI tools to enable mocking in tests.
  */
 
-import { Glob } from 'bun'
-import { existsSync, statSync, watch as fsWatch } from 'node:fs'
-import { basename, extname, join } from 'node:path'
+import {
+  accessSync,
+  constants,
+  existsSync,
+  readdirSync,
+  statSync,
+  watch as fsWatch,
+} from 'node:fs'
+import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path'
 import type {
   FileWatcher,
   IFileSystem,
@@ -22,17 +28,31 @@ export class FilesystemClient implements IFileSystem {
   ): string[] {
     const files: string[] = []
 
-    // Ensure strict absolute path comparison
-    // We assume 'directory' might be relative, but glob.scanSync(absolute: true) returns full paths.
-    // We must resolve excludePaths relative to CWD if they are relative.
-    const path = require('node:path')
-    const absExcludes = excludePaths.map((p) => path.resolve(p))
+    const absExcludes = excludePaths.map((path) => resolve(path))
+    const supported = new Set(extensions.map((extension) => extension.toLowerCase()))
+    const pending = [resolve(directory)]
 
-    for (const ext of extensions) {
-      const glob = new Glob(`**/*${ext}`)
-      for (const file of glob.scanSync({ cwd: directory, absolute: true })) {
-        // file is absolute. absExcludes are absolute.
-        if (!absExcludes.some((p) => file.startsWith(p))) {
+    while (pending.length > 0) {
+      const current = pending.pop()
+      if (!current) continue
+      // readdirSync deliberately propagates a traversal failure. The indexer
+      // will preserve this root instead of mistaking an incomplete NAS walk
+      // for deleted media.
+      for (const entry of readdirSync(current, { withFileTypes: true })) {
+        const file = join(current, entry.name)
+        const excluded = absExcludes.some((excludedPath) => {
+          const child = relative(excludedPath, file)
+          return (
+            child === '' || (!child.startsWith('..') && !isAbsolute(child))
+          )
+        })
+        if (excluded) continue
+        if (entry.isDirectory()) {
+          pending.push(file)
+        } else if (
+          entry.isFile() &&
+          supported.has(extname(entry.name).toLowerCase())
+        ) {
           files.push(file)
         }
       }
@@ -43,6 +63,19 @@ export class FilesystemClient implements IFileSystem {
 
   exists(path: string): boolean {
     return existsSync(path)
+  }
+
+  isReadableDirectory(path: string): boolean {
+    try {
+      if (!statSync(path).isDirectory()) return false
+      accessSync(path, constants.R_OK)
+      // Force one real enumeration. Glob implementations can otherwise turn
+      // permission/stale-mount failures into an ambiguous empty result.
+      readdirSync(path, { withFileTypes: true })
+      return true
+    } catch {
+      return false
+    }
   }
 
   getMtime(path: string): number | null {

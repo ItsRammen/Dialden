@@ -24,6 +24,14 @@ export interface PlaybackServiceDeps {
   config: ConfigService
   media: IMediaRepository
   events?: DashboardEventService
+  localPlaybackEnabled?: boolean
+}
+
+export class LocalPlaybackDisabledError extends Error {
+  constructor() {
+    super('Local playback is disabled in this deployment')
+    this.name = 'LocalPlaybackDisabledError'
+  }
 }
 
 export class PlaybackService {
@@ -34,6 +42,7 @@ export class PlaybackService {
   private readonly engine: PlaylistEngine
   private readonly config: ConfigService
   private readonly media: IMediaRepository
+  private readonly localPlaybackEnabled: boolean
   private events?: DashboardEventService
 
   constructor(deps: PlaybackServiceDeps) {
@@ -42,6 +51,7 @@ export class PlaybackService {
     this.config = deps.config
     this.media = deps.media
     this.events = deps.events
+    this.localPlaybackEnabled = deps.localPlaybackEnabled ?? true
   }
 
   /**
@@ -56,6 +66,10 @@ export class PlaybackService {
 
   get isSessionActive(): boolean {
     return this.engine.isSessionActive
+  }
+
+  get isLocalPlaybackAvailable(): boolean {
+    return this.localPlaybackEnabled
   }
 
   get isOffAir(): boolean {
@@ -118,6 +132,7 @@ export class PlaybackService {
    * Skip quota for today and exit off-air mode
    */
   async skipQuotaAndResume(): Promise<void> {
+    this.assertLocalPlaybackEnabled()
     this.engine.skipQuotaForToday()
 
     if (this.offAirMode) {
@@ -169,6 +184,8 @@ export class PlaybackService {
    * Start a new viewing session
    */
   async startSession(): Promise<void> {
+    this.assertLocalPlaybackEnabled()
+
     if (this.engine.isSessionActive) {
       console.warn('Session already active')
       return
@@ -208,6 +225,7 @@ export class PlaybackService {
    * End the current session
    */
   async endSession(): Promise<void> {
+    this.assertLocalPlaybackEnabled()
     await this.engine.endSession()
     await this.player.stop()
     this.events?.resetPlayingState()
@@ -219,6 +237,7 @@ export class PlaybackService {
    * Skip to next video
    */
   async skip(): Promise<void> {
+    this.assertLocalPlaybackEnabled()
     const next = await this.engine.getNextVideo()
     if (next) {
       await this.playVideo(next)
@@ -229,6 +248,7 @@ export class PlaybackService {
    * Pause playback
    */
   async pause(): Promise<void> {
+    this.assertLocalPlaybackEnabled()
     await this.player.pause()
     // Check actual state and emit
     const status = await this.player.getStatus()
@@ -239,6 +259,7 @@ export class PlaybackService {
    * Stop playback and end session
    */
   async stop(): Promise<void> {
+    this.assertLocalPlaybackEnabled()
     await this.player.stop()
     await this.engine.endSession()
     this.offAirMode = false
@@ -267,6 +288,24 @@ export class PlaybackService {
   }
 
   /**
+   * Rebuild the player's native future queue after policy or mount changes.
+   * The currently playing item is deliberately left alone.
+   */
+  async reconcilePrequeue(): Promise<void> {
+    if (!this.localPlaybackEnabled) return
+    try {
+      await this.player.clear()
+      const candidate = this.engine.peekQueue(1)[0]
+      if (!candidate) return
+      const current = await this.media.getById(candidate.id)
+      if (!current || current.playbackEnabled === false) return
+      await this.player.enqueue(current.path)
+    } catch (error) {
+      logger.warn(`Unable to reconcile player prequeue: ${String(error)}`)
+    }
+  }
+
+  /**
    * Alias for peekQueue (legacy)
    */
   getQueue(count = 5): MediaItem[] {
@@ -277,6 +316,7 @@ export class PlaybackService {
    * Shuffle upcoming queue
    */
   async shuffleQueue(): Promise<void> {
+    this.assertLocalPlaybackEnabled()
     await this.engine.shuffleQueue()
     // Emit queue update
     const queue = this.peekQueue(10).map((v) => ({
@@ -335,7 +375,7 @@ export class PlaybackService {
         const offAirMedia = await this.media.getById(
           appConfig.session.offAirAssetId
         )
-        if (offAirMedia) {
+        if (offAirMedia && offAirMedia.playbackEnabled !== false) {
           await this.player.enqueue(offAirMedia.path)
           logger.info(
             `Pre-queued off-air (manual play): ${offAirMedia.filename}`
@@ -361,8 +401,8 @@ export class PlaybackService {
     }
 
     const mediaItem = await this.media.getById(offAirAssetId)
-    if (!mediaItem) {
-      logger.warn(`Off-air asset ID ${offAirAssetId} not found`)
+    if (!mediaItem || mediaItem.playbackEnabled === false) {
+      logger.warn(`Off-air asset ID ${offAirAssetId} is unavailable or blocked`)
       await this.player.stop()
       return
     }
@@ -412,6 +452,7 @@ export class PlaybackService {
    * Start the playback loop (non-blocking)
    */
   startLoop(): void {
+    this.assertLocalPlaybackEnabled()
     this.running = true
     void this.runPlaybackLoop()
   }
@@ -421,6 +462,12 @@ export class PlaybackService {
    */
   stopLoop(): void {
     this.running = false
+  }
+
+  private assertLocalPlaybackEnabled(): void {
+    if (!this.localPlaybackEnabled) {
+      throw new LocalPlaybackDisabledError()
+    }
   }
 
   /**
@@ -541,7 +588,7 @@ export class PlaybackService {
                 const offAirMedia = await this.media.getById(
                   appConfig.session.offAirAssetId
                 )
-                if (offAirMedia) {
+                if (offAirMedia && offAirMedia.playbackEnabled !== false) {
                   await this.player.enqueue(offAirMedia.path)
                   logger.info(`Pre-queued off-air: ${offAirMedia.filename}`)
                 }

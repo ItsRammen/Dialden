@@ -15,10 +15,15 @@ import {
 import type { IUpdateClient } from '../clients/UpdateClient'
 import { logger } from '../utils/logger'
 import packageJson from '../../package.json'
+import { getDataPath } from '../config/paths'
 
 const CACHE_TTL_MS = 60 * 60 * 1000 // 1 hour
 const UPDATE_SCRIPT = '/opt/toasttv/scripts/update.sh'
-const UPDATE_LOG_PATH = './data/update.log'
+
+export interface UpdateServiceOptions {
+  enabled?: boolean
+  updateLogPath?: string
+}
 
 /** Returns true if `remote` is a strictly newer semver than `current`. */
 function isNewerVersion(remote: string, current: string): boolean {
@@ -43,14 +48,32 @@ export class UpdateService {
   private cachedInfo: UpdateInfo | null = null
   private lastCheckAt = 0
   private updating = false
+  private readonly enabled: boolean
+  private readonly updateLogPath: string
 
-  constructor(private readonly client: IUpdateClient) {}
+  constructor(
+    private readonly client: IUpdateClient,
+    options: UpdateServiceOptions = {}
+  ) {
+    this.enabled = options.enabled ?? true
+    this.updateLogPath = options.updateLogPath ?? getDataPath('update.log')
+  }
+
+  get isEnabled(): boolean {
+    return this.enabled
+  }
+
+  get currentVersion(): string {
+    return packageJson.version
+  }
 
   /**
    * Check for available updates. Caches result for 1 hour.
    * Returns null on failure (never throws).
    */
   async checkForUpdate(): Promise<UpdateInfo | null> {
+    if (!this.enabled) return null
+
     const now = Date.now()
 
     // Return cached result if fresh
@@ -105,6 +128,12 @@ export class UpdateService {
    * of stdout/stderr as it arrives, plus a final 'close' event.
    */
   triggerUpdate(onLine: (line: string) => void, onClose: () => void): void {
+    if (!this.enabled) {
+      onLine('[!] In-container updates are disabled. Redeploy the Docker image.')
+      onClose()
+      return
+    }
+
     if (this.updating) {
       onLine('[!] Update already in progress')
       onClose()
@@ -114,10 +143,10 @@ export class UpdateService {
     this.updating = true
 
     // Truncate log file
-    writeFileSync(UPDATE_LOG_PATH, '')
+    writeFileSync(this.updateLogPath, '')
 
     const writeLine = (line: string) => {
-      appendFileSync(UPDATE_LOG_PATH, line + '\n')
+      appendFileSync(this.updateLogPath, line + '\n')
       onLine(line)
     }
 
@@ -166,8 +195,8 @@ export class UpdateService {
    */
   getUpdateLog(): string | null {
     try {
-      if (!existsSync(UPDATE_LOG_PATH)) return null
-      return readFileSync(UPDATE_LOG_PATH, 'utf-8')
+      if (!existsSync(this.updateLogPath)) return null
+      return readFileSync(this.updateLogPath, 'utf-8')
     } catch {
       return null
     }

@@ -23,6 +23,30 @@ describe('ConfigRepository', () => {
     expect(config.server.port).toBe(1993)
   })
 
+  test('bootstrap paths honor container environment overrides', () => {
+    const repository = new ConfigRepository('./missing-config.json', {
+      TOASTTV_DATA: '/app/data',
+      TOASTTV_MEDIA: '/media',
+    })
+
+    const bootstrap = repository.getBootstrap()
+
+    expect(bootstrap.paths.media).toBe('/media')
+    expect(bootstrap.paths.database).toBe('/app/data/media.db')
+  })
+
+  test('explicit database path overrides the data directory', () => {
+    const repository = new ConfigRepository('./missing-config.json', {
+      TOASTTV_DATA: '/app/data',
+      TOASTTV_DATABASE: '/state/toasttv.sqlite',
+    })
+
+    const bootstrap = repository.getBootstrap()
+
+    expect(bootstrap.paths.media).toBe('./media')
+    expect(bootstrap.paths.database).toBe('/state/toasttv.sqlite')
+  })
+
   test('get() hydration from flat settings', async () => {
     // Mock default seeding call first
     mediaRepo.getAllSettings.mockResolvedValue({})
@@ -95,6 +119,20 @@ describe('ConfigRepository', () => {
     expect(mediaRepo.setSetting).toHaveBeenCalledWith(
       'mpv.ipcSocket',
       '/tmp/toasttv-mpv.sock'
+    )
+  })
+
+  test('seeded logo path follows the configured data root', async () => {
+    const repository = new ConfigRepository('./missing-config.json', {
+      TOASTTV_DATA: '/app/state',
+    })
+    mediaRepo.getAllSettings.mockResolvedValue({})
+
+    await repository.initialize(mediaRepo)
+
+    expect(mediaRepo.setSetting).toHaveBeenCalledWith(
+      'logo.imagePath',
+      '/app/state/logo.png'
     )
   })
 })

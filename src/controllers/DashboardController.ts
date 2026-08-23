@@ -8,7 +8,10 @@ interface DashboardControllerDeps {
   media: MediaService
 }
 
-export function createDashboardController({ playback, media }: DashboardControllerDeps) {
+export function createDashboardController({
+  playback,
+  media,
+}: DashboardControllerDeps) {
   const app = new Hono()
 
   app.get('/partials/dashboard-state', async (c) => {
@@ -30,6 +33,10 @@ export function createDashboardController({ playback, media }: DashboardControll
 
   // Shuffle Action
   app.post('/api/session/shuffle', async (c) => {
+    if (!playback.isLocalPlaybackAvailable) {
+      return c.text('Local playback is disabled', 503)
+    }
+
     await playback.shuffleQueue()
     // Return empty string or re-render partial? 
     // Best to re-render the hero to show new queue immediately
@@ -37,7 +44,7 @@ export function createDashboardController({ playback, media }: DashboardControll
     // To be responsive: trigger a refresh.
     // For now, let's just return 200 OK and let the poller update (client-side triggers?)
     // Actually, returning the new state immediately is best for UX.
-    return c.redirect('/partials/dashboard-state') 
+    return c.redirect('/partials/dashboard-state')
     // But htmx uses swap. so redirect might load full page?
     // Let's call the logic directly.
   })

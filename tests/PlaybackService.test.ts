@@ -181,6 +181,27 @@ describe('PlaybackService', () => {
     expect(engine.peekQueue).toHaveBeenCalledWith(2)
   })
 
+  test('reconcilePrequeue removes a stale MPV item and queues only current eligibility', async () => {
+    const queued = createMediaItemBuilder({ id: 7, path: '/old/show.mp4' })
+    const current = createMediaItemBuilder({
+      id: 7,
+      path: '/media/tv/Show/episode.mkv',
+      playbackEnabled: true,
+    })
+    engine.peekQueue.mockReturnValue([queued])
+    media.getById.mockResolvedValue(current)
+
+    await service.reconcilePrequeue()
+
+    expect(player.clear).toHaveBeenCalled()
+    expect(player.enqueue).toHaveBeenCalledWith(current.path)
+
+    player.enqueue.mockClear()
+    media.getById.mockResolvedValue({ ...current, playbackEnabled: false })
+    await service.reconcilePrequeue()
+    expect(player.enqueue).not.toHaveBeenCalled()
+  })
+
   test('shuffleQueue() delegates to engine', async () => {
     engine.peekQueue.mockReturnValue([])
 

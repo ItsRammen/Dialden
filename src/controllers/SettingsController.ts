@@ -35,8 +35,9 @@ export function createSettingsController(deps: SettingsControllerDeps) {
         config: currentConfig,
         mediaDirectory: media.getMediaDirectory(),
         hardwareProfileName: profile?.name,
+        updatesEnabled: update.isEnabled,
         updateAvailable: updateInfo?.updateAvailable,
-        currentVersion: updateInfo?.currentVersion,
+        currentVersion: updateInfo?.currentVersion ?? update.currentVersion,
         latestVersion: updateInfo?.latestVersion,
       })
     )
@@ -154,6 +155,14 @@ export function createSettingsController(deps: SettingsControllerDeps) {
 
   // Check for updates - returns HTML fragment
   controller.get('/api/update/check', async (c) => {
+    if (!update.isEnabled) {
+      return c.html(`
+        <div class="update-result">
+          <span class="update-status">Container updates are managed by redeploying the Docker image.</span>
+        </div>
+      `)
+    }
+
     const info = await update.checkForUpdate()
 
     if (!info) {
@@ -185,6 +194,13 @@ export function createSettingsController(deps: SettingsControllerDeps) {
 
   // Apply update - SSE stream of update script output
   controller.post('/api/update/apply', (c) => {
+    if (!update.isEnabled) {
+      return c.json(
+        { error: 'In-container updates are disabled; redeploy the Docker image' },
+        409
+      )
+    }
+
     if (update.isUpdating) {
       return c.json({ error: 'Update already in progress' }, 409)
     }

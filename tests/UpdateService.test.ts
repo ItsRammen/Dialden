@@ -25,6 +25,16 @@ describe("UpdateService", () => {
 		client = mock<IUpdateClient>();
 	});
 
+	test("should skip checks when in-container updates are disabled", async () => {
+		const service = new UpdateService(client, { enabled: false });
+
+		const result = await service.checkForUpdate();
+
+		expect(result).toBeNull();
+		expect(service.isEnabled).toBe(false);
+		expect(client.fetchLatestVersion).not.toHaveBeenCalled();
+	});
+
 	test("should return updateAvailable true when remote version is newer", async () => {
 		client.fetchLatestVersion.mockResolvedValue("99.0.0");
 
@@ -120,5 +130,6 @@ describe("UpdateService", () => {
 	test("should report isUpdating as false initially", () => {
 		const service = new UpdateService(client);
 		expect(service.isUpdating).toBe(false);
+		expect(service.currentVersion).toBe("0.6.4");
 	});
 });

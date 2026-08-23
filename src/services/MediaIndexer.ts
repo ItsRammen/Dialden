@@ -6,7 +6,9 @@
  */
 
 import type { IMediaRepository } from '../repositories/IMediaRepository'
+import type { MediaItemInput } from '../repositories/IMediaRepository'
 import { getFilename } from '../clients/FilesystemClient'
+import { isAbsolute, relative } from 'node:path'
 import type {
   IFileSystem,
   IMediaProbe,
@@ -16,12 +18,18 @@ import type {
   MediaMetadata,
   MediaType,
   Compatibility,
+  MediaRootConfig,
 } from '../types'
 import type { IHardwareDetectionService } from './HardwareDetectionService'
 import type { HardwareProfile } from '../config/hardwareProfiles'
 
 export class MediaIndexer {
-  private scanInProgress = false
+  private scanPromise: Promise<number> | null = null
+  private rescanRequested = false
+  private readonly scanCompleteListeners = new Set<
+    (count: number) => void | Promise<void>
+  >()
+  private readonly scanStartListeners = new Set<() => void | Promise<void>>()
   private hardwareProfile: HardwareProfile | null = null
 
   constructor(
@@ -40,43 +48,142 @@ export class MediaIndexer {
   }
 
   async scanAll(): Promise<number> {
-    if (this.scanInProgress) {
-      console.log('Scan already in progress, skipping')
-      return 0
+    if (this.scanPromise) {
+      // Coalesce callers onto the active scan, but request one more pass so a
+      // parent approval or watcher event that arrived mid-scan is not lost.
+      this.rescanRequested = true
+      return this.scanPromise
     }
-    this.scanInProgress = true
 
+    const activeScan = this.scanUntilSettled()
+    this.scanPromise = activeScan
     try {
-      const videoPaths: string[] = []
-      const interludePaths: string[] = []
-
-      // Scan videos (exclude interlude directory to prevent double counting)
-      const videoCount = await this.scanDirectory(
-        this.mediaConfig.directory,
-        false,
-        videoPaths,
-        [this.interludeConfig.directory]
-      )
-
-      // Scan interludes
-      const interludeCount = await this.scanDirectory(
-        this.interludeConfig.directory,
-        true,
-        interludePaths
-      )
-
-      // Remove DB entries for files that no longer exist
-      const allValidPaths = [...videoPaths, ...interludePaths]
-      const removed = await this.repository.removeNotInPaths(allValidPaths)
-
-      const total = videoCount + interludeCount
-      console.log(
-        `Indexed ${total} files (${videoCount} videos, ${interludeCount} interludes), removed ${removed} stale`
-      )
-      return total
+      return await activeScan
     } finally {
-      this.scanInProgress = false
+      if (this.scanPromise === activeScan) this.scanPromise = null
     }
+  }
+
+  onScanComplete(
+    listener: (count: number) => void | Promise<void>
+  ): () => void {
+    this.scanCompleteListeners.add(listener)
+    return () => this.scanCompleteListeners.delete(listener)
+  }
+
+  onScanStart(listener: () => void | Promise<void>): () => void {
+    this.scanStartListeners.add(listener)
+    return () => this.scanStartListeners.delete(listener)
+  }
+
+  private async scanUntilSettled(): Promise<number> {
+    let total = 0
+    while (true) {
+      this.rescanRequested = false
+      total = await this.scanOnce()
+      if (this.rescanRequested) continue
+      for (const listener of this.scanCompleteListeners) {
+        try {
+          await listener(total)
+        } catch (error) {
+          console.error('Post-scan refresh failed', error)
+        }
+      }
+      // A watcher event can arrive while a completion listener is refreshing
+      // consumers. Run it before resolving the shared promise.
+      if (!this.rescanRequested) return total
+    }
+  }
+
+  private async scanOnce(): Promise<number> {
+    let videoCount = 0
+    let interludeCount = 0
+    let removed = 0
+
+    const roots = this.getMediaRoots()
+    const interludeRoot: MediaRootConfig = {
+      id: 'interludes',
+      directory: this.interludeConfig.directory,
+      kind: 'other',
+    }
+    // Quarantine every root before walking any one of them. A large first
+    // root cannot leave later roots temporarily eligible via stale paths.
+    await Promise.all([
+      ...roots.map((root) =>
+        this.repository.setRootAvailable(root.id, false)
+      ),
+      this.repository.setRootAvailable(interludeRoot.id, false),
+    ])
+    for (const listener of this.scanStartListeners) {
+      try {
+        await listener()
+      } catch (error) {
+        console.error('Scan-start refresh failed', error)
+      }
+    }
+    for (const root of roots) {
+      const relativePaths: string[] = []
+      if (!this.isRootReady(root.directory)) {
+        console.warn(
+          `Media root unavailable; preserving its index: ${root.id} (${root.directory})`
+        )
+        continue
+      }
+
+      try {
+        const excludePaths = this.isWithinRoot(
+          root.directory,
+          this.interludeConfig.directory
+        )
+          ? [this.interludeConfig.directory]
+          : []
+        videoCount += await this.scanDirectory(
+          root,
+          false,
+          relativePaths,
+          excludePaths
+        )
+        removed +=
+          (await this.repository.removeNotInRootPaths(
+            root.id,
+            relativePaths
+          )) ?? 0
+        await this.repository.setRootAvailable(root.id, true)
+      } catch (error) {
+        console.error(
+          `Media root scan failed; preserving its index: ${root.id}`,
+          error
+        )
+      }
+    }
+
+    if (this.isRootReady(interludeRoot.directory)) {
+      const relativePaths: string[] = []
+      try {
+        interludeCount = await this.scanDirectory(
+          interludeRoot,
+          true,
+          relativePaths
+        )
+        removed +=
+          (await this.repository.removeNotInRootPaths(
+            interludeRoot.id,
+            relativePaths
+          )) ?? 0
+        await this.repository.setRootAvailable(interludeRoot.id, true)
+      } catch (error) {
+        console.error(
+          'Interlude root scan failed; preserving its index',
+          error
+        )
+      }
+    }
+
+    const total = videoCount + interludeCount
+    console.log(
+      `Indexed ${total} files (${videoCount} library, ${interludeCount} interludes), removed ${removed} stale`
+    )
+    return total
   }
 
   /**
@@ -117,92 +224,117 @@ export class MediaIndexer {
   }
 
   private async scanDirectory(
-    directory: string,
+    root: MediaRootConfig,
     isInterlude: boolean,
-    outPaths: string[],
+    outRelativePaths: string[],
     excludePaths: string[] = []
   ): Promise<number> {
-    if (!this.filesystem.exists(directory)) {
-      console.warn(`Directory not found: ${directory}`)
-      return 0
-    }
-
     const files = this.filesystem.listFiles(
-      directory,
+      root.directory,
       this.mediaConfig.supportedExtensions,
       excludePaths
     )
+    const rawDescriptors = files.map((filePath) => ({
+      filePath,
+      relativePath: this.getRelativePath(root, filePath),
+    }))
+    const [existingPathMap, locatorMap] = await Promise.all([
+      this.repository.getByPaths(files),
+      this.repository.getByRootRelativePaths(
+        root.id,
+        rawDescriptors.map((descriptor) => descriptor.relativePath)
+      ),
+    ])
+    // Some third-party/test repository adapters may predate the locator API.
+    const existingLocatorMap = locatorMap ?? new Map()
 
-    if (files.length === 0) return 0
+    const approvedNames = root.approvedCollections
+      ? new Set(
+          root.approvedCollections.map((name) =>
+            name.toLocaleLowerCase('en-US')
+          )
+        )
+      : null
+    const descriptors = rawDescriptors.map(({ filePath, relativePath }) => {
+      const collectionTitle =
+        relativePath.split('/')[0] || getFilename(filePath)
+      const policyEnabled =
+        isInterlude ||
+        approvedNames === null ||
+        approvedNames.has(collectionTitle.toLocaleLowerCase('en-US'))
+      const existing =
+        existingLocatorMap.get(relativePath) ?? existingPathMap.get(filePath)
+      const mtime = this.filesystem.getMtime(filePath)
+      const shouldProbe =
+        policyEnabled || existing?.playbackOverride === true
+      const needsProbe =
+        shouldProbe &&
+        (!existing ||
+          existing.mtime === null ||
+          existing.mtime !== mtime ||
+          existing.durationSeconds <= 0)
 
-    // 1. Batch lookup existing entries
-    const existingMap = await this.repository.getByPaths(files)
-
-    // 2. Separate new files from existing ones, and check mtime for delta scanning
-    const newFiles: string[] = []
-    const existingFiles: string[] = []
-    const changedFiles: string[] = [] // Files with changed mtime
-
-    for (const filePath of files) {
-      const existing = existingMap.get(filePath)
-      if (existing) {
-        // Check if file has changed (mtime comparison)
-        const currentMtime = this.filesystem.getMtime(filePath)
-        if (existing.mtime !== null && currentMtime === existing.mtime) {
-          // File unchanged, skip re-probing
-          existingFiles.push(filePath)
-        } else {
-          // File changed or mtime was never recorded
-          changedFiles.push(filePath)
-        }
-      } else {
-        newFiles.push(filePath)
+      outRelativePaths.push(relativePath)
+      return {
+        filePath,
+        relativePath,
+        collectionTitle,
+        policyEnabled,
+        existing,
+        mtime,
+        shouldProbe,
+        needsProbe,
       }
-    }
+    })
 
-    // 3. Parallel probe new + changed files with concurrency limit
-    const CONCURRENCY = 4 // Pi Zero 2 W has 4 cores
-    const filesToProbe = [...newFiles, ...changedFiles]
+    const filesToProbe = descriptors
+      .filter((descriptor) => descriptor.needsProbe)
+      .map((descriptor) => descriptor.filePath)
+    const CONCURRENCY = 4
     const metadataResults = await this.probeParallel(filesToProbe, CONCURRENCY)
 
-    // 4. Build items for batch upsert
-    const itemsToUpsert: Array<{
-      path: string
-      filename: string
-      durationSeconds: number
-      isInterlude: boolean
-      mediaType: MediaType
-      dateStart: string | null
-      dateEnd: string | null
-      codec: string | null
-      width: number | null
-      height: number | null
-      warning: string | null
-      mtime: number | null
-      compatibility: Compatibility
-    }> = []
-
-    // Add new + changed files
+    const probedByPath = new Map<string, MediaMetadata | null>()
     for (let i = 0; i < filesToProbe.length; i++) {
-      const filePath = filesToProbe[i]
-      if (!filePath) continue // TypeScript guard
-      const filename = getFilename(filePath)
-      const metadata: MediaMetadata = metadataResults[i] ?? {
-        durationSeconds: 0,
-        codec: null,
-        width: null,
-        height: null,
+      const path = filesToProbe[i]
+      if (path) probedByPath.set(path, metadataResults[i] ?? null)
+    }
+
+    const itemsToUpsert: MediaItemInput[] = descriptors.map((descriptor) => {
+      const filename = getFilename(descriptor.filePath)
+      const probeResult = probedByPath.get(descriptor.filePath)
+      const probeSucceeded = probeResult !== undefined && probeResult !== null
+      const probeFailed = descriptor.needsProbe && probeResult === null
+      const previousMetadata: MediaMetadata = {
+        durationSeconds: descriptor.existing?.durationSeconds ?? 0,
+        codec: descriptor.existing?.codec ?? null,
+        width: descriptor.existing?.width ?? null,
+        height: descriptor.existing?.height ?? null,
         fps: null,
         bitrateMbps: null,
       }
-      const mediaType = this.detectMediaType(filename, isInterlude)
+      const metadata = probeFailed
+        ? { ...previousMetadata, durationSeconds: 0 }
+        : (probeResult ?? previousMetadata)
+      const mediaType =
+        root.kind === 'other'
+          ? this.detectMediaType(filename, isInterlude)
+          : 'video'
       const { start: dateStart, end: dateEnd } = this.detectDates(filename)
-      const warning = this.generateWarning(metadata.codec)
-      const mtime = this.filesystem.getMtime(filePath)
-      const compatibility = this.checkCompatibility(metadata)
+      const warning = probeSucceeded
+        ? this.generateWarning(metadata.codec)
+        : (descriptor.existing?.warning ?? this.generateWarning(metadata.codec))
+      const compatibility = probeSucceeded
+        ? this.checkCompatibility(metadata)
+        : (descriptor.existing?.compatibility ?? this.checkCompatibility(metadata))
+      // A file with unreadable current metadata cannot safely enter a
+      // schedule. Existing codec/compatibility details remain visible, but a
+      // zero duration technically gates playback and the stale mtime retries.
+      const policyEnabled =
+        descriptor.policyEnabled &&
+        (!probeFailed || descriptor.existing !== undefined)
 
-      itemsToUpsert.push({
-        path: filePath,
+      return {
+        path: descriptor.filePath,
         filename,
         durationSeconds: metadata.durationSeconds,
         isInterlude: mediaType === 'interlude',
@@ -213,40 +345,89 @@ export class MediaIndexer {
         width: metadata.width,
         height: metadata.height,
         warning,
-        mtime,
+        mtime: probeFailed || !descriptor.shouldProbe
+          ? (descriptor.existing?.mtime ?? null)
+          : descriptor.mtime,
         compatibility,
-      })
+        rootId: root.id,
+        relativePath: descriptor.relativePath,
+        libraryKind: root.kind,
+        collectionTitle: descriptor.collectionTitle,
+        policyEnabled,
+        playbackOverride: descriptor.existing?.playbackOverride ?? null,
+        rootAvailable: false,
+        playbackEnabled:
+          descriptor.existing?.playbackOverride ?? policyEnabled,
+      }
+    })
 
-      console.log(
-        `Indexed: ${filename} (${metadata.durationSeconds}s) [${mediaType}]`
-      )
-    }
-
-    // Add unchanged existing files to outPaths only (no re-upsert needed)
-    for (const filePath of existingFiles) {
-      outPaths.push(filePath)
-    }
-
-    // 5. Batch upsert new files
     if (itemsToUpsert.length > 0) {
       await this.repository.upsertBatch(itemsToUpsert)
 
-      // 6. Generate thumbnails for newly indexed files (Phase 5)
-      if (this.thumbnailClient) {
-        const paths = itemsToUpsert.map((item) => item.path)
+      if (this.thumbnailClient && filesToProbe.length > 0) {
+        const paths = filesToProbe
         const insertedMap = await this.repository.getByPaths(paths)
         const thumbnailItems = Array.from(insertedMap.values()).map((item) => ({
           id: item.id,
           path: item.path,
         }))
-        await this.thumbnailClient.generateAll(thumbnailItems)
+        // Do not block a large first-time Plex scan on thousands of FFmpeg
+        // thumbnail jobs. Library page visits fill the remaining cache in
+        // bounded batches.
+        await this.thumbnailClient.generateAll(thumbnailItems, 12)
       }
     }
 
-    // Add new file paths to outPaths
-    outPaths.push(...filesToProbe)
+    const approvedCount = descriptors.filter(
+      (descriptor) =>
+        descriptor.existing?.playbackOverride ?? descriptor.policyEnabled
+    ).length
+    console.log(
+      `Scanned root ${root.id}: ${files.length} files, ${approvedCount} playback eligible, ${filesToProbe.length} probed`
+    )
 
     return files.length
+  }
+
+  private getMediaRoots(): readonly MediaRootConfig[] {
+    return this.mediaConfig.roots?.length
+      ? this.mediaConfig.roots
+      : [
+          {
+            id: 'media',
+            directory: this.mediaConfig.directory,
+            kind: 'other',
+          },
+        ]
+  }
+
+  private getRelativePath(root: MediaRootConfig, filePath: string): string {
+    const value = relative(root.directory, filePath)
+    if (!value || value.startsWith('..') || isAbsolute(value)) {
+      throw new Error(`Media path escapes root ${root.id}: ${filePath}`)
+    }
+    return value.replace(/\\/g, '/')
+  }
+
+  private isWithinRoot(rootPath: string, candidatePath: string): boolean {
+    const value = relative(rootPath, candidatePath)
+    return value === '' || (!value.startsWith('..') && !isAbsolute(value))
+  }
+
+  private isRootReady(directory: string): boolean {
+    if (!this.filesystem.exists(directory)) return false
+    return this.filesystem.isReadableDirectory?.(directory) !== false
+  }
+
+  private emptyMetadata(): MediaMetadata {
+    return {
+      durationSeconds: 0,
+      codec: null,
+      width: null,
+      height: null,
+      fps: null,
+      bitrateMbps: null,
+    }
   }
 
   /**
@@ -256,8 +437,8 @@ export class MediaIndexer {
   private async probeParallel(
     files: string[],
     concurrency: number
-  ): Promise<MediaMetadata[]> {
-    const results: MediaMetadata[] = []
+  ): Promise<Array<MediaMetadata | null>> {
+    const results: Array<MediaMetadata | null> = []
 
     for (let i = 0; i < files.length; i += concurrency) {
       const batch = files.slice(i, i + concurrency)
@@ -267,14 +448,7 @@ export class MediaIndexer {
             return await this.mediaProbe.getMetadata(filePath)
           } catch (error) {
             console.error(`Failed to probe ${filePath}:`, error)
-            return {
-              durationSeconds: 0,
-              codec: null,
-              width: null,
-              height: null,
-              fps: null,
-              bitrateMbps: null,
-            }
+            return null
           }
         })
       )
@@ -288,6 +462,7 @@ export class MediaIndexer {
    * Generate warning for incompatible codecs (e.g., HEVC on Pi Zero 2 W)
    */
   private generateWarning(codec: string | null): string | null {
+    if (!this.hardwareProfile) return null
     if (!codec) return null
     const lowerCodec = codec.toLowerCase()
     if (
@@ -411,7 +586,12 @@ export class MediaIndexer {
 
     const watcher = new FileWatcherService(
       this.filesystem,
-      [this.mediaConfig.directory, this.interludeConfig.directory],
+      [
+        ...new Set([
+          ...this.getMediaRoots().map((root) => root.directory),
+          this.interludeConfig.directory,
+        ]),
+      ],
       this.mediaConfig.supportedExtensions
     )
 
@@ -441,98 +621,9 @@ export class MediaIndexer {
   async indexBatch(paths: string[]): Promise<number> {
     if (paths.length === 0) return 0
 
-    // Filter to existing files only (removes may report deleted files)
-    const existingPaths = paths.filter((p) => this.filesystem.exists(p))
-    const deletedPaths = paths.filter((p) => !this.filesystem.exists(p))
-
-    // Remove deleted files from DB
-    if (deletedPaths.length > 0) {
-      const removed = await this.repository.removeByPaths(deletedPaths)
-      console.log(`MediaIndexer: Removed ${removed} deleted files`)
-    }
-
-    if (existingPaths.length === 0) return 0
-
-    // Check which files are new vs existing
-    const existingMap = await this.repository.getByPaths(existingPaths)
-    const newPaths = existingPaths.filter((p) => !existingMap.has(p))
-
-    if (newPaths.length === 0) return 0
-
-    // Probe new files
-    const metadataResults = await this.probeParallel(newPaths, 4)
-
-    const items: Array<{
-      path: string
-      filename: string
-      durationSeconds: number
-      isInterlude: boolean
-      mediaType: MediaType
-      dateStart: string | null
-      dateEnd: string | null
-      codec: string | null
-      width: number | null
-      height: number | null
-      warning: string | null
-      mtime: number | null
-      compatibility: Compatibility
-    }> = []
-
-    for (let i = 0; i < newPaths.length; i++) {
-      const filePath = newPaths[i]
-      if (!filePath) continue
-      const filename = getFilename(filePath)
-      const metadata: MediaMetadata = metadataResults[i] ?? {
-        durationSeconds: 0,
-        codec: null,
-        width: null,
-        height: null,
-        fps: null,
-        bitrateMbps: null,
-      }
-      const isInterlude = filePath.startsWith(this.interludeConfig.directory)
-      const mediaType = this.detectMediaType(filename, isInterlude)
-      const { start: dateStart, end: dateEnd } = this.detectDates(filename)
-      const warning = this.generateWarning(metadata.codec)
-      const mtime = this.filesystem.getMtime(filePath)
-      const compatibility = this.checkCompatibility(metadata)
-
-      items.push({
-        path: filePath,
-        filename,
-        durationSeconds: metadata.durationSeconds,
-        isInterlude: mediaType === 'interlude',
-        mediaType,
-        dateStart,
-        dateEnd,
-        codec: metadata.codec,
-        width: metadata.width,
-        height: metadata.height,
-        warning,
-        mtime,
-        compatibility,
-      })
-
-      console.log(
-        `Indexed (watch): ${filename} (${metadata.durationSeconds}s) [${mediaType}]`
-      )
-    }
-
-    if (items.length > 0) {
-      await this.repository.upsertBatch(items)
-
-      // Generate thumbnails for newly indexed files (Phase 5)
-      if (this.thumbnailClient) {
-        const paths = items.map((item) => item.path)
-        const insertedMap = await this.repository.getByPaths(paths)
-        const thumbnailItems = Array.from(insertedMap.values()).map((item) => ({
-          id: item.id,
-          path: item.path,
-        }))
-        await this.thumbnailClient.generateAll(thumbnailItems)
-      }
-    }
-
-    return items.length
+    // A policy change can affect every episode in a collection, while a remove
+    // must be reconciled only inside its own root. Reuse the authoritative
+    // root-aware scan instead of maintaining a second, weaker indexing path.
+    return this.scanAll()
   }
 }

@@ -9,25 +9,44 @@ import { html } from 'hono/html'
 import type { MediaService } from '../services/MediaService'
 import type { ConfigService } from '../services/ConfigService'
 import type { PlaylistEngine } from '../services/PlaylistEngine'
+import type { PlaybackService } from '../services/PlaybackService'
 import { renderLibrary, renderLibraryContent } from '../templates/library'
 import type { MediaType } from '../types'
+import { isAbsolute, posix, relative, resolve } from 'node:path'
+import { lstatSync } from 'node:fs'
 
 interface LibraryControllerDeps {
   config: ConfigService
   media: MediaService
   playlist: PlaylistEngine
+  playback?: Pick<PlaybackService, 'reconcilePrequeue'>
+  mediaWritable?: boolean
 }
 
 export function createLibraryController(deps: LibraryControllerDeps) {
-  const { config, media, playlist } = deps
+  const { config, media, playlist, playback, mediaWritable = true } = deps
   const controller = new Hono()
 
   // Helper to parse library query params
+  type LibraryFilter =
+    | 'all'
+    | 'approved'
+    | 'blocked'
+    | 'videos'
+    | 'interludes'
+  const parseView = (value: unknown): 'list' | 'grid' =>
+    value === 'grid' ? 'grid' : 'list'
+  const parseFilter = (value: unknown): LibraryFilter =>
+    ['all', 'approved', 'blocked', 'videos', 'interludes'].includes(
+      String(value)
+    )
+      ? (value as LibraryFilter)
+      : 'approved'
   const getLibraryParams = (c: {
     req: { query: (k: string) => string | undefined }
   }) => ({
-    view: (c.req.query('view') ?? 'list') as 'list' | 'grid',
-    filter: (c.req.query('filter') ?? 'all') as 'all' | 'videos' | 'interludes',
+    view: parseView(c.req.query('view')),
+    filter: parseFilter(c.req.query('filter')),
     search: c.req.query('search') ?? '',
   })
 
@@ -46,6 +65,7 @@ export function createLibraryController(deps: LibraryControllerDeps) {
         media: allMedia,
         config: appConfig,
         mediaDirectory: media.getMediaDirectory(),
+        mediaWritable,
         view,
         filter,
         search,
@@ -65,6 +85,7 @@ export function createLibraryController(deps: LibraryControllerDeps) {
         media: allMedia,
         config: appConfig,
         mediaDirectory: media.getMediaDirectory(),
+        mediaWritable,
         view,
         filter,
         search,
@@ -78,6 +99,7 @@ export function createLibraryController(deps: LibraryControllerDeps) {
   controller.post('/api/rescan', async (c) => {
     const count = await media.rescan()
     await playlist.refreshCache() // Update playlist with new media
+    await playback?.reconcilePrequeue()
     const body = await c.req.parseBody()
 
     // If no view param, called from Settings - just return toast
@@ -87,8 +109,8 @@ export function createLibraryController(deps: LibraryControllerDeps) {
 
     const allMedia = await media.getAll()
     const appConfig = await config.get()
-    const view = (body['view'] as 'list' | 'grid') ?? 'list'
-    const filter = (body['filter'] as 'all' | 'videos' | 'interludes') ?? 'all'
+    const view = parseView(body['view'])
+    const filter = parseFilter(body['filter'])
     const search = (body['search'] as string) ?? ''
 
     void media.generateThumbnails()
@@ -99,6 +121,7 @@ export function createLibraryController(deps: LibraryControllerDeps) {
         media: allMedia,
         config: appConfig,
         mediaDirectory: media.getMediaDirectory(),
+        mediaWritable,
         view,
         filter,
         search,
@@ -111,10 +134,17 @@ export function createLibraryController(deps: LibraryControllerDeps) {
 
   // File upload - returns updated library content
   controller.post('/api/upload', async (c) => {
+    if (!mediaWritable) {
+      return c.html(
+        html`<div class="toast warning">The media library is mounted read-only</div>`,
+        403
+      )
+    }
+
     const body = await c.req.parseBody({ all: true })
     const files = body['files']
-    const view = (body['view'] as 'list' | 'grid') ?? 'list'
-    const filter = (body['filter'] as 'all' | 'videos' | 'interludes') ?? 'all'
+    const view = parseView(body['view'])
+    const filter = parseFilter(body['filter'])
     const search = (body['search'] as string) ?? ''
 
     if (!files) {
@@ -122,15 +152,60 @@ export function createLibraryController(deps: LibraryControllerDeps) {
     }
 
     const fileList = Array.isArray(files) ? files : [files]
+    const uploadFiles = fileList.filter(
+      (file): file is File => file instanceof File
+    )
+
+    if (uploadFiles.length === 0) {
+      return c.html(
+        html`<div class="toast warning">No valid files uploaded</div>`,
+        400
+      )
+    }
+
+    const mediaRoot = resolve(media.getMediaDirectory())
+    const destinations = uploadFiles.map((file) => {
+      const normalizedName = file.name.replace(/\\/g, '/')
+      const safeName = posix.basename(normalizedName)
+      const destination = resolve(mediaRoot, safeName)
+      const relativeDestination = relative(mediaRoot, destination)
+      const isContained =
+        safeName !== '' &&
+        safeName !== '.' &&
+        safeName !== '..' &&
+        safeName === normalizedName &&
+        !relativeDestination.startsWith('..') &&
+        !isAbsolute(relativeDestination)
+
+      let destinationIsSafe = true
+      try {
+        destinationIsSafe = !lstatSync(destination).isSymbolicLink()
+      } catch (error) {
+        destinationIsSafe =
+          error instanceof Error &&
+          'code' in error &&
+          (error as NodeJS.ErrnoException).code === 'ENOENT'
+      }
+
+      return isContained && destinationIsSafe ? destination : null
+    })
+
+    if (destinations.some((destination) => destination === null)) {
+      return c.html(
+        html`<div class="toast warning">Invalid upload filename</div>`,
+        400
+      )
+    }
+
     let uploaded = 0
 
-    for (const file of fileList) {
-      if (file instanceof File) {
-        const buffer = await file.arrayBuffer()
-        const path = `${media.getMediaDirectory()}/${file.name}`
-        await Bun.write(path, buffer)
-        uploaded++
-      }
+    for (let index = 0; index < uploadFiles.length; index++) {
+      const file = uploadFiles[index]
+      const destination = destinations[index]
+      if (!file || !destination) continue
+      const buffer = await file.arrayBuffer()
+      await Bun.write(destination, buffer)
+      uploaded++
     }
 
     // Rescan after upload
@@ -145,6 +220,7 @@ export function createLibraryController(deps: LibraryControllerDeps) {
         media: allMedia,
         config: appConfig,
         mediaDirectory: media.getMediaDirectory(),
+        mediaWritable,
         view,
         filter,
         search,
@@ -157,6 +233,13 @@ export function createLibraryController(deps: LibraryControllerDeps) {
 
   // Delete media - returns empty (htmx swaps outerHTML to remove element)
   controller.delete('/api/media/:id', async (c) => {
+    if (!mediaWritable) {
+      return c.html(
+        html`<div class="toast warning">The media library is mounted read-only</div>`,
+        403
+      )
+    }
+
     const id = parseInt(c.req.param('id'), 10)
     if (!Number.isNaN(id)) {
       await media.delete(id)
@@ -188,10 +271,21 @@ export function createLibraryController(deps: LibraryControllerDeps) {
 
   // Update media type
   controller.post('/api/update-type/:id', async (c) => {
-    const id = parseInt(c.req.param('id'), 10)
+    const rawId = c.req.param('id')
+    const id = /^\d+$/.test(rawId) ? Number(rawId) : Number.NaN
     const body = await c.req.parseBody()
-    const mediaType = body['type'] as MediaType
-    if (!Number.isNaN(id) && mediaType) {
+    const rawMediaType = String(body['type'] ?? '')
+    const allowedTypes: readonly MediaType[] = [
+      'video',
+      'interlude',
+      'intro',
+      'outro',
+      'offair',
+    ]
+    const mediaType = allowedTypes.includes(rawMediaType as MediaType)
+      ? (rawMediaType as MediaType)
+      : null
+    if (Number.isSafeInteger(id) && id > 0 && mediaType) {
       let message = ''
 
       // Handle Intro/Outro/Off-Air setting logic
@@ -252,17 +346,34 @@ export function createLibraryController(deps: LibraryControllerDeps) {
         <span id="badge-${id}" class="media-type-badge" hx-swap-oob="true">${typeIcons[mediaType]}</span>
       `)
     }
-    return c.html(html`<div class="toast warning">Invalid request</div>`)
+    return c.html(html`<div class="toast warning">Invalid request</div>`, 400)
   })
 
   // Update media dates
   controller.post('/api/update-dates/:id', async (c) => {
-    const id = parseInt(c.req.param('id'), 10)
+    const rawId = c.req.param('id')
+    const id = /^\d+$/.test(rawId) ? Number(rawId) : Number.NaN
     const body = await c.req.parseBody()
     const dateStart = (body['dateStart'] as string) || null
     const dateEnd = (body['dateEnd'] as string) || null
 
-    if (!Number.isNaN(id)) {
+    const validDate = (value: string | null) => {
+      if (value === null) return true
+      const match = /^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.exec(value)
+      if (!match) return false
+      const month = Number(match[1])
+      const day = Number(match[2])
+      const maximumDays = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+      return day <= (maximumDays[month - 1] ?? 0)
+    }
+    if (!validDate(dateStart) || !validDate(dateEnd)) {
+      return c.html(
+        html`<div class="toast warning">Dates must use MM-DD format</div>`,
+        400
+      )
+    }
+
+    if (Number.isSafeInteger(id) && id > 0) {
       await media.updateDates(id, dateStart, dateEnd)
 
       // Get updated item to re-render the date picker form
@@ -277,7 +388,53 @@ export function createLibraryController(deps: LibraryControllerDeps) {
         `)
       }
     }
-    return c.html(html`<div class="toast warning">Invalid ID</div>`)
+    return c.html(html`<div class="toast warning">Invalid ID</div>`, 400)
+  })
+
+  controller.post('/api/playback-eligibility/:id', async (c) => {
+    const rawId = c.req.param('id')
+    const id = /^\d+$/.test(rawId) ? Number(rawId) : Number.NaN
+    const body = await c.req.parseBody()
+    const mode = body['mode']
+    if (
+      !Number.isSafeInteger(id) ||
+      id <= 0 ||
+      !['allow', 'block', 'policy'].includes(String(mode))
+    ) {
+      return c.html(html`<div class="toast warning">Invalid request</div>`, 400)
+    }
+
+    const existing = await media.getById(id)
+    if (!existing) {
+      return c.html(html`<div class="toast warning">Media not found</div>`, 404)
+    }
+
+    const override = mode === 'policy' ? null : mode === 'allow'
+    await media.updatePlaybackOverride(id, override)
+    if (override === true) {
+      // Unapproved catalog entries intentionally skip ffprobe. A newly
+      // approved item needs duration/codec metadata before schedule work can
+      // safely consume it.
+      await media.rescan()
+    }
+    await playlist.refreshCache()
+    await playback?.reconcilePrequeue()
+    const item = await media.getById(id)
+    if (!item) return c.html(html`<div class="toast warning">Media not found</div>`, 404)
+
+    const effective = item.playbackEnabled !== false
+    const source = item.playbackOverride === null ? 'library policy' : 'parent override'
+    const pendingMetadata = override === true && !effective
+    return c.html(`
+      <span id="eligibility-${id}" class="status-pill ${effective ? 'active' : 'expired'}" hx-swap-oob="true">
+        ${effective ? 'Kids 7 approved' : 'Not scheduled'}
+      </span>
+      <div class="toast ${pendingMetadata ? 'warning' : 'success'}">${
+        pendingMetadata
+          ? 'Parent allow saved; media remains unavailable until its metadata scan succeeds'
+          : `Playback eligibility updated (${source})`
+      }</div>
+    `)
   })
 
   return controller

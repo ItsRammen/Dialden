@@ -6,15 +6,19 @@
 
 import { ToastTVDaemon } from './daemon'
 import { createServer } from './server'
-
-const PORT = process.env.PORT ? parseInt(process.env.PORT) : 1993
+import { loadRuntimeConfig } from './config/runtime'
 
 async function main(): Promise<void> {
+  const runtime = loadRuntimeConfig()
   const profile = process.env.TOASTTV_PROFILE
   const profileSuffix = profile ? ` [profile: ${profile}]` : ''
-  console.log(`🍞 ToastTV starting...${profileSuffix}`)
+  const modeSuffix = runtime.headless ? ' [headless]' : ''
+  console.log(`🍞 ToastTV starting...${profileSuffix}${modeSuffix}`)
 
-  const daemon = new ToastTVDaemon('./data/config.json')
+  const daemon = new ToastTVDaemon(runtime.configPath, {
+    localPlaybackEnabled: !runtime.headless,
+    mediaReadOnly: runtime.mediaReadOnly,
+  })
 
   // Graceful shutdown
   process.on('SIGTERM', async () => {
@@ -40,17 +44,20 @@ async function main(): Promise<void> {
     // 3. Create web server (requires services from daemon.start())
     const { app, playbackService } = createServer(daemon)
 
-    console.log(`🌐 Admin UI: http://localhost:${PORT}`)
+    console.log(`🌐 Admin UI: http://localhost:${runtime.port}`)
 
     // 4. Start listening
     Bun.serve({
-      port: PORT,
+      port: runtime.port,
+      hostname: runtime.hostname,
       fetch: app.fetch,
       idleTimeout: 0, // Disable timeout for SSE connections
     })
 
-    // 5. Run playback loop in background
-    playbackService.startLoop()
+    // 5. Run the legacy local-player loop only when MPV is enabled.
+    if (daemon.isLocalPlaybackEnabled) {
+      playbackService.startLoop()
+    }
   } catch (error) {
     console.error('Fatal error:', error)
     await daemon.stop()

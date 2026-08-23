@@ -95,6 +95,33 @@ export interface IMediaRepository {
     dateEnd: string | null
   ): Promise<void>
 
+  /**
+   * Override whether an indexed item can be selected for playback. Null
+   * returns the item to the library policy decision.
+   */
+  updatePlaybackOverride(
+    id: number,
+    enabled: boolean | null
+  ): Promise<void>
+
+  /** Fail closed for rows created before managed roots/policy existed. */
+  restrictPlaybackToRoots(rootIds: string[]): Promise<number>
+
+  /**
+   * Apply the configured collection allow-list to already indexed rows before
+   * any playback service can use them. Manual overrides remain valid only in
+   * roots that are still configured.
+   */
+  synchronizePlaybackPolicy(
+    roots: ReadonlyArray<{
+      id: string
+      approvedCollections?: readonly string[]
+    }>
+  ): Promise<number>
+
+  /** Gate a root without deleting its catalog or parent overrides. */
+  setRootAvailable(rootId: string, available: boolean): Promise<void>
+
   // --- Batch Operations (for parallel scanning) ---
 
   /**
@@ -102,6 +129,12 @@ export interface IMediaRepository {
    * Returns a Map for O(1) lookups
    */
   getByPaths(paths: string[]): Promise<Map<string, MediaItem>>
+
+  /** Get existing rows by their stable locator within one configured root. */
+  getByRootRelativePaths(
+    rootId: string,
+    relativePaths: string[]
+  ): Promise<Map<string, MediaItem>>
 
   /**
    * Insert or update multiple media items in a single transaction
@@ -118,6 +151,15 @@ export interface IMediaRepository {
    * Used during rescan to clean up deleted files
    */
   removeNotInPaths(validPaths: string[]): Promise<number>
+
+  /**
+   * Reconcile only one successfully scanned root. Unavailable roots must not
+   * call this method, preventing another healthy mount from deleting its rows.
+   */
+  removeNotInRootPaths(
+    rootId: string,
+    validRelativePaths: string[]
+  ): Promise<number>
 
   // --- Settings (DB-First Config) ---
 

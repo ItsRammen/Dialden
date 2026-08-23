@@ -92,10 +92,17 @@ export class ConfigService {
    * Also validates existing IDs and updates if they're stale (file no longer exists).
    */
   async discoverSpecialMedia(
-    allMedia: Array<{ id: number; filename: string }>
+    allMedia: Array<{
+      id: number
+      filename: string
+      playbackEnabled?: boolean
+    }>
   ): Promise<void> {
+    const eligibleMedia = allMedia.filter(
+      (item) => item.playbackEnabled !== false
+    )
     const currentConfig = await this.get()
-    const mediaIds = new Set(allMedia.map((m) => m.id))
+    const mediaIds = new Set(eligibleMedia.map((m) => m.id))
 
     // Helper: Check if ID is missing or stale
     const needsUpdate = (id: number | null | undefined): boolean => {
@@ -105,7 +112,7 @@ export class ConfigService {
 
     // Intro - look for _intro or _splash patterns
     if (needsUpdate(currentConfig.session.introVideoId)) {
-      const intro = allMedia.find(
+      const intro = eligibleMedia.find(
         (m) =>
           m.filename.toLowerCase().includes('_intro') ||
           m.filename.toLowerCase().includes('_splash')
@@ -118,7 +125,7 @@ export class ConfigService {
 
     // Outro - look for _outro
     if (needsUpdate(currentConfig.session.outroVideoId)) {
-      const outro = allMedia.find((m) =>
+      const outro = eligibleMedia.find((m) =>
         m.filename.toLowerCase().includes('_outro')
       )
       if (outro) {
@@ -129,7 +136,7 @@ export class ConfigService {
 
     // Off-air screen - look for _bedtime or _offair
     if (needsUpdate(currentConfig.session.offAirAssetId)) {
-      const offair = allMedia.find(
+      const offair = eligibleMedia.find(
         (m) =>
           m.filename.toLowerCase().includes('_bedtime') ||
           m.filename.toLowerCase().includes('_offair')

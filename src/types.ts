@@ -11,6 +11,23 @@ export type MediaType = 'video' | 'interlude' | 'intro' | 'outro' | 'offair'
 
 export type Compatibility = 'compatible' | 'marginal' | 'incompatible'
 
+export type LibraryKind = 'tv' | 'movie' | 'other'
+
+/**
+ * One independently mounted media library. The stable root ID and relative
+ * path form a container-path-independent media locator.
+ */
+export interface MediaRootConfig {
+  readonly id: string
+  readonly directory: string
+  readonly kind: LibraryKind
+  /**
+   * Exact, case-insensitive top-level collection names approved by policy.
+   * Undefined means this is a legacy/unrestricted root.
+   */
+  readonly approvedCollections?: readonly string[]
+}
+
 export interface MediaItem {
   readonly id: number
   readonly path: string
@@ -29,6 +46,16 @@ export interface MediaItem {
   readonly mtime: number | null // Unix timestamp in ms
   // Hardware compatibility
   readonly compatibility: Compatibility
+  // Root-aware library identity and kid-safe playback policy.
+  readonly rootId?: string
+  readonly relativePath?: string
+  readonly libraryKind?: LibraryKind
+  readonly collectionTitle?: string
+  readonly policyEnabled?: boolean
+  readonly playbackOverride?: boolean | null
+  /** False until this configured root completes a successful current scan. */
+  readonly rootAvailable?: boolean
+  readonly playbackEnabled?: boolean
 }
 
 export interface PlaybackStatus {
@@ -71,6 +98,7 @@ export interface MediaConfig {
   readonly directory: string
   readonly supportedExtensions: readonly string[]
   readonly databasePath: string
+  readonly roots?: readonly MediaRootConfig[]
 }
 
 export interface ToastTVConfig {
@@ -103,6 +131,7 @@ export interface IMediaPlayer {
 
   play(path: string): Promise<void>
   enqueue(path: string): Promise<void>
+  /** Clear queued future items without interrupting the current item. */
   clear(): Promise<void>
   pause(): Promise<void>
   stop(): Promise<void>
@@ -121,6 +150,8 @@ export interface IFileSystem {
     excludePaths?: string[]
   ): string[]
   exists(path: string): boolean
+  /** Optional stronger readiness check for mounted/network directories. */
+  isReadableDirectory?(path: string): boolean
   getMtime(path: string): number | null // Unix timestamp in ms
   watch(
     directory: string,
@@ -161,5 +192,8 @@ export interface IDateTimeProvider {
  * Thumbnail generation (Phase 5)
  */
 export interface IThumbnailClient {
-  generateAll(items: ReadonlyArray<{ id: number; path: string }>): Promise<void>
+  generateAll(
+    items: ReadonlyArray<{ id: number; path: string }>,
+    maxItems?: number
+  ): Promise<void>
 }

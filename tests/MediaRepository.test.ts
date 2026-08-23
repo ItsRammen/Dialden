@@ -47,7 +47,14 @@ describe('MediaRepository', () => {
   })
 
   test('upsertMedia inserts and updates videos', async () => {
-    const input = createInput()
+    const input = createInput({
+      codec: 'hevc',
+      width: 3840,
+      height: 2160,
+      warning: 'Requires a compatible client',
+      mtime: 123,
+      compatibility: 'incompatible',
+    })
 
     await repo.upsertMedia(input)
 
@@ -55,6 +62,12 @@ describe('MediaRepository', () => {
     expect(all).toHaveLength(1)
     expect(all[0]?.filename).toBe('test.mp4')
     expect(all[0]?.mediaType).toBe('video')
+    expect(all[0]?.codec).toBe('hevc')
+    expect(all[0]?.width).toBe(3840)
+    expect(all[0]?.height).toBe(2160)
+    expect(all[0]?.warning).toBe('Requires a compatible client')
+    expect(all[0]?.mtime).toBe(123)
+    expect(all[0]?.compatibility).toBe('incompatible')
 
     // Update duration
     await repo.upsertMedia({ ...input, durationSeconds: 120 })
@@ -62,6 +75,252 @@ describe('MediaRepository', () => {
     const updated = await repo.getAll()
     expect(updated).toHaveLength(1)
     expect(updated[0]?.durationSeconds).toBe(120)
+  })
+
+  test('upsertBatch persists compatibility from the indexer', async () => {
+    await repo.upsertBatch([
+      createInput({
+        path: '/videos/hevc.mkv',
+        filename: 'hevc.mkv',
+        codec: 'hevc',
+        compatibility: 'incompatible',
+      }),
+    ])
+
+    const all = await repo.getAll()
+
+    expect(all).toHaveLength(1)
+    expect(all[0]?.filename).toBe('hevc.mkv')
+    expect(all[0]?.compatibility).toBe('incompatible')
+
+    await repo.upsertBatch([
+      createInput({
+        path: '/videos/hevc.mkv',
+        filename: 'hevc.mkv',
+        codec: 'h264',
+        compatibility: 'compatible',
+      }),
+    ])
+
+    expect((await repo.getAll())[0]?.compatibility).toBe('compatible')
+  })
+
+  test('kid playback eligibility is default-deny with a parent override', async () => {
+    await repo.upsertMedia(
+      createInput({
+        path: '/media/tv/Adult Show/episode.mkv',
+        rootId: 'tv',
+        relativePath: 'Adult Show/episode.mkv',
+        libraryKind: 'tv',
+        collectionTitle: 'Adult Show',
+        policyEnabled: false,
+      })
+    )
+
+    expect(await repo.getAllVideos()).toEqual([])
+    const item = (await repo.getAll())[0]
+    expect(item?.playbackEnabled).toBe(false)
+
+    await repo.updatePlaybackOverride(item?.id ?? 0, true)
+    expect(await repo.getAllVideos()).toHaveLength(1)
+
+    await repo.updatePlaybackOverride(item?.id ?? 0, null)
+    expect(await repo.getAllVideos()).toEqual([])
+  })
+
+  test('stable root-relative locator survives a container path change', async () => {
+    const first = createInput({
+      path: '/old-media/Bluey/episode.mkv',
+      rootId: 'tv',
+      relativePath: 'Bluey/episode.mkv',
+      libraryKind: 'tv',
+      collectionTitle: 'Bluey',
+      policyEnabled: true,
+    })
+    await repo.upsertMedia(first)
+    const original = (await repo.getAll())[0]
+
+    await repo.upsertMedia({ ...first, path: '/media/tv/Bluey/episode.mkv' })
+    const moved = (await repo.getAll())[0]
+
+    expect(await repo.getAll()).toHaveLength(1)
+    expect(moved?.id).toBe(original?.id)
+    expect(moved?.path).toBe('/media/tv/Bluey/episode.mkv')
+  })
+
+  test('upsert merges a legacy path row that collides with a stable locator', async () => {
+    await repo.upsertBatch([
+      createInput({
+        path: '/old/Show/episode.mkv',
+        rootId: 'tv',
+        relativePath: 'Show/episode.mkv',
+        playbackOverride: false,
+      }),
+      createInput({
+        path: '/media/tv/Show/episode.mkv',
+        rootId: 'legacy',
+        relativePath: '/media/tv/Show/episode.mkv',
+      }),
+    ])
+    const stableId = (await repo.getByPath('/old/Show/episode.mkv'))?.id
+
+    await repo.upsertMedia(
+      createInput({
+        path: '/media/tv/Show/episode.mkv',
+        rootId: 'tv',
+        relativePath: 'Show/episode.mkv',
+      })
+    )
+
+    const rows = await repo.getAll()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.id).toBe(stableId)
+    expect(rows[0]?.path).toBe('/media/tv/Show/episode.mkv')
+    expect(rows[0]?.playbackEnabled).toBe(false)
+  })
+
+  test('root-scoped reconciliation cannot delete another root', async () => {
+    await repo.upsertBatch([
+      createInput({
+        path: '/media/tv/Bluey/one.mkv',
+        rootId: 'tv',
+        relativePath: 'Bluey/one.mkv',
+      }),
+      createInput({
+        path: '/media/movies/Cars/Cars.mkv',
+        rootId: 'movies',
+        relativePath: 'Cars/Cars.mkv',
+        libraryKind: 'movie',
+      }),
+    ])
+
+    const removed = await repo.removeNotInRootPaths('tv', [])
+
+    expect(removed).toBe(1)
+    const remaining = await repo.getAll()
+    expect(remaining).toHaveLength(1)
+    expect(remaining[0]?.rootId).toBe('movies')
+  })
+
+  test('managed roots fail closed for legacy catalog rows', async () => {
+    await repo.upsertBatch([
+      createInput({ path: '/legacy/adult.mkv' }),
+      createInput({
+        path: '/media/tv/Bluey/episode.mkv',
+        rootId: 'tv',
+        relativePath: 'Bluey/episode.mkv',
+        policyEnabled: true,
+      }),
+    ])
+
+    const changed = await repo.restrictPlaybackToRoots([
+      'tv',
+      'movies',
+      'interludes',
+    ])
+
+    expect(changed).toBe(1)
+    expect((await repo.getAllVideos()).map((item) => item.rootId)).toEqual([
+      'tv',
+    ])
+  })
+
+  test('synchronizes a narrowed policy before an unavailable root can play', async () => {
+    await repo.upsertBatch([
+      createInput({
+        path: '/media/tv/Bluey/episode.mkv',
+        rootId: 'tv',
+        relativePath: 'Bluey/episode.mkv',
+        collectionTitle: 'Bluey',
+        policyEnabled: true,
+      }),
+      createInput({
+        path: '/media/tv/Old Show/episode.mkv',
+        rootId: 'tv',
+        relativePath: 'Old Show/episode.mkv',
+        collectionTitle: 'Old Show',
+        policyEnabled: true,
+      }),
+      createInput({
+        path: '/retired/Parent Pick/episode.mkv',
+        rootId: 'retired',
+        relativePath: 'Parent Pick/episode.mkv',
+        collectionTitle: 'Parent Pick',
+        policyEnabled: false,
+        playbackOverride: true,
+      }),
+    ])
+
+    await repo.synchronizePlaybackPolicy([
+      { id: 'tv', approvedCollections: ['bluey'] },
+      { id: 'interludes' },
+    ])
+
+    // All managed roots remain quarantined until their current mount scans.
+    expect(await repo.getAllVideos()).toEqual([])
+    await repo.setRootAvailable('tv', true)
+
+    const playable = await repo.getAllVideos()
+    expect(playable.map((item) => item.collectionTitle)).toEqual(['Bluey'])
+    const rows = await repo.getAll()
+    expect(rows.find((item) => item.collectionTitle === 'Old Show')?.policyEnabled).toBe(
+      false
+    )
+    expect(rows.find((item) => item.rootId === 'retired')?.playbackOverride).toBe(
+      true
+    )
+    expect(rows.find((item) => item.rootId === 'retired')?.playbackEnabled).toBe(
+      false
+    )
+  })
+
+  test('root availability gates videos and interludes without losing overrides', async () => {
+    await repo.upsertBatch([
+      createInput({
+        path: '/media/tv/Manual Pick/episode.mkv',
+        rootId: 'tv',
+        relativePath: 'Manual Pick/episode.mkv',
+        collectionTitle: 'Manual Pick',
+        policyEnabled: false,
+        playbackOverride: true,
+      }),
+      createInput({
+        path: '/media/interludes/bump.mp4',
+        rootId: 'interludes',
+        relativePath: 'bump.mp4',
+        collectionTitle: 'bump.mp4',
+        isInterlude: true,
+        mediaType: 'interlude',
+      }),
+    ])
+
+    await repo.setRootAvailable('tv', false)
+    await repo.setRootAvailable('interludes', false)
+    expect(await repo.getAllVideos()).toEqual([])
+    expect(await repo.getInterludes('2026-08-23')).toEqual([])
+    expect(await repo.getAll()).toHaveLength(2)
+
+    await repo.setRootAvailable('tv', true)
+    await repo.setRootAvailable('interludes', true)
+    expect((await repo.getAllVideos())[0]?.playbackOverride).toBe(true)
+    expect(await repo.getInterludes('2026-08-23')).toHaveLength(1)
+  })
+
+  test('zero-duration files remain technically unavailable after parent allow', async () => {
+    await repo.upsertMedia(
+      createInput({
+        path: '/media/tv/Unreadable/episode.mkv',
+        durationSeconds: 0,
+        rootId: 'tv',
+        relativePath: 'Unreadable/episode.mkv',
+        collectionTitle: 'Unreadable',
+        policyEnabled: false,
+        playbackOverride: true,
+      })
+    )
+
+    expect(await repo.getAllVideos()).toEqual([])
+    expect((await repo.getAll())[0]?.playbackEnabled).toBe(false)
   })
 
   test('getInterludes filters by date correctly', async () => {

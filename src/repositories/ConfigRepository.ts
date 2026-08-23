@@ -7,6 +7,7 @@
 
 import { existsSync, readFileSync } from 'node:fs'
 import type { IMediaRepository } from './IMediaRepository'
+import { getDataPathForEnvironment } from '../config/paths'
 
 export interface BootstrapConfig {
   paths: {
@@ -99,9 +100,14 @@ const DEFAULT_CONFIG: AppConfig = {
 export class ConfigRepository {
   private bootstrap: BootstrapConfig
   private repository: IMediaRepository | null = null
+  private readonly defaultLogoPath: string
 
-  constructor(configPath = './data/config.json') {
-    this.bootstrap = this.loadBootstrap(configPath)
+  constructor(
+    configPath = './data/config.json',
+    environment: Record<string, string | undefined> = process.env
+  ) {
+    this.bootstrap = this.loadBootstrap(configPath, environment)
+    this.defaultLogoPath = getDataPathForEnvironment(environment, 'logo.png')
   }
 
   // Called by Daemon after creating MediaRepository
@@ -110,12 +116,17 @@ export class ConfigRepository {
     await this.seedDefaults()
   }
 
-  private loadBootstrap(configPath: string): BootstrapConfig {
+  private loadBootstrap(
+    configPath: string,
+    environment: Record<string, string | undefined>
+  ): BootstrapConfig {
+    let bootstrap = DEFAULT_BOOTSTRAP
+
     try {
       if (existsSync(configPath)) {
         const raw = readFileSync(configPath, 'utf-8')
         const parsed = JSON.parse(raw)
-        return {
+        bootstrap = {
           paths: {
             media:
               parsed.media?.directory ??
@@ -131,7 +142,22 @@ export class ConfigRepository {
     } catch (error) {
       console.warn('Failed to load bootstrap config, using defaults:', error)
     }
-    return DEFAULT_BOOTSTRAP
+
+    const dataDirectory = environment.TOASTTV_DATA?.trim()
+    const dataSeparator = dataDirectory?.includes('\\') ? '\\' : '/'
+    const databaseInDataDirectory = dataDirectory
+      ? `${dataDirectory.replace(/[\\/]+$/, '')}${dataSeparator}media.db`
+      : undefined
+
+    return {
+      paths: {
+        media: environment.TOASTTV_MEDIA?.trim() || bootstrap.paths.media,
+        database:
+          environment.TOASTTV_DATABASE?.trim() ||
+          databaseInDataDirectory ||
+          bootstrap.paths.database,
+      },
+    }
   }
 
   getBootstrap(): BootstrapConfig {
@@ -170,9 +196,7 @@ export class ConfigRepository {
     await setIfMissing('logo.position', DEFAULT_CONFIG.logo.position.toString())
     await setIfMissing('logo.x', DEFAULT_CONFIG.logo.x.toString())
     await setIfMissing('logo.y', DEFAULT_CONFIG.logo.y.toString())
-    if (DEFAULT_CONFIG.logo.imagePath) {
-      await setIfMissing('logo.imagePath', DEFAULT_CONFIG.logo.imagePath)
-    }
+    await setIfMissing('logo.imagePath', this.defaultLogoPath)
     // Note: Special media discovery (intro/outro/offair) is now handled by ConfigService.discoverSpecialMedia()
   }
 

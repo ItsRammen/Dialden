@@ -22,27 +22,57 @@ export function createPlaybackController(deps: PlaybackControllerDeps) {
   // --- API Endpoints ---
 
   controller.post('/api/session/start', async (c) => {
+    if (!playback.isLocalPlaybackAvailable) {
+      return c.html(
+        html`<div class="toast warning">Local playback is disabled</div>`,
+        503
+      )
+    }
     await playback.startSession()
     return c.html(html`<div class="toast success">Session started</div>`)
   })
 
   controller.post('/api/skip', async (c) => {
+    if (!playback.isLocalPlaybackAvailable) {
+      return c.html(
+        html`<div class="toast warning">Local playback is disabled</div>`,
+        503
+      )
+    }
     await playback.skip()
     return c.html(html`<div class="toast success">Skipped</div>`)
   })
 
   controller.post('/api/pause', async (c) => {
+    if (!playback.isLocalPlaybackAvailable) {
+      return c.html(
+        html`<div class="toast warning">Local playback is disabled</div>`,
+        503
+      )
+    }
     await playback.pause()
     return c.html(html`<div class="toast success">Toggled pause</div>`)
   })
 
   controller.post('/api/session/stop', async (c) => {
+    if (!playback.isLocalPlaybackAvailable) {
+      return c.html(
+        html`<div class="toast warning">Local playback is disabled</div>`,
+        503
+      )
+    }
     await playback.stop()
     return c.html(html`<div class="toast warning">Session stopped</div>`)
   })
 
   // Skip daily quota and resume normal playback
   controller.post('/api/skip-quota', async (c) => {
+    if (!playback.isLocalPlaybackAvailable) {
+      return c.html(
+        html`<div class="toast warning">Local playback is disabled</div>`,
+        503
+      )
+    }
     await playback.skipQuotaAndResume()
     return c.html(
       html`<div class="toast success">Quota skipped for today</div>`

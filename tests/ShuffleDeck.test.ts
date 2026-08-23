@@ -85,6 +85,16 @@ describe('ShuffleDeck', () => {
     expect(drawn.has(1)).toBe(false)
   })
 
+  test('discardWhere consumes matching items only from the current cycle', () => {
+    const deck = new ShuffleDeck([1, 2, 3])
+    deck.discardWhere((item) => item === 2)
+
+    const currentCycle = [deck.draw(), deck.draw()]
+    expect(currentCycle).not.toContain(2)
+    // Once the cycle is exhausted, the unchanged universe is available again.
+    expect([deck.draw(), deck.draw(), deck.draw()]).toContain(2)
+  })
+
   test('draw() exhausts all items before repeating', () => {
     const deck = new ShuffleDeck(['a', 'b', 'c'])
     

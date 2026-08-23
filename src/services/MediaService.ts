@@ -10,6 +10,7 @@ import type { MediaIndexer } from './MediaIndexer'
 import type { ConfigService } from './ConfigService'
 import type { ThumbnailClient } from '../clients/ThumbnailClient'
 import type { MediaItem, MediaType } from '../types'
+import { getDataPath } from '../config/paths'
 
 export class MediaService {
   constructor(
@@ -103,6 +104,13 @@ export class MediaService {
     await this.repository.updateDates(id, dateStart, dateEnd)
   }
 
+  async updatePlaybackOverride(
+    id: number,
+    enabled: boolean | null
+  ): Promise<void> {
+    await this.repository.updatePlaybackOverride(id, enabled)
+  }
+
   /**
    * Rescan media directories
    */
@@ -116,7 +124,10 @@ export class MediaService {
   async generateThumbnails(): Promise<void> {
     const media = await this.getAll()
     await this.thumbnails.generateAll(
-      media.map((m) => ({ id: m.id, path: m.path }))
+      media
+        .filter((item) => item.playbackEnabled !== false)
+        .map((m) => ({ id: m.id, path: m.path })),
+      48
     )
   }
 
@@ -126,7 +137,7 @@ export class MediaService {
    */
   async uploadLogo(file: File): Promise<string> {
     const buffer = await file.arrayBuffer()
-    const logoPath = './data/logo.png'
+    const logoPath = getDataPath('logo.png')
     await Bun.write(logoPath, buffer)
     return logoPath
   }

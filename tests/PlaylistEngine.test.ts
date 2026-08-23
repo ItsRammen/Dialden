@@ -81,6 +81,8 @@ describe('PlaylistEngine', () => {
     // Default Session
     // @ts-ignore
     session.active = true
+    // @ts-ignore
+    session.isQuotaSkipped = false
     session.getInfo.mockReturnValue({
       startedAt: new Date(),
       limitMinutes: 60,
@@ -180,6 +182,104 @@ describe('PlaylistEngine', () => {
     const first = await engine.startSession()
     // If no items, startSession returns null (or intro if configured)
     expect(first).toBeNull()
+  })
+
+  test('never schedules a policy-blocked video', async () => {
+    const approved = createVideo(1, { playbackEnabled: true })
+    const blocked = createVideo(2, { playbackEnabled: false })
+    repo.getAll.mockResolvedValue([approved, blocked])
+
+    const first = await engine.startSession()
+    const queued = engine.peekQueue(100)
+
+    expect(first?.id).toBe(1)
+    expect(queued.map((item) => item.id)).not.toContain(2)
+  })
+
+  test('refreshCache purges a newly blocked item from an active queue and deck', async () => {
+    const approved = createVideo(1, { playbackEnabled: true })
+    const laterBlocked = createVideo(2, { playbackEnabled: true })
+    repo.getAll.mockResolvedValue([approved, laterBlocked])
+    await engine.startSession()
+
+    repo.getAll.mockResolvedValue([
+      approved,
+      { ...laterBlocked, playbackEnabled: false },
+    ])
+    await engine.refreshCache()
+
+    expect(engine.peekQueue(100).map((item) => item.id)).not.toContain(2)
+    const subsequent: number[] = []
+    for (let index = 0; index < 8; index++) {
+      const next = await engine.getNextVideo()
+      if (!next) break
+      subsequent.push(next.id)
+    }
+    expect(subsequent).not.toContain(2)
+  })
+
+  test('refreshCache consumes retained titles before drawing them again', async () => {
+    const videos = [createVideo(1), createVideo(2), createVideo(3)]
+    configRepo.get.mockResolvedValue({
+      session: { limitMinutes: 30, resetHour: 6 },
+      interlude: { enabled: false, frequency: 2 },
+      playback: { safeMode: false },
+    } as any)
+    repo.getAll.mockResolvedValue(videos)
+    await engine.startSession()
+    const before = engine.peekQueue(100)
+    const blockedId = before[0]?.id
+    const retainedId = before[1]?.id
+    expect(blockedId).toBeDefined()
+    expect(retainedId).toBeDefined()
+
+    repo.getAll.mockResolvedValue(
+      videos.map((video) => ({
+        ...video,
+        playbackEnabled: video.id !== blockedId,
+      }))
+    )
+    await engine.refreshCache()
+
+    const after = engine.peekQueue(100).map((item) => item.id)
+    expect(after[0]).toBe(retainedId)
+    expect(after[1]).not.toBe(retainedId)
+  })
+
+  test('refreshCache does not duplicate a terminal outro', async () => {
+    const approved = createVideo(1, { playbackEnabled: true })
+    const outro = createVideo(99, {
+      durationSeconds: 60,
+      mediaType: 'outro',
+      playbackEnabled: true,
+    })
+    configRepo.get.mockResolvedValue({
+      session: { limitMinutes: 20, outroVideoId: 99, resetHour: 6 },
+      interlude: { enabled: false, frequency: 2 },
+      playback: { safeMode: false },
+    } as any)
+    repo.getAll.mockResolvedValue([approved, outro])
+
+    await engine.startSession()
+    expect(engine.peekQueue(100).filter((item) => item.id === 99)).toHaveLength(
+      1
+    )
+    await engine.refreshCache()
+
+    expect(engine.peekQueue(100).filter((item) => item.id === 99)).toHaveLength(
+      1
+    )
+  })
+
+  test('forced post-scan refresh rebuilds a queue quarantined at scan start', async () => {
+    repo.getAll.mockResolvedValue([])
+    expect(await engine.startSession()).toBeNull()
+
+    const restored = createVideo(1, { playbackEnabled: true })
+    repo.getAll.mockResolvedValue([restored])
+    await engine.refreshCache(true)
+
+    expect(engine.peekQueue(100).map((item) => item.id)).toContain(1)
   })
 
   test('skipQuota() forces infinite session', async () => {

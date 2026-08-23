@@ -1,0 +1,56 @@
+services:
+  toasttv:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: toasttv:local
+    container_name: toasttv
+    init: true
+    environment:
+      NODE_ENV: production
+      PORT: "1993"
+      TOASTTV_HEADLESS: "true"
+      TOASTTV_HOST: 0.0.0.0
+      TOASTTV_CONFIG: /app/data/config.json
+      TOASTTV_DATA: /app/data
+      TOASTTV_DATABASE: /app/data/media.db
+      TOASTTV_MEDIA: /media
+      TOASTTV_TV_MEDIA: /media/tv
+      TOASTTV_MOVIE_MEDIA: /media/movies
+      TOASTTV_LIBRARY_POLICY: /app/config/kids-7.library.json
+      TOASTTV_MEDIA_READ_ONLY: "true"
+      TOASTTV_UPDATES_ENABLED: "false"
+      TZ: "${TZ:-UTC}"
+    ports:
+      - "${TOASTTV_BIND_ADDRESS:-127.0.0.1}:${TOASTTV_PORT:-1993}:1993"
+    volumes:
+      - toasttv-data:/app/data
+      - type: bind
+        source: "${TOASTTV_TV_PATH:?Set TOASTTV_TV_PATH in .env}"
+        target: /media/tv
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${TOASTTV_MOVIE_PATH:?Set TOASTTV_MOVIE_PATH in .env}"
+        target: /media/movies
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${TOASTTV_INTERLUDE_PATH:-./media/interludes}"
+        target: /media/interludes
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${TOASTTV_LIBRARY_POLICY_PATH:-./config/kids-7.library.json}"
+        target: /app/config/kids-7.library.json
+        read_only: true
+        bind:
+          create_host_path: false
+    restart: unless-stopped
+    stop_grace_period: 5m
+
+volumes:
+  toasttv-data:

@@ -12,6 +12,7 @@ export interface SettingsProps {
   config: AppConfig
   mediaDirectory: string
   hardwareProfileName?: string
+  updatesEnabled?: boolean
   updateAvailable?: boolean
   currentVersion?: string
   latestVersion?: string | null
@@ -198,7 +199,11 @@ export function renderSettings(props: SettingsProps): string {
             
             <div id="update-result">
               ${
-                props.updateAvailable
+                props.updatesEnabled === false
+                  ? `<div class="update-result">
+                      <span class="update-status">Container updates are managed by redeploying the Docker image.</span>
+                    </div>`
+                  : props.updateAvailable
                   ? `<div class="update-result update-available">
                       <span class="update-status">🎉 Update available: ${props.latestVersion}</span>
                       <button type="button" class="btn btn-primary" id="update-apply-btn"
@@ -210,12 +215,16 @@ export function renderSettings(props: SettingsProps): string {
               }
             </div>
             
-            <button type="button" class="btn btn-secondary"
+            ${
+              props.updatesEnabled === false
+                ? ''
+                : `<button type="button" class="btn btn-secondary"
                     hx-get="/api/update/check"
                     hx-target="#update-result"
                     hx-swap="innerHTML">
               🔍 Check for Updates
-            </button>
+            </button>`
+            }
 
           </section>
         </div>

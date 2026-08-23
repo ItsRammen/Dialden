@@ -337,11 +337,14 @@ export class PlaylistEngine {
     return this.cachedInterludes[index] ?? null
   }
 
-  async refreshCache(): Promise<void> {
+  async refreshCache(forceRebuild = false): Promise<void> {
     const all = await this.repository.getAll()
+    const appConfig = await this.config.get()
+    this.updateCachedConfig(appConfig)
     // Exclude interludes, intro, and outro from regular videos (they are handled specially)
     let videos = all.filter(
       (m) =>
+        m.playbackEnabled !== false &&
         !m.isInterlude &&
         m.mediaType !== 'intro' &&
         m.mediaType !== 'outro' &&
@@ -355,16 +358,64 @@ export class PlaylistEngine {
     this.cachedVideos = videos
     // Special videos (intro/outro) are cached for lookup but not shuffled
     this.cachedSpecialVideos = all.filter(
-      (m) => m.mediaType === 'intro' || m.mediaType === 'outro'
+      (m) =>
+        m.playbackEnabled !== false &&
+        (m.mediaType === 'intro' || m.mediaType === 'outro')
     )
 
     // Filter interludes by SEASON via repo.getInterludes() which handles SQL logic
-    this.cachedInterludes = await this.repository.getInterludes(
-      this.dateTime.today()
-    )
+    this.cachedInterludes = (
+      await this.repository.getInterludes(this.dateTime.today())
+    ).filter((item) => item.playbackEnabled !== false)
 
-    const appConfig = await this.config.get()
-    this.updateCachedConfig(appConfig)
+    if (this.cachedVideos.length === 0) {
+      this.deck = null
+    } else if (this.deck) {
+      this.deck.setItems(this.cachedVideos)
+    } else {
+      // A root can be quarantined at scan start and become available again
+      // when that scan completes. Recreate the deck so an active session can
+      // recover without requiring a restart.
+      this.deck = new ShuffleDeck(this.cachedVideos)
+    }
+    const eligibleIds = new Set(
+      [
+        ...this.cachedVideos,
+        ...this.cachedInterludes,
+        ...this.cachedSpecialVideos,
+      ].map((item) => item.id)
+    )
+    const wasQueueComplete = this.queueState.isQueueComplete
+    const previousQueueLength = this.queueState.queue.length
+    this.queueState.queue = this.queueState.queue.filter((item) =>
+      eligibleIds.has(item.id)
+    )
+    if (this.deck) {
+      const retainedRegularIds = new Set(
+        this.queueState.queue
+          .filter((item) => this.cachedVideos.some((video) => video.id === item.id))
+          .map((item) => item.id)
+      )
+      this.deck.discardWhere((item) => retainedRegularIds.has(item.id))
+    }
+    if (this.session.active) {
+      const queueChanged = this.queueState.queue.length !== previousQueueLength
+      if (wasQueueComplete && !queueChanged && !forceRebuild) {
+        // The existing finite timeline is still valid, including its single
+        // terminal outro. Nothing needs rebuilding.
+        this.queueState.isQueueComplete = true
+      } else {
+      // A completed finite queue already has its terminal outro. Remove it
+      // before rebuilding so fillQueue appends exactly one fresh terminal.
+        if (wasQueueComplete && this.cachedConfig.outroVideoId) {
+          this.queueState.queue = this.queueState.queue.filter(
+            (item) => item.id !== this.cachedConfig.outroVideoId
+          )
+        }
+        this.queueState.isQueueComplete = false
+        this.fillQueue()
+      }
+    }
 
     console.log(
       `Cache refreshed: ${this.cachedVideos.length} videos, ${this.cachedInterludes.length} interludes. Limit=${this.cachedConfig.limitMinutes}m`

@@ -11,6 +11,7 @@ import { MediaRepository } from './repositories/MediaRepository'
 import { FilesystemClient } from './clients/FilesystemClient'
 import { FFProbeClient } from './clients/FilesystemClient'
 import { MpvClient } from './clients/MpvClient'
+import { DisabledMediaPlayer } from './clients/DisabledMediaPlayer'
 import { CECClient, CEC_KEYS } from './clients/CECClient'
 import { thumbnailClient } from './clients/ThumbnailClient'
 
@@ -27,6 +28,8 @@ import { HardwareDetectionService } from './services/HardwareDetectionService'
 import { UpdateService } from './services/UpdateService'
 import { UpdateClient } from './clients/UpdateClient'
 import type { MediaItem, ToastTVConfig, IMediaPlayer } from './types'
+import { loadLibraryConfig } from './config/library'
+import type { LibraryPolicyDocument } from './config/library'
 
 export class ToastTVDaemon {
   private running = false
@@ -42,9 +45,28 @@ export class ToastTVDaemon {
   private cecClient: CECClient | null = null
   private hardwareService: HardwareDetectionService | null = null
   private updateService: UpdateService | null = null
+  private readonly localPlaybackEnabled: boolean
+  private readonly mediaReadOnly: boolean
+  private managedLibrary = false
+  private libraryPolicy: LibraryPolicyDocument | null = null
+  private scanTask: Promise<void> | null = null
+  private stopping = false
 
-  constructor(configPath = './data/config.json') {
+  constructor(
+    configPath = './data/config.json',
+    options: { localPlaybackEnabled?: boolean; mediaReadOnly?: boolean } = {}
+  ) {
     this.appConfig = new ConfigRepository(configPath)
+    this.localPlaybackEnabled = options.localPlaybackEnabled ?? true
+    this.mediaReadOnly = options.mediaReadOnly ?? false
+  }
+
+  get isLocalPlaybackEnabled(): boolean {
+    return this.localPlaybackEnabled
+  }
+
+  get isMediaReadOnly(): boolean {
+    return this.mediaReadOnly || this.managedLibrary
   }
 
   getMediaDirectory(): string {
@@ -76,6 +98,10 @@ export class ToastTVDaemon {
     return this.repository
   }
 
+  getLibraryPolicy(): LibraryPolicyDocument | null {
+    return this.libraryPolicy
+  }
+
   getIndexer(): MediaIndexer {
     if (!this.indexer) throw new Error('Daemon not started')
     return this.indexer
@@ -105,14 +131,21 @@ export class ToastTVDaemon {
     return this.configService
   }
 
-  getHardwareService(): HardwareDetectionService {
-    if (!this.hardwareService) throw new Error('Daemon not initialized')
-    return this.hardwareService
+  getHardwareService(): HardwareDetectionService | undefined {
+    return this.hardwareService ?? undefined
   }
 
   getUpdateService(): UpdateService {
     if (!this.updateService) {
-      this.updateService = new UpdateService(new UpdateClient())
+      const updateSetting = process.env.TOASTTV_UPDATES_ENABLED
+        ?.trim()
+        .toLowerCase()
+      const explicitlyDisabled = new Set(['0', 'false', 'no', 'off']).has(
+        updateSetting ?? ''
+      )
+      this.updateService = new UpdateService(new UpdateClient(), {
+        enabled: this.localPlaybackEnabled && !explicitlyDisabled,
+      })
     }
     return this.updateService
   }
@@ -129,6 +162,22 @@ export class ToastTVDaemon {
     this.repository = new MediaRepository(bootstrap.paths.database)
     await this.repository.initialize()
 
+    // Managed TV/movie libraries are default-deny. Rows from a legacy
+    // single-root database remain visible but cannot enter playback until the
+    // root-aware scan applies the active policy.
+    const libraryConfig = loadLibraryConfig(bootstrap.paths.media)
+    this.libraryPolicy = libraryConfig.policy
+    this.managedLibrary = libraryConfig.roots.some(
+      (root) => root.approvedCollections !== undefined
+    )
+    // Quarantine every persisted absolute path until its configured root is
+    // scanned in this process. This also safely migrates pre-root `legacy`
+    // rows in the original single-library mode.
+    await this.repository.synchronizePlaybackPolicy([
+      ...libraryConfig.roots,
+      { id: 'interludes' },
+    ])
+
     // 2. Initialize Config (Seed DB defaults)
     await this.appConfig.initialize(this.repository)
     const runtimeConfig = await this.appConfig.get()
@@ -139,8 +188,9 @@ export class ToastTVDaemon {
       reconnectDelayMs: 2000,
       maxReconnectAttempts: 10,
     }
-    // Switch to MpvClient (implements IMediaPlayer)
-    this.player = new MpvClient(playerConfig)
+    this.player = this.localPlaybackEnabled
+      ? new MpvClient(playerConfig)
+      : new DisabledMediaPlayer()
 
     const filesystem = new FilesystemClient()
     const mediaProbe = new FFProbeClient()
@@ -150,6 +200,7 @@ export class ToastTVDaemon {
       directory: bootstrap.paths.media,
       supportedExtensions: ['.mp4', '.mkv', '.avi', '.mov', '.webm'],
       databasePath: bootstrap.paths.database,
+      roots: libraryConfig.roots,
     }
 
     // Default interlude directory to 'interludes' inside media directory if not specified
@@ -158,9 +209,12 @@ export class ToastTVDaemon {
       directory: path.join(bootstrap.paths.media, 'interludes'),
     }
 
-    // Hardware detection for compatibility checking
-    this.hardwareService = new HardwareDetectionService()
-    this.hardwareService.detect() // Cache the profile on init
+    // Local player compatibility is only meaningful for the legacy Pi mode.
+    // Remote-client capability negotiation will replace this in server mode.
+    if (this.localPlaybackEnabled) {
+      this.hardwareService = new HardwareDetectionService()
+      this.hardwareService.detect() // Cache the profile on init
+    }
 
     this.indexer = new MediaIndexer(
       mediaConfig,
@@ -169,7 +223,7 @@ export class ToastTVDaemon {
       filesystem,
       mediaProbe,
       thumbnailClient,
-      this.hardwareService
+      this.hardwareService ?? undefined
     )
 
     this.engine = new PlaylistEngine(
@@ -178,6 +232,14 @@ export class ToastTVDaemon {
       new SessionManager(new SystemDateTimeProvider()),
       new SystemDateTimeProvider()
     )
+    this.indexer.onScanStart(async () => {
+      await this.engine?.refreshCache()
+      await this.playbackService?.reconcilePrequeue()
+    })
+    this.indexer.onScanComplete(async () => {
+      await this.engine?.refreshCache(true)
+      await this.playbackService?.reconcilePrequeue()
+    })
 
     console.log('Components initialized.')
   }
@@ -192,15 +254,20 @@ export class ToastTVDaemon {
     }
 
     console.log('ToastTV background services starting...')
+    this.stopping = false
 
-    // 4. Connect to player first (fast - enables immediate playback)
+    // 4. Connect to the local player, or initialize the disabled adapter.
     await this.player.connect()
 
     // 5. Create ConfigService (needed for PlaybackService)
     this.configService = new ConfigService(this.appConfig)
 
     // 6. Check if hardware profile changed - recalculate compatibility if so
-    if (this.hardwareService && this.repository) {
+    if (
+      this.localPlaybackEnabled &&
+      this.hardwareService &&
+      this.repository
+    ) {
       const currentProfile = this.hardwareService.detect().profileKey
       const lastProfile = await this.repository.getSetting('last_profile_key')
 
@@ -215,9 +282,11 @@ export class ToastTVDaemon {
 
     // 7. Run scan in background (non-blocking)
     // Dashboard may show stale/empty library briefly on first launch
-    this.indexer
+    this.scanTask = this.indexer
       .scanAll()
       .then(async (count) => {
+        if (this.stopping) return
+
         console.log(`Background scan complete: ${count} files`)
         // Discover special media after scan completes
         const allMedia = await this.repository?.getAll()
@@ -225,7 +294,9 @@ export class ToastTVDaemon {
           await this.configService?.discoverSpecialMedia(allMedia)
         }
         // Start file watcher for real-time updates
-        this.indexer?.startWatching()
+        if (!this.stopping) {
+          this.indexer?.startWatching()
+        }
       })
       .catch((e) => {
         console.error('Background scan failed:', e)
@@ -237,14 +308,15 @@ export class ToastTVDaemon {
       engine: this.engine,
       config: this.configService,
       media: this.repository,
+      localPlaybackEnabled: this.localPlaybackEnabled,
       // Note: No DashboardEventService here - server can set it later if needed
     })
 
     // Get fresh config for logo settings
     const runtimeConfig = await this.appConfig.get()
 
-    // Apply logo settings
-    if (runtimeConfig.logo) {
+    // Apply MPV-only settings when local playback is enabled.
+    if (this.localPlaybackEnabled && runtimeConfig.logo) {
       // Map AppConfig structure (imagePath) to LogoConfig structure (filePath)
       await this.player.updateLogo({
         filePath: runtimeConfig.logo.imagePath,
@@ -255,11 +327,15 @@ export class ToastTVDaemon {
       })
     }
 
-    // Try to start TV detection (CEC + heartbeat)
-    try {
-      await this.initializeDetection(runtimeConfig)
-    } catch (e) {
-      console.log('TV Detection not available (this is optional):', e)
+    if (this.localPlaybackEnabled) {
+      // Try to start TV detection (CEC + heartbeat)
+      try {
+        await this.initializeDetection(runtimeConfig)
+      } catch (e) {
+        console.log('TV Detection not available (this is optional):', e)
+      }
+    } else {
+      console.log('Headless mode: MPV, CEC, and Pi hardware detection disabled')
     }
 
     this.running = true
@@ -361,6 +437,15 @@ export class ToastTVDaemon {
   async stop(): Promise<void> {
     console.log('ToastTV daemon stopping...')
     this.running = false
+    this.stopping = true
+
+    this.playbackService?.stopLoop()
+    this.indexer?.stopWatching()
+
+    if (this.scanTask) {
+      await this.scanTask
+      this.scanTask = null
+    }
 
     // Stop detection service
     if (this.detectionService) {

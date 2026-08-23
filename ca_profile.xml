@@ -1,0 +1,6 @@
+<CommunityApplications>
+  <Profile>ToastTV Other packages the headless ToastTV family television server for Docker and Unraid. It provides read-only media indexing, a conservative Kids 7 library policy, parent overrides, and deterministic channel schedule APIs. Support and development are handled through the GitHub repository.</Profile>
+  <Icon>https://raw.githubusercontent.com/ItsRammen/ToatTV_Other/main/public/app-icon.png</Icon>
+  <WebPage>https://github.com/ItsRammen/ToatTV_Other</WebPage>
+  <Forum>https://github.com/ItsRammen/ToatTV_Other/issues</Forum>
+</CommunityApplications>

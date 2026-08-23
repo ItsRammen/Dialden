@@ -144,8 +144,7 @@ export class MpvClient implements IMediaPlayer {
   }
 
   async clear(): Promise<void> {
-    // Stop and clear playlist
-    await this.send(['stop'])
+    // playlist-clear retains MPV's current entry and removes future entries.
     await this.send(['playlist-clear'])
   }
 
