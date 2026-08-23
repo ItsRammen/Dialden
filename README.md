@@ -104,9 +104,8 @@ schedules. Seerr/Overseerr is intentionally not part of this stage.
 #### Unraid template
 
 Pushes to `main` publish `linux/amd64` and `linux/arm64` images as
-`ghcr.io/itsrammen/toasttv-other:latest`. GitHub Container Registry creates the
-first package as private; its owner must change the package visibility to
-**Public** once before Unraid can pull it anonymously.
+`ghcr.io/itsrammen/toasttv-other:latest`. The published package is public, so
+Unraid can pull it anonymously without registry credentials.
 
 To install the repository template manually from an Unraid terminal:
 
