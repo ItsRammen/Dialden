@@ -825,6 +825,9 @@ export class MediaRepository implements IMediaRepository {
       case 'blocked':
         conditions.push(`NOT (${playableSql})`)
         break
+      case 'errors':
+        conditions.push('(duration_seconds <= 0 OR warning IS NOT NULL)')
+        break
       case 'videos':
         conditions.push('is_interlude = 0')
         break

@@ -16,7 +16,7 @@
   <Category>MediaApp:Video</Category>
   <ExtraSearchTerms>kids television channels schedule family media</ExtraSearchTerms>
   <Requires>Readable local TV and Movies directories on the Unraid host. Keep the Web UI on a trusted LAN because authentication is not implemented yet.</Requires>
-  <Changes>0.7.0 adds in-app TMDB settings, metadata-driven station automation, and immediate collection-decision scheduling fixes.</Changes>
+  <Changes>0.7.1 compacts collection cards and adds a focused technical-failure file view with actionable diagnostics.</Changes>
   <Date>2026-08-24</Date>
   <MinVer>6.12.0</MinVer>
   <License>MIT</License>

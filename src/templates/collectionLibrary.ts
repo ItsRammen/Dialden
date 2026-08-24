@@ -379,6 +379,41 @@ function renderCollectionFacts(collection: CollectionCardViewModel): string {
   return facts.join(' · ')
 }
 
+function renderCollectionCardStatus(collection: CollectionCardViewModel): string {
+  const metadataDetail = collection.metadata.certification
+    ? `${METADATA_LABEL[collection.metadata.status]} · ${escapeHtml(collection.metadata.certification)}`
+    : METADATA_LABEL[collection.metadata.status]
+  const technicalDetail =
+    collection.technical.status === 'available'
+      ? `${count(collection.technical.availableFiles)} of ${count(collection.technical.totalFiles)} ready`
+      : collection.technical.status === 'probe_failed'
+        ? quantity(collection.technical.failedFiles ?? 0, 'file error')
+        : TECHNICAL_LABEL[collection.technical.status]
+  const issues = [
+    collection.technical.status !== 'available'
+      ? collection.technical.reason
+      : undefined,
+    ['ambiguous', 'unmatched', 'no_rating', 'error', 'not_configured'].includes(
+      collection.metadata.status
+    )
+      ? collection.metadata.reason
+      : undefined,
+  ].filter((value): value is string => Boolean(value))
+
+  return `<div class="collection-card-status" aria-label="Collection status">
+    <div class="collection-status-row collection-metadata-${collection.metadata.status}">
+      <span>Metadata</span><strong>${metadataDetail}</strong>
+    </div>
+    <div class="collection-status-row collection-effective-${collection.decision.effectiveDecision}">
+      <span>Approval</span><strong>${DECISION_LABEL[collection.decision.effectiveDecision]}</strong>
+    </div>
+    <div class="collection-status-row collection-technical-${collection.technical.status}">
+      <span>Files</span><strong>${technicalDetail}</strong>
+    </div>
+    ${issues.map((issue) => `<p class="collection-card-issue">${escapeHtml(issue)}</p>`).join('')}
+  </div>`
+}
+
 export function renderCollectionCard(
   collection: CollectionCardViewModel
 ): string {
@@ -396,11 +431,8 @@ export function renderCollectionCard(
           <p>${renderCollectionFacts(collection)}</p>
           <h3><a href="${href}">${escapeHtml(collection.title)}</a></h3>
         </header>
-        <div class="collection-card-states">
-          ${renderMetadata(collection.metadata)}
-          ${renderDecision(collection.decision)}
-          ${renderTechnical(collection.technical)}
-        </div>
+        ${renderCollectionCardStatus(collection)}
+        <a class="collection-card-details" href="${href}">View details</a>
         ${renderActions(collection.title, collection.actions)}
       </div>
     </article>
@@ -426,9 +458,9 @@ function renderBulkActions(view: CollectionLibraryViewModel): string {
   return `<form id="collection-bulk-form" class="collection-bulk-actions" method="post" action="${action}">
     <input type="hidden" name="returnPath" value="${returnPath}">
     <strong>Selected collections</strong>
-    <button name="action" value="allow" type="submit">Parent approve</button>
-    <button name="action" value="block" type="submit">Parent block</button>
-    <button name="action" value="policy" type="submit">Use policy</button>
+    <button class="collection-action collection-action-approve" name="action" value="allow" type="submit">Parent approve</button>
+    <button class="collection-action collection-action-block" name="action" value="block" type="submit">Parent block</button>
+    <button class="collection-action collection-action-reset" name="action" value="policy" type="submit">Use policy</button>
     <small>Select titles deliberately; unknown and unmatched media is never preselected.</small>
   </form>`
 }

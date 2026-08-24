@@ -100,6 +100,19 @@ function dashboard(
 }
 
 describe('headless dashboard metadata health', () => {
+  test('links technical indexing failures directly to the filtered files', async () => {
+    const view = await dashboard(metadataState(), [], publicConfig, {
+      probeFailedFiles: 6,
+    }).build()
+
+    expect(view.warnings).toContainEqual({
+      severity: 'critical',
+      message: '6 files failed technical indexing',
+      href: '/library/files?filter=errors',
+      actionLabel: 'Open file details',
+    })
+  })
+
   test('shows configured-but-unverified metadata as unavailable, not connected', async () => {
     const view = await dashboard(metadataState()).build()
 

@@ -852,4 +852,32 @@ describe('MediaRepository', () => {
     expect(search.items).toHaveLength(6)
     expect(search.items[0]?.filename).toBe('file-240.mp4')
   })
+
+  test('filters technical failures without mixing in healthy files', async () => {
+    await repo.upsertBatch([
+      createInput({ path: '/videos/healthy.mp4', filename: 'healthy.mp4' }),
+      createInput({
+        path: '/videos/no-duration.mp4',
+        filename: 'no-duration.mp4',
+        durationSeconds: 0,
+      }),
+      createInput({
+        path: '/videos/probe-warning.mp4',
+        filename: 'probe-warning.mp4',
+        warning: 'ffprobe could not read the video stream',
+      }),
+    ])
+
+    const failures = await repo.getMediaPage({
+      filter: 'errors',
+      limit: 100,
+      offset: 0,
+    })
+
+    expect(failures.total).toBe(2)
+    expect(failures.items.map((item) => item.filename)).toEqual([
+      'no-duration.mp4',
+      'probe-warning.mp4',
+    ])
+  })
 })

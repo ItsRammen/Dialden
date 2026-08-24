@@ -458,6 +458,48 @@ describe('LibraryController', () => {
     expect(partial.headers.get('HX-Push-Url')).toBe(
       '/library/files?view=grid&filter=videos&search=Family%20%26%20Friends&page=2'
     )
+
+    await app.request('/library/files?filter=errors')
+    expect(mediaService.getPage).toHaveBeenLastCalledWith({
+      view: 'list',
+      filter: 'errors',
+      search: '',
+      page: 1,
+      pageSize: 100,
+      prioritizedIds: [],
+    })
+  })
+
+  test('Advanced Files exposes the technical failure reason and file path', () => {
+    const markup = renderLibraryContent({
+      media: [
+        {
+          id: 1,
+          path: '/media/tv/Bluey/broken-episode.mkv',
+          filename: 'broken-episode.mkv',
+          durationSeconds: 0,
+          isInterlude: false,
+          mediaType: 'video',
+          dateStart: null,
+          dateEnd: null,
+          codec: null,
+          width: null,
+          height: null,
+          warning: 'ffprobe returned invalid data',
+          mtime: 1,
+          compatibility: 'incompatible',
+          playbackEnabled: false,
+        },
+      ],
+      mediaDirectory: '/media',
+      view: 'list',
+      filter: 'errors',
+      search: '',
+    })
+
+    expect(markup).toContain('Technical failures')
+    expect(markup).toContain('ffprobe returned invalid data')
+    expect(markup).toContain('/media/tv/Bluey/broken-episode.mkv')
   })
 
   test('POST /api/upload rejects writes when media is mounted read-only', async () => {

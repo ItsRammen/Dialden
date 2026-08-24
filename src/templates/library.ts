@@ -93,6 +93,10 @@ export function renderLibraryContent(props: LibraryProps): string {
     filteredMedia = media.filter((m) => m.playbackEnabled === true)
   } else if (filter === 'blocked') {
     filteredMedia = media.filter((m) => m.playbackEnabled === false)
+  } else if (filter === 'errors') {
+    filteredMedia = media.filter(
+      (m) => m.durationSeconds <= 0 || m.warning !== null
+    )
   }
 
   // Apply search
@@ -162,6 +166,16 @@ export function renderLibraryContent(props: LibraryProps): string {
       mediaWritable,
       total
     )
+  } else if (filter === 'errors') {
+    mediaContent = renderMediaSection(
+      'Technical failures',
+      '⚠️',
+      filteredMedia,
+      view,
+      config,
+      mediaWritable,
+      total
+    )
   } else {
     mediaContent = renderMediaSection(
       filter === 'approved' ? 'Playable files' : 'Not Scheduled',
@@ -213,6 +227,7 @@ export function renderLibraryContent(props: LibraryProps): string {
           ${renderLibraryLink('All Media', { ...navigation, filter: 'all', page: 1 }, `btn btn-small ${filter === 'all' ? 'active' : ''}`)}
           ${renderLibraryLink('✅ Playable', { ...navigation, filter: 'approved', page: 1 }, `btn btn-small ${filter === 'approved' ? 'active' : ''}`)}
           ${renderLibraryLink('🔒 Not Scheduled', { ...navigation, filter: 'blocked', page: 1 }, `btn btn-small ${filter === 'blocked' ? 'active' : ''}`)}
+          ${renderLibraryLink('⚠️ File Errors', { ...navigation, filter: 'errors', page: 1 }, `btn btn-small library-filter-errors ${filter === 'errors' ? 'active' : ''}`)}
           ${renderLibraryLink('📺 Videos', { ...navigation, filter: 'videos', page: 1 }, `btn btn-small ${filter === 'videos' ? 'active' : ''}`)}
           ${renderLibraryLink('🎬 Interludes', { ...navigation, filter: 'interludes', page: 1 }, `btn btn-small ${filter === 'interludes' ? 'active' : ''}`)}
         </div>
@@ -258,11 +273,10 @@ export function renderLibraryContent(props: LibraryProps): string {
         <input type="hidden" name="search" value="${safeSearch}">
         <input type="hidden" name="page" value="${currentPage}">
       </div>`
-          : `<div class="dropzone">
+          : `<div class="dropzone dropzone-readonly">
         <div class="dropzone-content">
           <span class="dropzone-icon">🔒</span>
-          <span class="dropzone-text">Media is mounted read-only</span>
-          <span class="dropzone-or">Add files on the Docker host, then rescan.</span>
+          <span class="dropzone-readonly-copy"><strong>Media is mounted read-only</strong><small>Add files on the Docker host, then rescan.</small></span>
         </div>
       </div>`
       }
@@ -370,6 +384,7 @@ export function renderMediaItem(
   const safeFilename = escapeHtml(item.filename)
   const safeCollection = escapeHtml(item.collectionTitle ?? '')
   const eligibilityBadge = renderEligibilityBadge(item)
+  const technicalIssue = renderTechnicalIssue(item)
 
   if (view === 'grid') {
     return `
@@ -385,6 +400,7 @@ export function renderMediaItem(
           <span class="media-card-name">${safeFilename}</span>
           ${safeCollection && safeCollection !== safeFilename ? `<span class="media-collection-name">${safeCollection}</span>` : ''}
         </div>
+        ${technicalIssue}
         <div class="media-card-actions">
           ${renderTypeSelect(item, displayType)}
           ${renderEligibilitySelect(item)}
@@ -409,6 +425,7 @@ export function renderMediaItem(
         ${renderEligibilitySelect(item)}
         ${mediaWritable ? renderDeleteButton(item) : ''}
       </div>
+      ${technicalIssue}
       ${renderDatePicker(item, displayType)}
     </div>
   `
@@ -461,6 +478,18 @@ function renderTypeSelect(item: MediaItem, displayType: MediaType): string {
       <option value="offair" ${displayType === 'offair' ? 'selected' : ''}>🌙 Off-Air</option>
     </select>
   `
+}
+
+function renderTechnicalIssue(item: MediaItem): string {
+  if (item.durationSeconds > 0 && item.warning === null) return ''
+  const detail = item.warning?.trim()
+    ? item.warning
+    : 'The media probe did not return a valid duration.'
+  return `<div class="media-technical-issue" role="note">
+    <strong>Technical failure</strong>
+    <span>${escapeHtml(detail)}</span>
+    <code title="${escapeHtml(item.path)}">${escapeHtml(item.path)}</code>
+  </div>`
 }
 
 function renderEligibilityBadge(item: MediaItem): string {

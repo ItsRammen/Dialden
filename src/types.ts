@@ -260,6 +260,7 @@ export type MediaFileListFilter =
   | 'all'
   | 'approved'
   | 'blocked'
+  | 'errors'
   | 'videos'
   | 'interludes'
 

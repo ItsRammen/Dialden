@@ -34,7 +34,7 @@ export function createLibraryController(deps: LibraryControllerDeps) {
   const parseView = (value: unknown): 'list' | 'grid' =>
     value === 'grid' ? 'grid' : 'list'
   const parseFilter = (value: unknown): LibraryFilter =>
-    ['all', 'approved', 'blocked', 'videos', 'interludes'].includes(
+    ['all', 'approved', 'blocked', 'errors', 'videos', 'interludes'].includes(
       String(value)
     )
       ? (value as LibraryFilter)

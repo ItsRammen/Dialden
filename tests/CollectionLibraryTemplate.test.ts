@@ -75,7 +75,7 @@ function library(
 }
 
 describe('collection library template', () => {
-  test('renders collection-first summary, explicit decision states, actions, and Advanced files link', () => {
+  test('renders a compact collection summary, actions, and Advanced files link', () => {
     const markup = renderCollectionLibraryContent(library())
 
     expect(markup).toContain('83')
@@ -85,12 +85,12 @@ describe('collection library template', () => {
     expect(markup).toContain('Bluey')
     expect(markup).toContain('3 seasons')
     expect(markup).toContain('154 episodes')
-    expect(markup).toContain('Status</dt><dd>Matched')
-    expect(markup).toContain('Certification</dt><dd>TV-Y (US)')
-    expect(markup).toContain('Policy result</dt><dd>Allow')
-    expect(markup).toContain('Parent override</dt><dd>None — using policy')
-    expect(markup).toContain('Effective decision</dt><dd><strong>Allow')
-    expect(markup).toContain('Technical availability')
+    expect(markup).toContain('<span>Metadata</span><strong>Matched · TV-Y')
+    expect(markup).toContain('<span>Approval</span><strong>Allow')
+    expect(markup).toContain('<span>Files</span><strong>154 of 154 ready')
+    expect(markup).toContain('View details')
+    expect(markup).not.toContain('Policy reason:')
+    expect(markup).not.toContain('Technical availability')
     expect(markup).toContain('Parent approve')
     expect(markup).toContain('Parent block')
     expect(markup).toContain('Use policy')

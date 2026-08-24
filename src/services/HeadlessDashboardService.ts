@@ -135,7 +135,7 @@ export class HeadlessDashboardService {
       warnings.push({
         severity: 'critical',
         message: `${summary.probeFailedFiles} files failed technical indexing`,
-        href: '/library/files?filter=all',
+        href: '/library/files?filter=errors',
         actionLabel: 'Open file details',
       })
     }

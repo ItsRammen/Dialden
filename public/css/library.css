@@ -213,6 +213,35 @@
   border-radius: var(--border-radius);
 }
 
+.media-technical-issue {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0 0.75rem 0.75rem;
+  padding: 0.65rem 0.75rem;
+  background: rgba(255, 91, 123, 0.11);
+  border: 1px solid rgba(255, 91, 123, 0.55);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+}
+
+.media-item > .media-technical-issue {
+  margin: 0;
+}
+
+.media-technical-issue strong {
+  color: var(--toast-pink);
+}
+
+.media-technical-issue code {
+  overflow: hidden;
+  padding: 0.25rem 0.4rem;
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .media-item-main {
   display: flex;
   align-items: center;
@@ -412,11 +441,16 @@
 
 .filter-buttons {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
 }
 
 .filter-buttons a {
   text-decoration: none;
+}
+
+.filter-buttons .library-filter-errors.active {
+  background: var(--toast-pink);
 }
 
 .view-buttons {
@@ -594,6 +628,38 @@
   letter-spacing: 1px;
 }
 
+.dropzone-readonly {
+  padding: 0.7rem 1rem;
+  border-width: 2px;
+  cursor: default;
+}
+
+.dropzone-readonly:hover {
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.dropzone-readonly .dropzone-content {
+  flex-direction: row;
+  justify-content: center;
+  gap: 0.75rem;
+  text-align: left;
+}
+
+.dropzone-readonly .dropzone-icon {
+  font-size: 1.4rem;
+}
+
+.dropzone-readonly-copy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.65rem;
+}
+
+.dropzone-readonly-copy small {
+  color: var(--text-secondary);
+}
+
 /* --- Library Responsive --- */
 @media (max-width: 768px) {
   .library {
@@ -619,6 +685,10 @@
     text-align: center;
   }
 
+  .filter-buttons .btn {
+    flex-basis: 9rem;
+  }
+
   .search-box {
     width: 100%;
   }
@@ -634,6 +704,14 @@
 
   .dropzone {
     padding: 1.5rem 1rem;
+  }
+
+  .dropzone-readonly {
+    padding: 0.7rem;
+  }
+
+  .dropzone-readonly .dropzone-content {
+    align-items: flex-start;
   }
 
   .media-item {
