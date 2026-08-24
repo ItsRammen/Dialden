@@ -61,7 +61,7 @@ COPY --chown=bun:bun config ./config
 COPY --chown=bun:bun config/kids-7.library.json ./defaults/kids-7.library.json
 COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-RUN mkdir -p /media /app/data/thumbnails /app/data/artwork /app/data/transcode \
+RUN mkdir -p /media /app/data/thumbnails /app/data/artwork /app/data/transcode /app/data/streams \
     && chown -R bun:bun /app /media
 
 EXPOSE 1993

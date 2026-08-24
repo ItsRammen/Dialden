@@ -36,6 +36,25 @@ export class MediaDeliveryService {
     const item = await this.repository.getById(mediaId)
     if (!item || !this.isPlaybackEligible(item)) return null
 
+    return this.resolveItem(item)
+  }
+
+  /**
+   * Resolve any item that the authoritative channel timeline may broadcast.
+   * This deliberately remains separate from direct playback so interludes can
+   * feed the server-side channel worker without becoming public direct-file
+   * playback URLs.
+   */
+  async resolveForChannelWorker(
+    mediaId: number
+  ): Promise<ResolvedMediaFile | null> {
+    const item = await this.repository.getById(mediaId)
+    if (!item || !this.isChannelPlaybackEligible(item)) return null
+
+    return this.resolveItem(item)
+  }
+
+  private resolveItem(item: MediaItem): ResolvedMediaFile | null {
     const root = item.rootId ? this.rootsById.get(item.rootId) : undefined
     const relativePath = item.relativePath
     if (!root || !relativePath || !this.isSafeRelativePath(relativePath)) {
@@ -78,6 +97,20 @@ export class MediaDeliveryService {
     return (
       item.mediaType === 'video' &&
       !item.isInterlude &&
+      item.durationSeconds > 0 &&
+      item.rootAvailable === true &&
+      item.playbackEnabled === true
+    )
+  }
+
+  private isChannelPlaybackEligible(item: MediaItem): boolean {
+    return (
+      (item.mediaType === 'video' ||
+        item.mediaType === 'interlude' ||
+        item.mediaType === 'intro' ||
+        item.mediaType === 'outro' ||
+        item.mediaType === 'offair' ||
+        item.isInterlude) &&
       item.durationSeconds > 0 &&
       item.rootAvailable === true &&
       item.playbackEnabled === true

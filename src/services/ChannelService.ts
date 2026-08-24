@@ -71,6 +71,28 @@ export interface ScheduledProgram {
   readonly scheduledEnd: string
   readonly durationSeconds: number
   readonly durationMs: number
+  readonly type: ChannelScheduleItemType
+  readonly sourceStartSeconds: number
+  readonly sourceDurationSeconds: number
+  readonly transitionIn: ChannelTransition
+  readonly transitionOut: ChannelTransition
+}
+
+export type ChannelScheduleItemType =
+  | 'program'
+  | 'movie'
+  | 'bumper'
+  | 'ident'
+  | 'interlude'
+  | 'short'
+  | 'offair'
+
+export type ChannelTransition = 'hard_cut' | 'fade' | 'resume'
+
+export interface ChannelInterludePolicy {
+  readonly enabled: boolean
+  /** Insert one interlude after this many complete programs. */
+  readonly frequency: number
 }
 
 export interface DirectPlaybackDescriptor {
@@ -107,6 +129,10 @@ interface LocalParts {
 
 const SYSTEM_CLOCK: ChannelClock = { now: () => new Date() }
 const MAX_PROGRAMS_PER_SLOT = 20_000
+const DISABLED_INTERLUDES: ChannelInterludePolicy = {
+  enabled: false,
+  frequency: 1,
+}
 const DAY_NAMES: ScheduleDay[] = [
   'sun',
   'mon',
@@ -134,7 +160,9 @@ export class ChannelService {
     private readonly configurationStore?: Pick<
       ChannelConfigurationStore,
       'load' | 'save'
-    >
+    >,
+    private interludePolicy: ChannelInterludePolicy =
+      DISABLED_INTERLUDES
   ) {
     this.channels = validateLibraryChannels(policy?.channels ?? [])
     for (const [rootId, root] of Object.entries(policy?.roots ?? {})) {
@@ -160,6 +188,13 @@ export class ChannelService {
         this.configurationError = safeMessage(error)
         console.error(`Channel configuration rejected: ${this.configurationError}`)
       }
+    }
+  }
+
+  setInterludePolicy(policy: ChannelInterludePolicy): void {
+    this.interludePolicy = {
+      enabled: policy.enabled,
+      frequency: Math.max(1, Math.floor(policy.frequency)),
     }
   }
 
@@ -579,8 +614,16 @@ export class ChannelService {
     })
     if (eligible.length === 0) return []
 
-    const ordered = this.deterministicShuffle(
+    const orderedPrograms = this.deterministicShuffle(
       eligible,
+      `${channel.id}|continuous|${slot.groups.join(',')}`
+    )
+    const ordered = this.withInterludes(
+      orderedPrograms,
+      media,
+      channel,
+      slot,
+      around,
       `${channel.id}|continuous|${slot.groups.join(',')}`
     )
     const durationsMs = ordered.map((item) => item.durationSeconds * 1000)
@@ -616,18 +659,9 @@ export class ChannelService {
       if (!selected || !durationMs) break
       const scheduledStart = new Date(cursorMs)
       const scheduledEnd = new Date(cursorMs + durationMs)
-      programs.push({
-        id: `${channel.id}:${scheduledStart.getTime()}:${selected.id}`,
-        channelId: channel.id,
-        mediaId: selected.id,
-        title: this.programTitle(selected),
-        collectionTitle: this.programCollectionTitle(selected),
-        ...this.programEpisodeLabel(selected),
-        scheduledStart: scheduledStart.toISOString(),
-        scheduledEnd: scheduledEnd.toISOString(),
-        durationSeconds: selected.durationSeconds,
-        durationMs,
-      })
+      programs.push(
+        this.scheduledProgram(channel, selected, scheduledStart, scheduledEnd)
+      )
       cursorMs = scheduledEnd.getTime()
       orderIndex = (orderIndex + 1) % ordered.length
     }
@@ -679,6 +713,15 @@ export class ChannelService {
       let cursorMs = start.getTime()
       let sequence = 0
       let orderIndex = 0
+      let programsSinceInterlude = 0
+      let interludeIndex = 0
+      const interludes = this.orderedInterludes(
+        media,
+        channel,
+        slot,
+        start,
+        `${channel.id}|${dateKey}|${slot.start}|${slot.groups.join(',')}`
+      )
 
       while (cursorMs < end.getTime() && sequence < MAX_PROGRAMS_PER_SLOT) {
         const remainingSeconds = Math.floor((end.getTime() - cursorMs) / 1000)
@@ -697,20 +740,40 @@ export class ChannelService {
         const scheduledEnd = new Date(
           cursorMs + selected.durationSeconds * 1000
         )
-        programs.push({
-          id: `${channel.id}:${scheduledStart.getTime()}:${selected.id}`,
-          channelId: channel.id,
-          mediaId: selected.id,
-          title: this.programTitle(selected),
-          collectionTitle: this.programCollectionTitle(selected),
-          ...this.programEpisodeLabel(selected),
-          scheduledStart: scheduledStart.toISOString(),
-          scheduledEnd: scheduledEnd.toISOString(),
-          durationSeconds: selected.durationSeconds,
-          durationMs: selected.durationSeconds * 1000,
-        })
+        programs.push(
+          this.scheduledProgram(channel, selected, scheduledStart, scheduledEnd)
+        )
         cursorMs = scheduledEnd.getTime()
         sequence++
+        programsSinceInterlude++
+
+        if (
+          programsSinceInterlude >= this.interludeFrequency() &&
+          interludes.length > 0 &&
+          sequence < MAX_PROGRAMS_PER_SLOT
+        ) {
+          const interlude = interludes[interludeIndex % interludes.length]
+          const interludeEndMs =
+            cursorMs + (interlude?.durationSeconds ?? 0) * 1000
+          if (interlude && interludeEndMs <= end.getTime()) {
+            programs.push(
+              this.scheduledProgram(
+                channel,
+                interlude,
+                new Date(cursorMs),
+                new Date(interludeEndMs)
+              )
+            )
+            cursorMs = interludeEndMs
+            sequence++
+            interludeIndex++
+            programsSinceInterlude = 0
+          } else if (interlude) {
+            // Never skip a due break merely to squeeze another program into a
+            // bounded slot. The next slot starts a fresh cadence.
+            break
+          }
+        }
       }
     }
 
@@ -791,6 +854,121 @@ export class ChannelService {
     return cleanFilename(item.filename).replace(/[._]+/g, ' ').trim()
   }
 
+  private scheduledProgram(
+    channel: LibraryChannelPolicy,
+    item: MediaItem,
+    scheduledStart: Date,
+    scheduledEnd: Date
+  ): ScheduledProgram {
+    const isInterlude = item.mediaType === 'interlude' || item.isInterlude
+    return {
+      id: `${channel.id}:${scheduledStart.getTime()}:${item.id}`,
+      channelId: channel.id,
+      mediaId: item.id,
+      title: this.programTitle(item),
+      collectionTitle: isInterlude
+        ? 'Interlude'
+        : this.programCollectionTitle(item),
+      ...(isInterlude ? {} : this.programEpisodeLabel(item)),
+      scheduledStart: scheduledStart.toISOString(),
+      scheduledEnd: scheduledEnd.toISOString(),
+      durationSeconds: item.durationSeconds,
+      durationMs: item.durationSeconds * 1000,
+      type: isInterlude
+        ? 'interlude'
+        : item.libraryKind === 'movie'
+          ? 'movie'
+          : 'program',
+      sourceStartSeconds: 0,
+      sourceDurationSeconds: item.durationSeconds,
+      transitionIn: 'hard_cut',
+      transitionOut: 'hard_cut',
+    }
+  }
+
+  /**
+   * Expand one deterministic program cycle so the fixed-epoch all-day
+   * timeline accounts for every interlude byte-for-byte. Repeating the base
+   * program order `frequency` times makes the cycle boundary preserve the
+   * "every N programs" cadence even when the library contains fewer than N
+   * programs.
+   */
+  private withInterludes(
+    programs: MediaItem[],
+    media: MediaItem[],
+    channel: LibraryChannelPolicy,
+    slot: ChannelScheduleSlot,
+    at: Date,
+    seed: string
+  ): MediaItem[] {
+    const interludes = this.orderedInterludes(
+      media,
+      channel,
+      slot,
+      at,
+      seed
+    )
+    if (interludes.length === 0) return programs
+
+    const frequency = this.interludeFrequency()
+    const output: MediaItem[] = []
+    let programCount = 0
+    let interludeIndex = 0
+    for (let repetition = 0; repetition < frequency; repetition++) {
+      for (const program of programs) {
+        output.push(program)
+        programCount++
+        if (programCount % frequency === 0) {
+          output.push(interludes[interludeIndex % interludes.length] as MediaItem)
+          interludeIndex++
+        }
+      }
+    }
+    return output
+  }
+
+  private orderedInterludes(
+    media: MediaItem[],
+    channel: LibraryChannelPolicy,
+    slot: ChannelScheduleSlot,
+    at: Date,
+    seed: string
+  ): MediaItem[] {
+    if (!this.interludePolicy.enabled) return []
+    return this.deterministicShuffle(
+      media.filter(
+        (item) =>
+          item.rootAvailable === true &&
+          item.playbackEnabled === true &&
+          (item.mediaType === 'interlude' || item.isInterlude) &&
+          item.durationSeconds > 0 &&
+          this.interludeActiveOn(item, at, channel.timezone)
+      ),
+      `${seed}|interludes|${slot.start}|${slot.end}`
+    )
+  }
+
+  private interludeFrequency(): number {
+    const value = Math.floor(this.interludePolicy.frequency)
+    return Number.isFinite(value) && value > 0 ? value : 1
+  }
+
+  private interludeActiveOn(
+    item: MediaItem,
+    at: Date,
+    timezone: string
+  ): boolean {
+    if (item.dateStart === null && item.dateEnd === null) return true
+    if (!item.dateStart || !item.dateEnd) return false
+    const local = this.localParts(at, timezone)
+    const current = `${this.pad(local.month)}-${this.pad(local.day)}`
+    const start = item.dateStart.slice(-5)
+    const end = item.dateEnd.slice(-5)
+    return start <= end
+      ? current >= start && current <= end
+      : current >= start || current <= end
+  }
+
   private programCollectionTitle(item: MediaItem): string {
     return (
       item.collectionMetadataTitle?.trim() ||
@@ -841,7 +1019,12 @@ export class ChannelService {
         ),
       ])
       .sort((a, b) => this.compareText(JSON.stringify(a), JSON.stringify(b)))
-    return this.hash(JSON.stringify({ channel, catalog })).toString(16).padStart(8, '0')
+    const interlude = this.interludePolicy.enabled
+      ? { enabled: true, frequency: this.interludeFrequency() }
+      : undefined
+    return this.hash(JSON.stringify({ channel, catalog, interlude }))
+      .toString(16)
+      .padStart(8, '0')
   }
 
   private deterministicShuffle(items: MediaItem[], seed: string): MediaItem[] {

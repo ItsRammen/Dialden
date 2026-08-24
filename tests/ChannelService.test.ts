@@ -65,6 +65,19 @@ function video(id: number, collectionTitle: string, enabled = true): MediaItem {
   }
 }
 
+function interlude(id: number, durationSeconds = 30): MediaItem {
+  return {
+    ...video(id, 'ToastTV Interludes'),
+    path: `/media/interludes/bumper-${id}.mp4`,
+    filename: `ToastTV bumper ${id}.mp4`,
+    relativePath: `bumper-${id}.mp4`,
+    durationSeconds,
+    isInterlude: true,
+    mediaType: 'interlude',
+    libraryKind: undefined,
+  }
+}
+
 describe('ChannelService', () => {
   test('uses provider show and episode metadata for schedule labels', async () => {
     const repository = mock<IMediaRepository>()
@@ -296,6 +309,185 @@ describe('ChannelService', () => {
     expect(startMs).toBeLessThanOrEqual(now.getTime())
     expect(endMs).toBeGreaterThan(now.getTime())
     expect(endMs - startMs).toBe(420_000)
+  })
+
+  test('schedules measured interludes as ordinary deterministic all-day timeline items', async () => {
+    const repository = mock<IMediaRepository>()
+    repository.getAll.mockResolvedValue([
+      { ...video(1, 'Bluey (2018)'), durationSeconds: 600 },
+      interlude(90, 37),
+    ])
+    const allDayPolicy: LibraryPolicyDocument = {
+      ...policy,
+      channels: [
+        {
+          id: 'bumper-loop',
+          name: 'Bumper Loop',
+          enabled: true,
+          timezone: 'UTC',
+          slots: [
+            {
+              days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'],
+              start: '00:00',
+              end: '24:00',
+              groups: ['comfort'],
+            },
+          ],
+        },
+      ],
+    }
+    const clock = { now: () => new Date('2020-01-01T00:10:05.000Z') }
+    const first = await new ChannelService(
+      repository,
+      allDayPolicy,
+      clock,
+      undefined,
+      { enabled: true, frequency: 1 }
+    ).getNow('bumper-loop')
+    const second = await new ChannelService(
+      repository,
+      allDayPolicy,
+      clock,
+      undefined,
+      { enabled: true, frequency: 1 }
+    ).getNow('bumper-loop')
+
+    expect(first).toEqual(second)
+    expect(first?.program).toMatchObject({
+      mediaId: 90,
+      type: 'interlude',
+      collectionTitle: 'Interlude',
+      durationSeconds: 37,
+      durationMs: 37_000,
+      sourceStartSeconds: 0,
+      sourceDurationSeconds: 37,
+      transitionIn: 'hard_cut',
+      transitionOut: 'hard_cut',
+      offsetSeconds: 5,
+    })
+    expect(first?.program?.scheduledStart).toBe('2020-01-01T00:10:00.000Z')
+    expect(first?.next).toMatchObject({ mediaId: 1, type: 'program' })
+    expect(first?.next?.scheduledStart).toBe('2020-01-01T00:10:37.000Z')
+  })
+
+  test('honors every-N frequency across a continuous cycle boundary', async () => {
+    const repository = mock<IMediaRepository>()
+    repository.getAll.mockResolvedValue([
+      { ...video(1, 'Bluey (2018)'), durationSeconds: 60 },
+      interlude(90, 10),
+    ])
+    const allDayPolicy: LibraryPolicyDocument = {
+      ...policy,
+      channels: [
+        {
+          id: 'every-two',
+          name: 'Every Two',
+          enabled: true,
+          timezone: 'UTC',
+          slots: [
+            {
+              days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'],
+              start: '00:00',
+              end: '24:00',
+              groups: ['comfort'],
+            },
+          ],
+        },
+      ],
+    }
+    const guide = await new ChannelService(
+      repository,
+      allDayPolicy,
+      { now: () => new Date('2020-01-01T00:00:00.000Z') },
+      undefined,
+      { enabled: true, frequency: 2 }
+    ).getGuide('every-two', 1)
+    const types = guide?.programs.slice(0, 9).map((item) => item.type)
+
+    expect(types).toEqual([
+      'program',
+      'program',
+      'interlude',
+      'program',
+      'program',
+      'interlude',
+      'program',
+      'program',
+      'interlude',
+    ])
+  })
+
+  test('preserves the original schedule when interludes are unavailable', async () => {
+    const repository = mock<IMediaRepository>()
+    repository.getAll.mockResolvedValue([
+      { ...video(1, 'Bluey (2018)'), durationSeconds: 420 },
+    ])
+    const allDayPolicy: LibraryPolicyDocument = {
+      ...policy,
+      channels: [
+        {
+          id: 'no-bumpers',
+          name: 'No Bumpers',
+          enabled: true,
+          timezone: 'UTC',
+          slots: [
+            {
+              days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'],
+              start: '00:00',
+              end: '24:00',
+              groups: ['comfort'],
+            },
+          ],
+        },
+      ],
+    }
+    const clock = { now: () => new Date('2026-08-23T23:57:00.000Z') }
+    const disabled = await new ChannelService(
+      repository,
+      allDayPolicy,
+      clock
+    ).getGuide('no-bumpers', 1)
+    const enabledButEmpty = await new ChannelService(
+      repository,
+      allDayPolicy,
+      clock,
+      undefined,
+      { enabled: true, frequency: 1 }
+    ).getGuide('no-bumpers', 1)
+
+    expect(enabledButEmpty?.programs).toEqual(disabled?.programs)
+    expect(enabledButEmpty?.programs.every((item) => item.type === 'program')).toBe(
+      true
+    )
+  })
+
+  test('keeps a due interlude inside a bounded slot and exposes it as now/next', async () => {
+    const repository = mock<IMediaRepository>()
+    repository.getAll.mockResolvedValue([
+      { ...video(1, 'Bluey (2018)'), durationSeconds: 600 },
+      interlude(90, 30),
+    ])
+    const service = new ChannelService(
+      repository,
+      policy,
+      { now: () => new Date('2026-08-23T22:40:10.000Z') },
+      undefined,
+      { enabled: true, frequency: 1 }
+    )
+    const now = await service.getNow('kids-club')
+
+    expect(now?.program).toMatchObject({
+      mediaId: 90,
+      type: 'interlude',
+      scheduledStart: '2026-08-23T22:40:00.000Z',
+      scheduledEnd: '2026-08-23T22:40:30.000Z',
+      offsetSeconds: 10,
+    })
+    expect(now?.next).toMatchObject({
+      mediaId: 1,
+      type: 'program',
+      scheduledStart: '2026-08-23T22:40:30.000Z',
+    })
   })
 
   test('handles a five-second all-day video without exhausting the schedule builder', async () => {

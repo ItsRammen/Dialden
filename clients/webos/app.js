@@ -10,6 +10,7 @@
   var PRESENCE_INTERVAL_MS = 15000;
   var DRIFT_LIMIT_SECONDS = 8;
   var GUIDE_RENDER_LIMIT = 250;
+  var LIVE_STREAM_RETRY_MS = 15000;
   var RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 15000, 30000];
 
   var state = {
@@ -23,6 +24,8 @@
     channelIndex: 0,
     currentNow: null,
     programId: null,
+    activeSource: null,
+    failedLiveUrl: null,
     clockOffsetMs: 0,
     clockSamples: [],
     sourceRetryUsed: false,
@@ -44,6 +47,7 @@
   var presenceChangeTimer = null;
   var chromeTimer = null;
   var toastTimer = null;
+  var liveRetryTimer = null;
 
   document.addEventListener('DOMContentLoaded', boot, false);
 
@@ -284,10 +288,14 @@
   function isNowResult(data) {
     if (!data || typeof data.serverTimeMs !== 'number' || typeof data.channelId !== 'string') return false;
     if (data.program === null) return true;
+    var hasDirectPlayback = data.program && data.program.playback &&
+      data.program.playback.mode === 'direct' && typeof data.program.playback.url === 'string';
+    var channelPlayback = data.liveStream || data.playback;
+    var hasChannelPlayback = channelPlayback && channelPlayback.mode === 'hls' &&
+      typeof channelPlayback.url === 'string';
     return data.program && typeof data.program.id === 'string' &&
       typeof data.program.title === 'string' && typeof data.program.offsetMs === 'number' &&
-      data.program.playback && data.program.playback.mode === 'direct' &&
-      typeof data.program.playback.url === 'string';
+      (hasDirectPlayback || hasChannelPlayback);
   }
 
   function renderChannels() {
@@ -366,6 +374,9 @@
     state.awaitingGesture = false;
     state.currentNow = null;
     state.programId = null;
+    state.activeSource = null;
+    state.failedLiveUrl = null;
+    clearLiveRetryTimer();
     clearPlaybackError();
     elements.playerChannelName.textContent = channel.name;
     elements.playerScreen.classList.remove('has-video');
@@ -416,50 +427,57 @@
       }
 
       hideOffAir();
-      if (!forceReload && previousProgramId === data.program.id && elements.video.readyState >= 1) {
+      var source = window.ToastTVPlaybackPolicy.choose(data, state.serverUrl, state.failedLiveUrl, state.clientId);
+      if (!source) {
+        showPlaybackError('No compatible playback source', 'The channel stream and direct-play fallback are unavailable.');
+        return;
+      }
+
+      /* A channel HLS URL represents the broadcast, not the current program. Keep
+         the TV attached while schedule metadata advances underneath it. */
+      if (source.mode === 'channel-hls' && !window.ToastTVPlaybackPolicy.shouldReload(state.activeSource, source)) {
+        state.programId = data.program.id;
+        return;
+      }
+
+      if (source.mode === 'direct' && !forceReload && previousProgramId === data.program.id &&
+          !window.ToastTVPlaybackPolicy.shouldReload(state.activeSource, source) && elements.video.readyState >= 1) {
         reconcileLivePosition();
         return;
       }
 
       if (previousProgramId !== data.program.id) state.sourceRetryUsed = false;
       state.programId = data.program.id;
-      loadProgram(data.program);
+      loadProgram(data.program, source);
     });
   }
 
-  function loadProgram(program) {
-    var source = resolvePlaybackUrl(program.playback.url);
-    if (!source) {
-      showPlaybackError('Unsafe playback address', 'The server returned a media address this app cannot use.');
-      return;
-    }
+  function loadProgram(program, source) {
     clearPlaybackError();
     hideOffAir();
     elements.playerScreen.classList.remove('has-video');
     state.pendingJoin = true;
+    state.activeSource = source;
     state.playToken += 1;
-    setPlayerStatus('Loading ' + program.title + '…');
+    setPlayerStatus(source.mode === 'channel-hls' ? 'Joining live channel…' : 'Loading ' + program.title + '…');
     try {
       elements.video.pause();
       elements.video.removeAttribute('src');
       elements.video.load();
-      elements.video.src = source;
+      elements.video.src = source.url;
       elements.video.load();
     } catch (error) {
       handleMediaError();
     }
   }
 
-  function resolvePlaybackUrl(value) {
-    if (typeof value !== 'string') return null;
-    if (value.charAt(0) === '/' && value.charAt(1) !== '/') return state.serverUrl + value;
-    if (/^https?:\/\//i.test(value)) return value;
-    return null;
-  }
-
   function joinLive() {
     if (!state.pendingJoin || !state.currentNow || !state.currentNow.program || state.localPaused) return;
     state.pendingJoin = false;
+    if (state.activeSource && state.activeSource.mode === 'channel-hls') {
+      attemptPlay(++state.playToken);
+      return;
+    }
     var target = expectedPositionSeconds();
     if (isFinite(elements.video.duration) && elements.video.duration > 0) {
       target = Math.min(target, Math.max(0, elements.video.duration - 0.25));
@@ -502,12 +520,12 @@
     if (!state.currentNow || !state.currentNow.program) return 0;
     var program = state.currentNow.program;
     var elapsedSinceResponse = Date.now() + state.clockOffsetMs - state.currentNow.serverTimeMs;
-    var sourceOrigin = Number(program.playback.sourceOffsetAtPlaybackZeroMs || 0);
-    return Math.max(0, (program.offsetMs + elapsedSinceResponse - sourceOrigin) / 1000);
+    return window.ToastTVPlaybackPolicy.expectedDirectPosition(program, elapsedSinceResponse);
   }
 
   function reconcileLivePosition() {
     if (!state.currentNow || !state.currentNow.program || state.localPaused) return;
+    if (state.activeSource && state.activeSource.mode === 'channel-hls') return;
     var target = expectedPositionSeconds();
     if (Math.abs(elements.video.currentTime - target) > DRIFT_LIMIT_SECONDS) {
       try {
@@ -520,6 +538,14 @@
 
   function handleMediaError() {
     if (state.view !== 'player' || !state.currentNow || !state.currentNow.program) return;
+    if (state.activeSource && state.activeSource.mode === 'channel-hls') {
+      state.failedLiveUrl = state.activeSource.url;
+      scheduleLiveRetry(state.failedLiveUrl, currentChannel().id);
+      state.activeSource = null;
+      setPlayerStatus('Live channel unavailable — trying direct playback…');
+      window.setTimeout(function () { syncNow(true); }, 250);
+      return;
+    }
     if (!state.sourceRetryUsed) {
       state.sourceRetryUsed = true;
       setPlayerStatus('Refreshing the live source…');
@@ -531,6 +557,9 @@
 
   function retryPlayback() {
     state.sourceRetryUsed = false;
+    state.failedLiveUrl = null;
+    state.activeSource = null;
+    clearLiveRetryTimer();
     state.localPaused = false;
     clearPlaybackError();
     syncNow(true);
@@ -549,7 +578,11 @@
     state.localPaused = false;
     state.awaitingGesture = false;
     queuePresenceHeartbeat();
-    syncNow(true);
+    if (state.activeSource && state.activeSource.mode === 'channel-hls') {
+      attemptPlay(++state.playToken);
+    } else {
+      syncNow(true);
+    }
   }
 
   function renderProgramInfo() {
@@ -594,6 +627,7 @@
   function showOffAir(nextProgram) {
     state.pendingJoin = false;
     state.playToken += 1;
+    state.activeSource = null;
     try {
       elements.video.pause();
       elements.video.removeAttribute('src');
@@ -949,6 +983,30 @@
     if (boundaryTimer) window.clearTimeout(boundaryTimer);
     boundaryTimer = null;
     clearReconnectTimer();
+    clearLiveRetryTimer();
+  }
+
+  function scheduleLiveRetry(failedUrl, channelId) {
+    clearLiveRetryTimer();
+    liveRetryTimer = window.setTimeout(function () {
+      liveRetryTimer = null;
+      var channel = currentChannel();
+      if (
+        state.view !== 'player' ||
+        !channel ||
+        channel.id !== channelId ||
+        state.failedLiveUrl !== failedUrl
+      ) return;
+      state.failedLiveUrl = null;
+      state.sourceRetryUsed = false;
+      setPlayerStatus('Retrying the live channel…');
+      syncNow(true);
+    }, LIVE_STREAM_RETRY_MS);
+  }
+
+  function clearLiveRetryTimer() {
+    if (liveRetryTimer) window.clearTimeout(liveRetryTimer);
+    liveRetryTimer = null;
   }
 
   function scheduleBoundary() {
@@ -1118,6 +1176,7 @@
     if (!state.currentNow || !state.currentNow.program) return 'idle';
     if (state.localPaused) return 'paused';
     if (elements.video.paused || elements.video.readyState < 3) return 'buffering';
+    if (state.activeSource && state.activeSource.mode === 'channel-hls') return 'transcode';
     return 'direct-play';
   }
 

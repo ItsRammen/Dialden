@@ -15,7 +15,7 @@ describe('LG webOS package assets', () => {
     const manifest = JSON.parse(readFileSync(join(root, 'appinfo.json'), 'utf8'))
     expect(manifest).toMatchObject({
       id: 'com.itsrammen.app.toasttv',
-      version: '0.1.1',
+      version: '0.2.0',
       type: 'web',
       main: 'index.html',
       title: 'ToastTV',
@@ -28,6 +28,7 @@ describe('LG webOS package assets', () => {
     const html = readFileSync(join(root, manifest.main), 'utf8')
     expect(html).toContain('href="styles.css"')
     expect(html).toContain('src="app.js"')
+    expect(html).toContain('src="playback-policy.js"')
     expect(html).not.toMatch(/<(?:script|link|img)[^>]+(?:src|href)="https?:\/\//i)
   })
 
@@ -37,7 +38,8 @@ describe('LG webOS package assets', () => {
   })
 
   test('keeps the client compatible with the Chromium 53 baseline', () => {
-    const script = readFileSync(join(root, 'app.js'), 'utf8')
+    const script = readFileSync(join(root, 'playback-policy.js'), 'utf8') +
+      readFileSync(join(root, 'app.js'), 'utf8')
     const styles = readFileSync(join(root, 'styles.css'), 'utf8')
     expect(script).not.toMatch(/\b(?:const|let)\b/)
     expect(script).not.toContain('=>')

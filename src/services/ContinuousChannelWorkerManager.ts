@@ -1,0 +1,453 @@
+export type ChannelWorkerStatus =
+  | 'starting'
+  | 'live'
+  | 'transitioning'
+  | 'idle'
+  | 'error'
+  | 'stopped'
+
+export interface ChannelTimelinePosition {
+  readonly scheduleItemId: string
+  readonly nextScheduleItemId?: string
+  readonly sourcePath: string
+  readonly sourceOffsetSeconds: number
+  readonly sourceDurationSeconds?: number
+  /** Set false for silent media so the pipeline synthesizes normalized audio. */
+  readonly hasAudio?: boolean
+  /** Loop a finite emergency asset until the scheduled replacement range ends. */
+  readonly loopSource?: boolean
+  readonly timelineRevision: string
+  readonly type:
+    | 'program'
+    | 'movie'
+    | 'bumper'
+    | 'ident'
+    | 'interlude'
+    | 'short'
+    | 'offair'
+}
+
+export interface ChannelTimelineResolver {
+  resolve(channelId: string, at: Date): Promise<ChannelTimelinePosition | null>
+  /** Ordered current + lookahead items consumed without restarting the HLS output. */
+  resolveWindow?(
+    channelId: string,
+    at: Date,
+    minimumItems: number
+  ): Promise<readonly ChannelTimelinePosition[]>
+  fallback?(
+    channelId: string,
+    missing: ChannelTimelinePosition | null,
+    at: Date
+  ): Promise<ChannelTimelinePosition | null>
+}
+
+export interface ChannelWorkerClock {
+  now(): Date
+  setTimeout(callback: () => void, delayMs: number): unknown
+  clearTimeout(handle: unknown): void
+}
+
+export interface ChannelWorkerFiles {
+  prepareOutput(directory: string): Promise<void> | void
+  sourceExists(path: string): Promise<boolean> | boolean
+  /** Remove orphaned/expired output while preserving the active rolling window. */
+  cleanupOutput(directory: string): Promise<void> | void
+}
+
+export interface ChannelPipelineExit {
+  readonly code: number | null
+  readonly signal?: string
+  readonly error?: string
+}
+
+export interface ChannelPipelineHandle {
+  readonly completed: Promise<ChannelPipelineExit>
+  stop(): Promise<void> | void
+}
+
+export interface ChannelPipelineRequest {
+  readonly channelId: string
+  readonly outputDirectory: string
+  readonly playlistPath: string
+  readonly playlistUrl: string
+  readonly position: ChannelTimelinePosition
+  /**
+   * Ordered normalized sources for the persistent feeder/segmenter. A factory
+   * must transition through this sequence without replacing the playlist.
+   */
+  readonly sequence: readonly ChannelTimelinePosition[]
+  readonly profile: ContinuousHlsProfile
+  /** Existing output must be appended to atomically; never replace the URL. */
+  readonly appendToExistingPlaylist: true
+}
+
+export interface ChannelPipelineFactory {
+  start(request: ChannelPipelineRequest): Promise<ChannelPipelineHandle>
+}
+
+export interface ContinuousHlsProfile {
+  readonly videoCodec: 'h264'
+  readonly audioCodec: 'aac'
+  readonly audioChannels: 2
+  readonly segmentSeconds: number
+  readonly playlistWindowSegments: number
+  readonly maximumWidth: number
+  readonly maximumHeight: number
+}
+
+export interface ContinuousChannelWorkerState {
+  readonly channelId: string
+  readonly status: ChannelWorkerStatus
+  readonly viewerCount: number
+  readonly currentScheduleItemId?: string
+  readonly nextScheduleItemId?: string
+  readonly sourceOffsetSeconds?: number
+  readonly timelineRevision?: string
+  readonly startedAt?: string
+  readonly outputUrl: string
+  readonly transcoding: boolean
+  readonly usingFallback: boolean
+  readonly idleSince?: string
+  readonly lastError?: string
+}
+
+export interface ContinuousChannelWorkerManagerOptions {
+  readonly outputRoot: string
+  readonly idleTimeoutMs?: number
+  readonly restartDelayMs?: number
+  readonly clientLeaseTtlMs?: number
+  readonly profile?: Partial<ContinuousHlsProfile>
+}
+
+interface WorkerRecord {
+  state: ContinuousChannelWorkerState
+  pipeline?: ChannelPipelineHandle
+  generation: number
+  startup?: Promise<void>
+  idleTimer?: unknown
+  restartTimer?: unknown
+  anonymousViewers: number
+  leases: Map<string, { expiresAt: number; timer: unknown }>
+}
+
+const SYSTEM_CLOCK: ChannelWorkerClock = {
+  now: () => new Date(),
+  setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
+  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+}
+
+const DEFAULT_PROFILE: ContinuousHlsProfile = {
+  videoCodec: 'h264',
+  audioCodec: 'aac',
+  audioChannels: 2,
+  segmentSeconds: 2,
+  playlistWindowSegments: 20,
+  maximumWidth: 1920,
+  maximumHeight: 1080,
+}
+
+/**
+ * Owns one on-demand output pipeline per channel, regardless of viewer count.
+ * The schedule remains authoritative: every start/restart resolves "now" again.
+ */
+export class ContinuousChannelWorkerManager {
+  private readonly records = new Map<string, WorkerRecord>()
+  private readonly idleTimeoutMs: number
+  private readonly restartDelayMs: number
+  private readonly profile: ContinuousHlsProfile
+  private readonly clientLeaseTtlMs: number
+
+  constructor(
+    private readonly timeline: ChannelTimelineResolver,
+    private readonly pipelines: ChannelPipelineFactory,
+    private readonly files: ChannelWorkerFiles,
+    private readonly options: ContinuousChannelWorkerManagerOptions,
+    private readonly clock: ChannelWorkerClock = SYSTEM_CLOCK
+  ) {
+    this.idleTimeoutMs = options.idleTimeoutMs ?? 90_000
+    this.restartDelayMs = options.restartDelayMs ?? 1_000
+    this.clientLeaseTtlMs = options.clientLeaseTtlMs ?? 45_000
+    if (this.idleTimeoutMs < 60_000 || this.idleTimeoutMs > 120_000) {
+      throw new Error('Channel worker idle timeout must be between 60 and 120 seconds')
+    }
+    if (this.restartDelayMs < 0) {
+      throw new Error('Channel worker restart delay cannot be negative')
+    }
+    if (this.clientLeaseTtlMs < 10_000 || this.clientLeaseTtlMs > 120_000) {
+      throw new Error('Channel client lease TTL must be between 10 and 120 seconds')
+    }
+    this.profile = { ...DEFAULT_PROFILE, ...options.profile }
+  }
+
+  async acquire(channelId: string): Promise<ContinuousChannelWorkerState> {
+    const record = this.record(channelId)
+    record.anonymousViewers += 1
+    record.state = {
+      ...record.state,
+      viewerCount: record.anonymousViewers + record.leases.size,
+      idleSince: undefined,
+    }
+    if (record.idleTimer !== undefined) {
+      this.clock.clearTimeout(record.idleTimer)
+      record.idleTimer = undefined
+    }
+    if (!record.pipeline && record.restartTimer === undefined) {
+      await this.ensureStarted(record)
+    }
+    return this.snapshot(record)
+  }
+
+  release(channelId: string): ContinuousChannelWorkerState | null {
+    const record = this.records.get(channelId)
+    if (!record) return null
+    record.anonymousViewers = Math.max(0, record.anonymousViewers - 1)
+    const viewerCount = record.anonymousViewers + record.leases.size
+    record.state = { ...record.state, viewerCount }
+    this.enterIdleIfUnused(record)
+    return this.snapshot(record)
+  }
+
+  /** Idempotent viewer heartbeat for an HLS URL carrying a stable clientId. */
+  async touch(channelId: string, clientId: string): Promise<ContinuousChannelWorkerState> {
+    if (!/^[a-zA-Z0-9._:-]{1,160}$/.test(clientId)) {
+      throw new Error('Client ID is not a safe viewer lease identifier')
+    }
+    const record = this.record(channelId)
+    const existing = record.leases.get(clientId)
+    if (existing) this.clock.clearTimeout(existing.timer)
+    const expiresAt = this.clock.now().getTime() + this.clientLeaseTtlMs
+    const timer = this.clock.setTimeout(() => this.expireLease(record, clientId, expiresAt), this.clientLeaseTtlMs)
+    record.leases.set(clientId, { expiresAt, timer })
+    record.state = {
+      ...record.state,
+      viewerCount: record.anonymousViewers + record.leases.size,
+      idleSince: undefined,
+    }
+    if (record.idleTimer !== undefined) {
+      this.clock.clearTimeout(record.idleTimer)
+      record.idleTimer = undefined
+    }
+    if (!record.pipeline && record.restartTimer === undefined) {
+      await this.ensureStarted(record)
+    }
+    return this.snapshot(record)
+  }
+
+  leave(channelId: string, clientId: string): ContinuousChannelWorkerState | null {
+    const record = this.records.get(channelId)
+    const lease = record?.leases.get(clientId)
+    if (!record || !lease) return record ? this.snapshot(record) : null
+    this.clock.clearTimeout(lease.timer)
+    record.leases.delete(clientId)
+    record.state = { ...record.state, viewerCount: record.anonymousViewers + record.leases.size }
+    this.enterIdleIfUnused(record)
+    return this.snapshot(record)
+  }
+
+  /** Explicit crash/configuration recovery hook; position is recalculated at restart time. */
+  async restart(channelId: string, reason = 'Pipeline restart requested'): Promise<ContinuousChannelWorkerState | null> {
+    const record = this.records.get(channelId)
+    if (!record) return null
+    record.state = { ...record.state, status: 'transitioning', lastError: reason }
+    await this.stopPipeline(record)
+    if (record.state.viewerCount > 0) await this.ensureStarted(record)
+    return this.snapshot(record)
+  }
+
+  getState(channelId: string): ContinuousChannelWorkerState | null {
+    const record = this.records.get(channelId)
+    return record ? this.snapshot(record) : null
+  }
+
+  listStates(): ContinuousChannelWorkerState[] {
+    return [...this.records.values()]
+      .map((record) => this.snapshot(record))
+      .sort((left, right) => left.channelId.localeCompare(right.channelId))
+  }
+
+  async shutdown(): Promise<void> {
+    await Promise.all([...this.records.values()].map((record) => this.stopRecord(record, 'stopped')))
+  }
+
+  private record(channelId: string): WorkerRecord {
+    if (!/^[a-zA-Z0-9._-]{1,100}$/.test(channelId)) {
+      throw new Error('Channel ID is not safe for a stream path')
+    }
+    const existing = this.records.get(channelId)
+    if (existing) return existing
+    const created: WorkerRecord = {
+      generation: 0,
+      anonymousViewers: 0,
+      leases: new Map(),
+      state: {
+        channelId,
+        status: 'stopped',
+        viewerCount: 0,
+        outputUrl: `/api/v1/channels/${encodeURIComponent(channelId)}/live/index.m3u8`,
+        transcoding: false,
+        usingFallback: false,
+      },
+    }
+    this.records.set(channelId, created)
+    return created
+  }
+
+  private async ensureStarted(record: WorkerRecord): Promise<void> {
+    if (record.pipeline) return
+    if (record.startup) return record.startup
+    record.startup = this.startRecord(record).finally(() => {
+      record.startup = undefined
+    })
+    return record.startup
+  }
+
+  private async startRecord(record: WorkerRecord): Promise<void> {
+    const generation = ++record.generation
+    const startedAt = this.clock.now()
+    record.state = {
+      ...record.state,
+      status: 'starting',
+      startedAt: startedAt.toISOString(),
+      idleSince: undefined,
+      lastError: undefined,
+    }
+    const outputDirectory = `${this.options.outputRoot.replace(/[\\/]+$/, '')}/${record.state.channelId}/live`
+    try {
+      await this.files.prepareOutput(outputDirectory)
+      await this.files.cleanupOutput(outputDirectory)
+      let sequence = this.timeline.resolveWindow
+        ? [...(await this.timeline.resolveWindow(record.state.channelId, startedAt, 3))]
+        : []
+      let position = sequence[0] ?? (await this.timeline.resolve(record.state.channelId, startedAt))
+      if (sequence.length === 0 && position) sequence = [position]
+      let usingFallback = false
+      const availableSequence: ChannelTimelinePosition[] = []
+      for (const candidate of sequence) {
+        if (await this.files.sourceExists(candidate.sourcePath)) {
+          availableSequence.push(candidate)
+          continue
+        }
+        const fallback = (await this.timeline.fallback?.(record.state.channelId, candidate, startedAt)) ?? null
+        usingFallback = true
+        if (fallback && (await this.files.sourceExists(fallback.sourcePath))) {
+          availableSequence.push(fallback)
+          continue
+        }
+        if (availableSequence.length === 0) throw new Error(`Scheduled source is missing: ${candidate.sourcePath}`)
+        break
+      }
+      if (!position && availableSequence.length === 0) {
+        const fallback = (await this.timeline.fallback?.(record.state.channelId, null, startedAt)) ?? null
+        usingFallback = true
+        if (fallback && (await this.files.sourceExists(fallback.sourcePath))) availableSequence.push(fallback)
+      }
+      sequence = availableSequence
+      position = sequence[0] ?? null
+      if (!position) throw new Error('No scheduled source is available')
+      const activePosition: ChannelTimelinePosition = position
+      if (sequence.length === 0) sequence = [activePosition]
+      const pipeline = await this.pipelines.start({
+        channelId: record.state.channelId,
+        outputDirectory,
+        playlistPath: `${outputDirectory}/index.m3u8`,
+        playlistUrl: record.state.outputUrl,
+        position: activePosition,
+        sequence,
+        profile: this.profile,
+        appendToExistingPlaylist: true,
+      })
+      if (generation !== record.generation) {
+        await pipeline.stop()
+        return
+      }
+      record.pipeline = pipeline
+      record.state = {
+        ...record.state,
+        status: record.state.viewerCount > 0 ? 'live' : 'idle',
+        currentScheduleItemId: activePosition.scheduleItemId,
+        nextScheduleItemId: sequence[1]?.scheduleItemId ?? activePosition.nextScheduleItemId,
+        sourceOffsetSeconds: activePosition.sourceOffsetSeconds,
+        timelineRevision: activePosition.timelineRevision,
+        transcoding: true,
+        usingFallback,
+      }
+      void pipeline.completed.then((exit) => this.onPipelineExit(record, generation, exit))
+    } catch (error) {
+      record.state = {
+        ...record.state,
+        status: 'error',
+        transcoding: false,
+        lastError: error instanceof Error ? error.message : String(error),
+      }
+      if (record.state.viewerCount > 0) this.scheduleRestart(record)
+    }
+  }
+
+  private async onPipelineExit(record: WorkerRecord, generation: number, exit: ChannelPipelineExit): Promise<void> {
+    if (generation !== record.generation) return
+    record.pipeline = undefined
+    record.state = {
+      ...record.state,
+      status: exit.code === 0 ? 'transitioning' : 'error',
+      transcoding: false,
+      lastError: exit.code === 0 ? undefined : exit.error ?? `FFmpeg exited with code ${exit.code}`,
+    }
+    await this.files.cleanupOutput(this.outputDirectory(record.state.channelId))
+    if (record.state.viewerCount > 0) {
+      if (exit.code === 0) await this.ensureStarted(record)
+      else this.scheduleRestart(record)
+    }
+  }
+
+  private scheduleRestart(record: WorkerRecord): void {
+    if (record.restartTimer !== undefined) return
+    record.restartTimer = this.clock.setTimeout(() => {
+      record.restartTimer = undefined
+      if (record.state.viewerCount > 0 && !record.pipeline) void this.ensureStarted(record)
+    }, this.restartDelayMs)
+  }
+
+  private async stopRecord(record: WorkerRecord, status: 'stopped'): Promise<void> {
+    if (record.idleTimer !== undefined) this.clock.clearTimeout(record.idleTimer)
+    if (record.restartTimer !== undefined) this.clock.clearTimeout(record.restartTimer)
+    record.idleTimer = undefined
+    record.restartTimer = undefined
+    await this.stopPipeline(record)
+    record.state = { ...record.state, status, transcoding: false, idleSince: undefined }
+    await this.files.cleanupOutput(this.outputDirectory(record.state.channelId))
+  }
+
+  private expireLease(record: WorkerRecord, clientId: string, expectedExpiry: number): void {
+    const lease = record.leases.get(clientId)
+    if (!lease || lease.expiresAt !== expectedExpiry) return
+    record.leases.delete(clientId)
+    record.state = { ...record.state, viewerCount: record.anonymousViewers + record.leases.size }
+    this.enterIdleIfUnused(record)
+  }
+
+  private enterIdleIfUnused(record: WorkerRecord): void {
+    if (record.state.viewerCount !== 0 || !record.pipeline || record.idleTimer !== undefined) return
+    const idleSince = this.clock.now().toISOString()
+    record.state = { ...record.state, status: 'idle', idleSince }
+    record.idleTimer = this.clock.setTimeout(() => {
+      record.idleTimer = undefined
+      void this.stopRecord(record, 'stopped')
+    }, this.idleTimeoutMs)
+  }
+
+  private async stopPipeline(record: WorkerRecord): Promise<void> {
+    record.generation += 1
+    const pipeline = record.pipeline
+    record.pipeline = undefined
+    if (pipeline) await pipeline.stop()
+  }
+
+  private outputDirectory(channelId: string): string {
+    return `${this.options.outputRoot.replace(/[\\/]+$/, '')}/${channelId}/live`
+  }
+
+  private snapshot(record: WorkerRecord): ContinuousChannelWorkerState {
+    return { ...record.state }
+  }
+}

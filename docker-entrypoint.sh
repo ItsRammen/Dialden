@@ -24,7 +24,7 @@ if [ "$toasttv_uid" -eq 0 ] || [ "$toasttv_gid" -eq 0 ]; then
 fi
 
 requested_owner="$toasttv_uid:$toasttv_gid"
-mkdir -p /app/data /app/data/thumbnails /app/data/artwork /app/data/transcode
+mkdir -p /app/data /app/data/thumbnails /app/data/artwork /app/data/transcode /app/data/streams
 
 # Bind-mounted appdata starts empty on a fresh Unraid installation. Seed only
 # missing immutable defaults so upgrades never overwrite user configuration.
@@ -39,7 +39,7 @@ current_owner="$(stat -c '%u:%g' /app/data 2>/dev/null || true)"
 if [ "$current_owner" != "$requested_owner" ]; then
   chown -R "$requested_owner" /app/data
 else
-  chown "$requested_owner" /app/data/thumbnails /app/data/artwork /app/data/transcode
+  chown "$requested_owner" /app/data/thumbnails /app/data/artwork /app/data/transcode /app/data/streams
 fi
 
 exec gosu "$requested_owner" "$@"

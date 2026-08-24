@@ -23,9 +23,16 @@ export function createChannelController({ channels }: ChannelControllerDeps) {
   controller.get('/api/v1/channels', (c) => c.json(channels.list()))
 
   controller.get('/api/v1/channels/:id/now', async (c) => {
-    const result = await channels.getNow(c.req.param('id'))
+    const channelId = c.req.param('id')
+    const result = await channels.getNow(channelId)
     return result
-      ? c.json(result)
+      ? c.json({
+          ...result,
+          liveStream: {
+            mode: 'hls' as const,
+            url: `/api/v1/channels/${encodeURIComponent(channelId)}/live/index.m3u8`,
+          },
+        })
       : c.json({ error: 'Channel not found' }, 404)
   })
 

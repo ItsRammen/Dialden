@@ -79,6 +79,25 @@ describe('MediaDeliveryService', () => {
     expect(file?.lastModified).toBeInstanceOf(Date)
   })
 
+  test('allows a scheduled interlude only through the channel worker resolver', async () => {
+    repository.getById.mockResolvedValue(
+      mediaItem({ mediaType: 'interlude', isInterlude: true })
+    )
+    const service = new MediaDeliveryService(repository, roots)
+
+    expect(await service.resolve(7)).toBeNull()
+    expect(await service.resolveForChannelWorker(7)).not.toBeNull()
+  })
+
+  test('keeps unavailable scheduled media fail-closed for channel workers', async () => {
+    repository.getById.mockResolvedValue(
+      mediaItem({ mediaType: 'interlude', isInterlude: true, rootAvailable: false })
+    )
+    const service = new MediaDeliveryService(repository, roots)
+
+    expect(await service.resolveForChannelWorker(7)).toBeNull()
+  })
+
   test.each([
     '../outside/secret.mp4',
     'Bluey/../../outside/secret.mp4',

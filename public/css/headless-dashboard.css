@@ -328,6 +328,29 @@
   font-size: 0.9rem;
 }
 
+.headless-worker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.86rem;
+}
+
+.headless-worker strong {
+  color: var(--text-primary);
+  text-transform: capitalize;
+}
+
+.headless-worker-error,
+.headless-worker-error strong {
+  color: var(--danger, #ff8091);
+}
+
+.headless-worker > span {
+  flex-basis: 100%;
+}
+
 .headless-clients {
   padding: 1rem;
   background: var(--headless-panel, rgba(255, 255, 255, 0.04));

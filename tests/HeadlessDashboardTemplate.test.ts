@@ -136,6 +136,29 @@ describe('headless dashboard template', () => {
     expect(markup).toContain('&lt;img src=x onerror=alert(1)&gt;')
   })
 
+  test('shows channel worker state separately from the logical on-air schedule', () => {
+    const base = dashboard()
+    const markup = renderHeadlessDashboardContent(
+      dashboard({
+        channels: [
+          {
+            ...base.channels[0]!,
+            viewerCount: 1,
+            worker: {
+              status: 'live',
+              transcoding: true,
+              usingFallback: false,
+            },
+          },
+        ],
+      })
+    )
+
+    expect(markup).toContain('Channel worker:')
+    expect(markup).toContain('H.264/AAC transcoding')
+    expect(markup).toContain('1 active viewer')
+  })
+
   test('does not present go-on-air as a fix for an empty schedule', () => {
     const markup = renderHeadlessDashboardContent(
       dashboard({

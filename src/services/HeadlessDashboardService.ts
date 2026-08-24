@@ -10,6 +10,7 @@ import type { ChannelService, ScheduledProgram } from './ChannelService'
 import type { MediaIndexer } from './MediaIndexer'
 import type { MetadataEnrichmentService } from './metadata/MetadataEnrichmentService'
 import type { ClientPresenceService } from './ClientPresenceService'
+import type { ContinuousChannelWorkerManager } from './ContinuousChannelWorkerManager'
 
 export class HeadlessDashboardService {
   constructor(
@@ -20,7 +21,8 @@ export class HeadlessDashboardService {
     private readonly metadataConfig:
       | PublicMetadataConfig
       | (() => PublicMetadataConfig),
-    private readonly presence?: Pick<ClientPresenceService, 'getSnapshot'>
+    private readonly presence?: Pick<ClientPresenceService, 'getSnapshot'>,
+    private readonly workers?: Pick<ContinuousChannelWorkerManager, 'getState'>
   ) {}
 
   async build(updateAvailable?: boolean): Promise<HeadlessDashboardViewModel> {
@@ -114,6 +116,15 @@ export class HeadlessDashboardService {
           actionLabel: 'Configure channel',
         })
       }
+      const worker = this.workers?.getState(channel.id)
+      if (worker?.status === 'error') {
+        warnings.push({
+          severity: 'critical',
+          message: `${channel.name} channel worker failed: ${worker.lastError ?? 'FFmpeg is unavailable'}`,
+          href: `/channels?edit=${encodeURIComponent(channel.id)}#editor`,
+          actionLabel: 'Inspect channel',
+        })
+      }
     }
     if (summary.metadataReviewCollections > 0) {
       warnings.push({
@@ -184,7 +195,12 @@ export class HeadlessDashboardService {
         uptimeLabel: formatUptime(process.uptime()),
       },
       channels: channelStates.map(({ channel, now }) =>
-        channelModel(channel, now, presence?.viewersByChannel[channel.id])
+        channelModel(
+          channel,
+          now,
+          presence?.viewersByChannel[channel.id],
+          this.workers?.getState(channel.id)
+        )
       ),
       library: {
         tvCollections: summary.tvCollections,
@@ -248,7 +264,8 @@ export class HeadlessDashboardService {
 function channelModel(
   channel: ReturnType<ChannelService['list']>['channels'][number],
   now: Awaited<ReturnType<ChannelService['getNow']>>,
-  viewerCount?: number
+  viewerCount?: number,
+  worker?: ReturnType<ContinuousChannelWorkerManager['getState']>
 ): HeadlessChannelViewModel {
   const program = now?.program ?? null
   const next = now?.next ?? null
@@ -274,7 +291,19 @@ function channelModel(
       channel.onAir && (program || next)
         ? `/channels/${encodeURIComponent(channel.id)}/off-air`
         : undefined,
-    viewerCount: viewerCount ?? 0,
+    viewerCount: Math.max(viewerCount ?? 0, worker?.viewerCount ?? 0),
+    worker: worker
+      ? {
+          status: worker.status,
+          transcoding: worker.transcoding,
+          usingFallback: worker.usingFallback,
+          ...(worker.lastError ? { errorMessage: worker.lastError } : {}),
+        }
+      : {
+          status: 'stopped',
+          transcoding: false,
+          usingFallback: false,
+        },
   }
 }
 

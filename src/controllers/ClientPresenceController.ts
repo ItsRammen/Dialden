@@ -3,6 +3,7 @@ import { cors } from 'hono/cors'
 import {
   ClientPresenceValidationError,
   type ClientHeartbeatInput,
+  type ClientPresenceRecord,
   type ClientPresenceService,
 } from '../services/ClientPresenceService'
 
@@ -16,6 +17,10 @@ interface ClientPresenceControllerDeps {
     ClientPresenceService,
     'recordHeartbeat' | 'getSnapshot' | 'heartbeatIntervalMs'
   >
+  readonly onPresenceChanged?: (
+    current: ClientPresenceRecord,
+    previous: ClientPresenceRecord | undefined
+  ) => Promise<void> | void
 }
 
 /**
@@ -66,7 +71,12 @@ export function createClientPresenceController(
     }
 
     try {
+      const clientId = (body as ClientHeartbeatInput)?.clientId
+      const previous = deps.presence
+        .getSnapshot()
+        .clients.find((client) => client.clientId === clientId)
       const presence = deps.presence.recordHeartbeat(body as ClientHeartbeatInput)
+      await deps.onPresenceChanged?.(presence, previous)
       return c.json({
         ok: true,
         clientId: presence.clientId,

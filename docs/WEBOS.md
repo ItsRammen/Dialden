@@ -37,7 +37,7 @@ npm run webos:package
 The package is written to:
 
 ```text
-dist/webos/com.itsrammen.app.toasttv_0.1.1_all.ipk
+dist/webos/com.itsrammen.app.toasttv_0.2.0_all.ipk
 ```
 
 LG documents the CLI installation and packaging commands in its
@@ -82,7 +82,7 @@ npm install --global @webos-tools/cli@3.2.5
 7. Install and launch ToastTV:
 
    ```powershell
-   ares-install --device toasttv-lg dist/webos/com.itsrammen.app.toasttv_0.1.1_all.ipk
+   ares-install --device toasttv-lg dist/webos/com.itsrammen.app.toasttv_0.2.0_all.ipk
    ares-launch --device toasttv-lg com.itsrammen.app.toasttv
    ```
 
@@ -94,16 +94,15 @@ contains the full device setup and renewal workflow.
 
 ## Playback compatibility
 
-This first client streams the original file directly and does not transcode or
-fall back to HLS. A file being indexed by ToastTV does not guarantee that every
-LG model can decode its container, video codec, and audio codec. MP4 containing
-H.264 video and AAC audio is the conservative first format to test; MKV, AVI,
-MOV, WebM, HEVC, and less common audio formats vary by TV generation.
+The client stays on one per-channel HLS URL while the server schedules episodes
+and interludes. ToastTV normalizes the channel output to 1080p H.264 video and
+stereo AAC audio, so mixed source containers and codecs do not force the TV to
+reload at each boundary. One FFmpeg worker is shared by all viewers of a channel
+and starts only when a viewer tunes in.
 
-If the guide works but a program will not play, first test that source in the
-`/tv/` browser preview, then inspect the file's codecs and try a compatible MP4.
-The server's Range endpoint supports seeking, but it cannot make an unsupported
-codec playable. LG publishes generation-specific
+If HLS cannot start, the client falls back to the current program's original
+direct-file URL. Direct fallback compatibility still varies by LG generation;
+H.264/AAC MP4 is the conservative format to test. LG publishes generation-specific
 [audio/video format tables](https://webostv.developer.lge.com/develop/specifications/video-audio-50)
 and its [streaming protocol matrix](https://webostv.developer.lge.com/develop/specifications/streaming-protocol-drm).
 
@@ -113,7 +112,8 @@ and its [streaming protocol matrix](https://webostv.developer.lge.com/develop/sp
   hostname, and verify `/api/v1/health` from another device on the same network.
 - **Empty channel:** wait for the background scan, then confirm eligible media
   appears under **Kids 7** in the administration UI.
-- **Guide loads but video fails:** this is usually a TV codec/container limit in
-  the direct-play MVP; test a known H.264/AAC MP4.
+- **Guide loads but video fails:** inspect the Dashboard's separate channel
+  worker state and container logs for FFmpeg errors. A direct fallback failure
+  can still indicate an unsupported source codec/container.
 - **Install cannot connect:** reopen Developer Mode, enable Key Server again,
   retrieve the key, and check that the Developer Mode session has not expired.

@@ -38,10 +38,16 @@ import { createMetadataSettingsController } from './controllers/MetadataSettings
 import { ClientPresenceService } from './services/ClientPresenceService'
 import { createClientPresenceController } from './controllers/ClientPresenceController'
 import { mutationOriginGuard } from './middleware/mutationOriginGuard'
+import { ContinuousChannelWorkerManager } from './services/ContinuousChannelWorkerManager'
+import { FfmpegContinuousHlsPipelineFactory } from './services/FfmpegContinuousHlsPipelineFactory'
+import { BunChannelWorkerFiles } from './services/BunChannelWorkerFiles'
+import { ChannelTimelineResolverService } from './services/ChannelTimelineResolverService'
+import { createChannelStreamController } from './controllers/ChannelStreamController'
 
 export interface ServerResult {
   app: Hono
   playbackService: PlaybackService
+  channelWorkers: ContinuousChannelWorkerManager
 }
 
 /** Allow the credentialless packaged TV app to call only the read-only v1 API. */
@@ -64,7 +70,7 @@ export function applyClientApiCors(app: Hono): void {
   )
 }
 
-export function createServer(daemon: ToastTVDaemon): ServerResult {
+export async function createServer(daemon: ToastTVDaemon): Promise<ServerResult> {
   const app = new Hono()
   app.use('*', mutationOriginGuard)
 
@@ -74,6 +80,7 @@ export function createServer(daemon: ToastTVDaemon): ServerResult {
   const updateService = daemon.getUpdateService()
   const thumbnailClient = new ThumbnailClient()
   const dashboardEventService = new DashboardEventService()
+  const appConfig = await configService.get()
   const channelService = new ChannelService(
     daemon.getRepository(),
     daemon.getLibraryPolicy(),
@@ -81,7 +88,8 @@ export function createServer(daemon: ToastTVDaemon): ServerResult {
     new ChannelConfigurationStore(
       getDataPath('channels.json'),
       daemon.getLibraryPolicy()?.channels ?? []
-    )
+    ),
+    appConfig.interlude
   )
   const mediaDeliveryService = new MediaDeliveryService(
     daemon.getRepository(),
@@ -96,13 +104,30 @@ export function createServer(daemon: ToastTVDaemon): ServerResult {
     join(getDataDirectory(), 'artwork')
   )
   const clientPresenceService = new ClientPresenceService()
+  const channelTimeline = new ChannelTimelineResolverService(
+    channelService,
+    mediaDeliveryService,
+    daemon.getRepository(),
+    () => configService.get()
+  )
+  const channelWorkers = new ContinuousChannelWorkerManager(
+    channelTimeline,
+    new FfmpegContinuousHlsPipelineFactory(),
+    new BunChannelWorkerFiles(),
+    {
+      outputRoot: getDataPath('streams'),
+      clientLeaseTtlMs: 15_000,
+      idleTimeoutMs: 60_000,
+    }
+  )
   const headlessDashboardService = new HeadlessDashboardService(
     daemon.getRepository(),
     channelService,
     indexer,
     metadataService,
     () => daemon.getPublicMetadataConfig(),
-    clientPresenceService
+    clientPresenceService,
+    channelWorkers
   )
 
   indexer.onScanEvent((event) => dashboardEventService.broadcast(event))
@@ -153,6 +178,20 @@ export function createServer(daemon: ToastTVDaemon): ServerResult {
     media: mediaService,
     hardware: daemon.getHardwareService(),
     update: updateService,
+    onInterludeUpdated: async (policy) => {
+      channelService.setInterludePolicy(policy)
+      await Promise.all(
+        channelWorkers
+          .listStates()
+          .filter((state) => state.viewerCount > 0)
+          .map((state) =>
+            channelWorkers.restart(
+              state.channelId,
+              'Interlude schedule configuration changed'
+            )
+          )
+      )
+    },
   })
 
   const dashboardController = createDashboardController({
@@ -170,6 +209,11 @@ export function createServer(daemon: ToastTVDaemon): ServerResult {
 
   const mediaController = createMediaController({
     media: mediaDeliveryService,
+  })
+  const channelStreamController = createChannelStreamController({
+    channels: channelService,
+    workers: channelWorkers,
+    outputRoot: getDataPath('streams'),
   })
 
   const collectionLibraryController = createCollectionLibraryController({
@@ -196,6 +240,26 @@ export function createServer(daemon: ToastTVDaemon): ServerResult {
   )
   const clientPresenceController = createClientPresenceController({
     presence: clientPresenceService,
+    onPresenceChanged: async (current, previous) => {
+      const changedChannel = previous?.channelId !== current.channelId
+      const usesChannelWorker =
+        current.playbackMode === 'transcode' ||
+        current.playbackMode === 'buffering'
+      if (
+        previous?.channelId &&
+        (changedChannel || !usesChannelWorker)
+      ) {
+        channelWorkers.leave(previous.channelId, current.clientId)
+      }
+      const configuredChannel = current.channelId
+        ? channelService
+            .list()
+            .channels.some((channel) => channel.id === current.channelId)
+        : false
+      if (current.channelId && usesChannelWorker && configuredChannel) {
+        await channelWorkers.touch(current.channelId, current.clientId)
+      }
+    },
   })
 
   const eventsController = new EventsController(
@@ -212,6 +276,7 @@ export function createServer(daemon: ToastTVDaemon): ServerResult {
   app.route('/', dashboardController)
   app.route('/', healthController)
   app.route('/', channelController)
+  app.route('/', channelStreamController)
   app.route('/', mediaController)
   app.route('/', collectionLibraryController)
   app.route('/', collectionLibraryPageController)
@@ -235,5 +300,5 @@ export function createServer(daemon: ToastTVDaemon): ServerResult {
     return c.html(renderDashboard(updateInfo?.updateAvailable))
   })
 
-  return { app, playbackService }
+  return { app, playbackService, channelWorkers }
 }

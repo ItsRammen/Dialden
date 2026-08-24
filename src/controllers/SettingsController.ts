@@ -12,12 +12,16 @@ import { renderSettings } from '../templates/settings'
 import type { MediaService } from '../services/MediaService'
 import type { IHardwareDetectionService } from '../services/HardwareDetectionService'
 import type { UpdateService } from '../services/UpdateService'
+import type { ChannelInterludePolicy } from '../services/ChannelService'
 
 interface SettingsControllerDeps {
   config: ConfigService
   media: MediaService
   hardware?: IHardwareDetectionService
   update: UpdateService
+  onInterludeUpdated?: (
+    policy: ChannelInterludePolicy
+  ) => Promise<void> | void
 }
 
 export function createSettingsController(deps: SettingsControllerDeps) {
@@ -92,6 +96,10 @@ export function createSettingsController(deps: SettingsControllerDeps) {
     }
 
     await config.update(partial)
+    await deps.onInterludeUpdated?.({
+      enabled: partial.interlude?.enabled === true,
+      frequency: partial.interlude?.frequency ?? 1,
+    })
     return c.html(html`<div class="toast success">Settings saved</div>`)
   })
 

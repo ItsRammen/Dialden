@@ -51,6 +51,30 @@ describe('ChannelController', () => {
     expect(channels.getGuide).not.toHaveBeenCalled()
   })
 
+  test('publishes one stable channel HLS URL independently of the current item', async () => {
+    const channels = mock<ChannelService>()
+    channels.getNow.mockResolvedValue({
+      channelId: 'kids-club',
+      serverTime: '2026-08-24T12:00:00.000Z',
+      serverTimeMs: 1787572800000,
+      timezone: 'UTC',
+      timelineRevision: 'revision-1',
+      program: null,
+      next: null,
+    })
+    const app = new Hono().route('/', createChannelController({ channels }))
+
+    const response = await app.request('/api/v1/channels/kids-club/now')
+    const payload = (await response.json()) as {
+      liveStream: { mode: string; url: string }
+    }
+
+    expect(payload.liveStream).toEqual({
+      mode: 'hls',
+      url: '/api/v1/channels/kids-club/live/index.m3u8',
+    })
+  })
+
   test('validates and creates channels through the guarded admin surface', async () => {
     const channels = mock<ChannelService>()
     channels.create.mockImplementation((channel) => channel)

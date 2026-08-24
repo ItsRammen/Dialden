@@ -37,6 +37,12 @@ export interface HeadlessChannelViewModel {
   readonly onAirAction?: string
   readonly offAirAction?: string
   readonly viewerCount?: number
+  readonly worker?: {
+    readonly status: 'starting' | 'live' | 'transitioning' | 'idle' | 'error' | 'stopped'
+    readonly transcoding: boolean
+    readonly usingFallback: boolean
+    readonly errorMessage?: string
+  }
 }
 
 export interface HeadlessClientViewModel {
@@ -231,6 +237,16 @@ function renderChannel(channel: HeadlessChannelViewModel): string {
         channel.viewerCount === undefined
           ? ''
           : `<p class="headless-viewers">${count(channel.viewerCount)} active viewer${channel.viewerCount === 1 ? '' : 's'}</p>`
+      }
+      ${
+        channel.worker
+          ? `<p class="headless-worker headless-worker-${channel.worker.status}">
+              Channel worker: <strong>${escapeHtml(channel.worker.status)}</strong>
+              ${channel.worker.transcoding ? ' · H.264/AAC transcoding' : ' · no active encoder'}
+              ${channel.worker.usingFallback ? ' · emergency fallback' : ''}
+              ${channel.worker.errorMessage ? `<span>${escapeHtml(channel.worker.errorMessage)}</span>` : ''}
+            </p>`
+          : ''
       }
       <div class="headless-channel-actions">
         ${

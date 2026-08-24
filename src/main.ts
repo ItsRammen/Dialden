@@ -7,6 +7,7 @@
 import { ToastTVDaemon } from './daemon'
 import { createServer } from './server'
 import { loadRuntimeConfig } from './config/runtime'
+import type { ContinuousChannelWorkerManager } from './services/ContinuousChannelWorkerManager'
 
 async function main(): Promise<void> {
   const runtime = loadRuntimeConfig()
@@ -19,17 +20,23 @@ async function main(): Promise<void> {
     localPlaybackEnabled: !runtime.headless,
     mediaReadOnly: runtime.mediaReadOnly,
   })
+  let channelWorkers: ContinuousChannelWorkerManager | undefined
+
+  const shutdown = async (): Promise<void> => {
+    await channelWorkers?.shutdown()
+    await daemon.stop()
+  }
 
   // Graceful shutdown
   process.on('SIGTERM', async () => {
     console.log('Received SIGTERM, shutting down...')
-    await daemon.stop()
+    await shutdown()
     process.exit(0)
   })
 
   process.on('SIGINT', async () => {
     console.log('Received SIGINT, shutting down...')
-    await daemon.stop()
+    await shutdown()
     process.exit(0)
   })
 
@@ -42,7 +49,9 @@ async function main(): Promise<void> {
     await daemon.start()
 
     // 3. Create web server (requires services from daemon.start())
-    const { app, playbackService } = createServer(daemon)
+    const server = await createServer(daemon)
+    const { app, playbackService } = server
+    channelWorkers = server.channelWorkers
 
     console.log(`🌐 Admin UI: http://localhost:${runtime.port}`)
 
@@ -60,7 +69,7 @@ async function main(): Promise<void> {
     }
   } catch (error) {
     console.error('Fatal error:', error)
-    await daemon.stop()
+    await shutdown()
     process.exit(1)
   }
 }

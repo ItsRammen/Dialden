@@ -245,6 +245,8 @@ The current schedule endpoints are:
 GET /api/v1/channels
 GET /api/v1/channels/:id/now
 GET /api/v1/channels/:id/guide?hours=8
+GET|HEAD /api/v1/channels/:id/live/index.m3u8?clientId=:clientId
+GET|HEAD /api/v1/channels/:id/live/segment-:sequence.ts
 GET|HEAD /api/v1/media/:id/stream
 GET|POST /api/admin/v1/channels
 POST /api/admin/v1/channels/auto-build/preview
@@ -283,10 +285,17 @@ refresh after the network/studio schema migration, preserving locked matches
 and parent overrides. Edits and generated stations otherwise take effect
 without restarting the server.
 Timelines are deterministic across restarts and return the current media ID,
-start/end timestamps, live offset, and a server-approved playback URL. The
+start/end timestamps, live offset, item type, source range, transitions, a
+direct fallback URL, and one stable channel HLS URL. Enabled interludes are
+scheduled at their measured durations between whole programs according to the
+saved frequency setting, so **Now** and **Next** include bumpers honestly. The
 guide includes `requestedEnd`, `coverageEnd`, and `truncated` so an extreme
 short-clip schedule cannot silently exceed the bounded response size. The stream
-endpoint supports HTTP Range requests for seeking. **Go off air** only
+worker starts on the first viewer, is shared by every viewer on that channel,
+normalizes mixed inputs to H.264/AAC, and stops after its viewer leases expire
+and the configured warm-idle period completes. The dashboard reports logical
+on-air state and physical FFmpeg worker state separately. Direct-file fallback
+still supports HTTP Range requests for seeking. **Go off air** only
 pauses a valid schedule. An enabled channel with no eligible items is shown as
 **No programming** and links to its configuration instead of offering a false
 "Go on air" remedy.
@@ -314,9 +323,9 @@ read-only, and runs the server as Unraid's normal `PUID=99` / `PGID=100`.
 Override those advanced fields if your share permissions use another identity.
 Stop the container while an appdata backup copies the SQLite database.
 
-Docker deliberately disables legacy local playback controls. The webOS MVP uses
-direct play only; transcoding and HLS fallback remain staged in
-[`docs/DOCKER-WEBOS-MIGRATION.md`](./docs/DOCKER-WEBOS-MIGRATION.md). See
+Docker deliberately disables legacy local playback controls. The webOS client
+now stays attached to the channel's stable HLS URL across episode and bumper
+boundaries, while retaining direct-file playback as an error fallback. See
 [`docs/WEBOS.md`](./docs/WEBOS.md) for browser preview, packaging, sideloading,
 and codec-compatibility guidance.
 
