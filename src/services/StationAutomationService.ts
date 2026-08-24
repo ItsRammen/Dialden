@@ -7,6 +7,7 @@ export type StationPresetId =
   | 'family-animation'
   | 'nature-documentaries'
   | 'nickelodeon-style'
+  | 'nick-jr-style'
   | 'movie-night'
   | 'custom'
 
@@ -119,11 +120,10 @@ const MAX_COLLECTIONS = 5_000
 
 const NICK_NETWORKS = new Set([
   'nickelodeon',
-  'nick jr',
-  'nick jr.',
   'nick at nite',
   'nicktoons',
 ])
+const NICK_JR_NETWORKS = new Set(['nick jr', 'nick jr.'])
 const NICK_STUDIO_TERMS = ['nickelodeon']
 const NATURE_DOCUMENTARY_NETWORK_TERMS = [
   'bbc',
@@ -148,25 +148,36 @@ const NICK_TITLES = new Set(
   [
     'aaahh real monsters',
     'avatar the last airbender',
-    'blues clues',
-    'blues clues and you',
-    'bubble guppies',
     'catdog',
     'danny phantom',
-    'dora the explorer',
     'hey arnold',
     'invader zim',
-    'paw patrol',
     'rockos modern life',
     'rocket power',
     'rugrats',
     'spongebob squarepants',
-    'team umizoomi',
     'teenage mutant ninja turtles',
     'the fairly oddparents',
     'the legend of korra',
     'the loud house',
     'the wild thornberrys',
+  ].map(normalizeTitle)
+)
+const NICK_JR_TITLES = new Set(
+  [
+    'blaze and the monster machines',
+    'blues clues',
+    'blues clues and you',
+    'bubble guppies',
+    'dora',
+    'dora the explorer',
+    'max and ruby',
+    'ni hao kai lan',
+    'paw patrol',
+    'shimmer and shine',
+    'team umizoomi',
+    'the backyardigans',
+    'wonder pets',
   ].map(normalizeTitle)
 )
 
@@ -286,11 +297,19 @@ const presetDefinitions: readonly PresetDefinition[] = [
   },
   {
     id: 'nickelodeon-style',
-    name: 'Nickelodeon-style mix',
+    name: 'Nick-style mix',
     description:
-      'Parent-allowed titles matched by TMDB network/studio metadata or a recognized-title list.',
+      'Parent-allowed Nickelodeon and Nicktoons titles, excluding titles identified as Nick Jr. preschool programming.',
     unofficial: true,
     matches: matchesNickelodeonStyle,
+  },
+  {
+    id: 'nick-jr-style',
+    name: 'Nick Jr.-style preschool mix',
+    description:
+      'Parent-allowed preschool titles matched by Nick Jr. network metadata or a conservative recognized-title list.',
+    unofficial: true,
+    matches: matchesNickJrStyle,
   },
   {
     id: 'nature-documentaries',
@@ -308,7 +327,9 @@ const presetDefinitions: readonly PresetDefinition[] = [
 ]
 
 function matchesNickelodeonStyle(collection: StationCollectionOption): boolean {
-  if (collection.libraryKind !== 'tv') return false
+  if (collection.libraryKind !== 'tv' || matchesNickJrStyle(collection)) {
+    return false
+  }
   if (
     collection.networks.some((network) => NICK_NETWORKS.has(normalize(network)))
   ) {
@@ -322,6 +343,18 @@ function matchesNickelodeonStyle(collection: StationCollectionOption): boolean {
     return true
   }
   return NICK_TITLES.has(normalizeTitle(collection.displayTitle))
+}
+
+function matchesNickJrStyle(collection: StationCollectionOption): boolean {
+  if (collection.libraryKind !== 'tv') return false
+  if (
+    collection.networks.some((network) =>
+      NICK_JR_NETWORKS.has(normalize(network))
+    )
+  ) {
+    return true
+  }
+  return NICK_JR_TITLES.has(normalizeTitle(collection.displayTitle))
 }
 
 function matchesNatureDocumentary(

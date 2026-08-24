@@ -61,18 +61,18 @@ describe('LG webOS channel playback policy', () => {
     )
   })
 
-  test('preserves direct offset semantics and falls back after a live stream failure', () => {
+  test('keeps the normalized HLS contract while its worker warms up', () => {
     const response = now('kids', 'episode-a', 420_000)
     const failedUrl = 'http://toasttv:1993/api/v1/channels/kids/live/index.m3u8'
-    const fallback = policy.choose(response, 'http://toasttv:1993', failedUrl)
+    const source = policy.choose(response, 'http://toasttv:1993', failedUrl)
 
     expect(response.program.offsetMs).toBe(420_000)
     expect(response.program.playback.sourceOffsetAtPlaybackZeroMs).toBe(120_000)
     expect(policy.expectedDirectPosition(response.program, 5_000)).toBe(305)
-    expect(fallback).toEqual({
-      mode: 'direct',
-      url: 'http://toasttv:1993/api/v1/media/episode-a',
-      seekToProgramOffset: true,
+    expect(source).toEqual({
+      mode: 'channel-hls',
+      url: 'http://toasttv:1993/api/v1/channels/kids/live/index.m3u8',
+      seekToProgramOffset: false,
     })
   })
 

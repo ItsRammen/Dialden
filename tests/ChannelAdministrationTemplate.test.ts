@@ -244,5 +244,62 @@ describe('channel administration template', () => {
     expect(markup).toContain('readonly')
     expect(markup).toContain('name="confirmReplace" value="yes" required')
     expect(markup).toContain('name="action" value="update"')
+    expect(markup).toContain('Edit lineup')
+  })
+
+  test('loads an existing generated lineup as editable checked collections', () => {
+    const markup = renderChannelAdministration(
+      {
+        channels: [
+          {
+            id: 'nick-jr',
+            name: 'Nick Jr. Mix',
+            enabled: true,
+            timezone: 'UTC',
+            slots: [],
+          },
+        ],
+        manuallyOffAir: [],
+        programmingGroups: [],
+        configurationError: null,
+      },
+      {
+        automationOpen: true,
+        automationTargetId: 'nick-jr',
+        automationDraft: {
+          id: 'nick-jr',
+          name: 'Nick Jr. Mix',
+          timezone: 'UTC',
+          preset: 'custom',
+          collectionIds: [4],
+        },
+        automation: {
+          collections: [
+            {
+              id: 4,
+              rootId: 'tv',
+              identityKey: 'paw-patrol',
+              collectionTitle: 'PAW Patrol',
+              displayTitle: 'PAW Patrol',
+              libraryKind: 'tv',
+              genres: ['Animation'],
+              networks: ['Nickelodeon'],
+              studios: [],
+              eligibleFiles: 10,
+            },
+          ],
+          genres: [],
+          networks: [],
+          studios: [],
+          presets: [],
+          truncated: false,
+        },
+      }
+    )
+
+    expect(markup).toContain('Current lineup loaded:')
+    expect(markup).toContain('1 selected collection')
+    expect(markup).toContain('name="preset" value="custom" checked')
+    expect(markup).toContain('name="collectionIds" value="4" checked')
   })
 })

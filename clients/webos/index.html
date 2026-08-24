@@ -76,7 +76,13 @@
 
       <section id="playerScreen" class="screen player-screen" aria-hidden="true">
         <video id="video" class="player-video" preload="auto" playsinline></video>
-        <div id="playerBackdrop" class="player-backdrop"></div>
+        <div id="playerBackdrop" class="player-backdrop">
+          <div id="tuningPanel" class="tuning-panel" role="status" aria-live="polite">
+            <span class="tuning-spinner" aria-hidden="true"></span>
+            <p>Tuning channel</p>
+            <small>Preparing the live broadcast…</small>
+          </div>
+        </div>
         <div class="player-vignette"></div>
 
         <header id="playerHeader" class="player-header player-chrome">
@@ -120,7 +126,7 @@
         <footer id="playerHints" class="player-hints player-chrome">
           <span><b class="remote-key remote-key--arrow">← →</b> change channel</span>
           <span><b class="remote-key remote-key--arrow">↑</b> guide</span>
-          <span><b class="remote-key">OK</b> now &amp; next</span>
+          <span><b class="remote-key">OK</b> show time bar</span>
           <span><b class="remote-key">BACK</b> channels</span>
         </footer>
       </section>

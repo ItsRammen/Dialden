@@ -40,6 +40,7 @@ import { createClientPresenceController } from './controllers/ClientPresenceCont
 import { mutationOriginGuard } from './middleware/mutationOriginGuard'
 import { ContinuousChannelWorkerManager } from './services/ContinuousChannelWorkerManager'
 import { FfmpegContinuousHlsPipelineFactory } from './services/FfmpegContinuousHlsPipelineFactory'
+import { ChannelLogoStore } from './services/ChannelLogoStore'
 import { BunChannelWorkerFiles } from './services/BunChannelWorkerFiles'
 import { ChannelTimelineResolverService } from './services/ChannelTimelineResolverService'
 import { createChannelStreamController } from './controllers/ChannelStreamController'
@@ -104,11 +105,13 @@ export async function createServer(daemon: ToastTVDaemon): Promise<ServerResult>
     join(getDataDirectory(), 'artwork')
   )
   const clientPresenceService = new ClientPresenceService()
+  const channelLogos = new ChannelLogoStore(getDataPath('channel-logos'))
   const channelTimeline = new ChannelTimelineResolverService(
     channelService,
     mediaDeliveryService,
     daemon.getRepository(),
-    () => configService.get()
+    () => configService.get(),
+    channelLogos
   )
   const channelWorkers = new ContinuousChannelWorkerManager(
     channelTimeline,
@@ -192,6 +195,30 @@ export async function createServer(daemon: ToastTVDaemon): Promise<ServerResult>
           )
       )
     },
+    onLogoUpdated: async () => {
+      const inherited = new Set(
+        channelService
+          .administrationSnapshot()
+          .channels.filter(
+            (channel) =>
+              !channel.branding || channel.branding.mode === 'inherit'
+          )
+          .map((channel) => channel.id)
+      )
+      await Promise.all(
+        channelWorkers
+          .listStates()
+          .filter(
+            (state) => state.viewerCount > 0 && inherited.has(state.channelId)
+          )
+          .map((state) =>
+            channelWorkers.restart(
+              state.channelId,
+              'Default channel branding changed'
+            )
+          )
+      )
+    },
   })
 
   const dashboardController = createDashboardController({
@@ -205,6 +232,13 @@ export async function createServer(daemon: ToastTVDaemon): Promise<ServerResult>
 
   const channelController = createChannelController({
     channels: channelService,
+    logos: channelLogos,
+    onBrandingUpdated: async (channelId) => {
+      await channelWorkers.restart(
+        channelId,
+        'Channel branding configuration changed'
+      )
+    },
   })
 
   const mediaController = createMediaController({

@@ -75,4 +75,69 @@ describe('ChannelConfigurationStore', () => {
       rmSync(directory, { recursive: true, force: true })
     }
   })
+
+  test('persists validated per-channel branding while old channels still inherit', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'toasttv-channel-branding-'))
+    try {
+      const store = new ChannelConfigurationStore(join(directory, 'channels.json'))
+      const branded = {
+        ...channel,
+        branding: {
+          mode: 'custom' as const,
+          opacity: 210,
+          position: 2 as const,
+          x: 24,
+          y: 24,
+          sizePercent: 12,
+        },
+      }
+      store.save({ channels: [branded], manuallyOffAir: [] })
+      expect(store.load().channels[0]?.branding).toEqual(branded.branding)
+
+      expect(() =>
+        store.save({
+          channels: [
+            {
+              ...branded,
+              branding: { ...branded.branding, sizePercent: 80 },
+            },
+          ],
+          manuallyOffAir: [],
+        })
+      ).toThrow('branding size')
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  test('validates a scheduled custom logo on a channel time block', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'toasttv-scheduled-branding-'))
+    try {
+      const store = new ChannelConfigurationStore(join(directory, 'channels.json'))
+      const scheduled = {
+        ...channel,
+        slots: channel.slots.map((slot) => ({
+          ...slot,
+          branding: { mode: 'custom' as const, logoId: 'adult-swim' },
+        })),
+      }
+      store.save({ channels: [scheduled], manuallyOffAir: [] })
+      expect(store.load().channels[0]?.slots[0]?.branding).toEqual({
+        mode: 'custom',
+        logoId: 'adult-swim',
+      })
+      expect(() => store.save({
+        channels: [{
+          ...scheduled,
+          slots: scheduled.slots.map((slot) => ({
+            ...slot,
+            branding: { mode: 'custom' as const, logoId: '../escape' },
+          })),
+        }],
+        manuallyOffAir: [],
+      })).toThrow('safe logo ID')
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
 })

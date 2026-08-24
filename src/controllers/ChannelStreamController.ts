@@ -1,13 +1,16 @@
 import { join } from 'node:path'
 import { Hono } from 'hono'
+import { cors } from 'hono/cors'
 import type { ChannelService } from '../services/ChannelService'
 import type { ContinuousChannelWorkerManager } from '../services/ContinuousChannelWorkerManager'
 
 interface ChannelStreamControllerDeps {
   channels: Pick<ChannelService, 'list'>
-  workers: Pick<ContinuousChannelWorkerManager, 'touch' | 'getState'>
+  workers: Pick<ContinuousChannelWorkerManager, 'touch' | 'warm' | 'getState'>
   outputRoot: string
 }
+
+export const CLIENT_CHANNEL_WARM_ROUTE = '/api/client/v1/channels/warm'
 
 const SEGMENT_NAME = /^segment-\d{13}\.ts$/
 
@@ -18,6 +21,60 @@ export function createChannelStreamController({
   outputRoot,
 }: ChannelStreamControllerDeps) {
   const controller = new Hono()
+
+  controller.use(
+    CLIENT_CHANNEL_WARM_ROUTE,
+    cors({
+      origin: '*',
+      allowMethods: ['POST', 'OPTIONS'],
+      allowHeaders: ['Content-Type'],
+      maxAge: 300,
+    })
+  )
+
+  controller.post(CLIENT_CHANNEL_WARM_ROUTE, async (c) => {
+    c.header('Cache-Control', 'no-store')
+    let input: unknown
+    try {
+      input = await c.req.json()
+    } catch {
+      return c.json({ error: 'Warm request must be valid JSON' }, 400)
+    }
+    const request = input as { clientId?: unknown; channelIds?: unknown }
+    if (
+      typeof request.clientId !== 'string' ||
+      !Array.isArray(request.channelIds) ||
+      request.channelIds.length > 2 ||
+      request.channelIds.some((id) => typeof id !== 'string')
+    ) {
+      return c.json(
+        { error: 'Warm request requires a clientId and at most two channel IDs' },
+        400
+      )
+    }
+    const available = new Set(
+      channels
+        .list()
+        .channels.filter((channel) => channel.enabled && channel.onAir)
+        .map((channel) => channel.id)
+    )
+    const channelIds = [
+      ...new Set(
+        (request.channelIds as string[]).filter((channelId) =>
+          available.has(channelId)
+        )
+      ),
+    ]
+    try {
+      const states = await workers.warm(channelIds, request.clientId)
+      return c.json({ warmed: states.map((state) => state.channelId) })
+    } catch (error) {
+      return c.json(
+        { error: error instanceof Error ? error.message : 'Channels could not be warmed' },
+        400
+      )
+    }
+  })
 
   controller.on(
     ['GET', 'HEAD'],
@@ -30,8 +87,9 @@ export function createChannelStreamController({
       const clientId =
         c.req.query('clientId') ??
         `anonymous-${stableHash(c.req.header('User-Agent') ?? 'hls')}`
+      let workerState
       try {
-        await workers.touch(channelId, clientId)
+        workerState = await workers.touch(channelId, clientId)
       } catch (error) {
         return c.json(
           { error: error instanceof Error ? error.message : 'Stream unavailable' },
@@ -40,7 +98,14 @@ export function createChannelStreamController({
       }
 
       const path = join(outputRoot, channelId, 'live', 'index.m3u8')
-      const file = await waitForOutput(path)
+      const minimumModifiedAt = workerState.startedAt
+        ? Date.parse(workerState.startedAt)
+        : 0
+      const file = await waitForOutput(
+        path,
+        minimumModifiedAt,
+        () => workers.getState(channelId)?.status === 'error'
+      )
       if (!file) {
         const state = workers.getState(channelId)
         return c.json(
@@ -85,10 +150,22 @@ function hasChannel(
   return channels.list().channels.some((channel) => channel.id === channelId)
 }
 
-async function waitForOutput(path: string): Promise<ReturnType<typeof Bun.file> | null> {
+async function waitForOutput(
+  path: string,
+  minimumModifiedAt: number,
+  shouldStop: () => boolean
+): Promise<ReturnType<typeof Bun.file> | null> {
   const file = Bun.file(path)
-  for (let attempt = 0; attempt < 50; attempt++) {
-    if (await file.exists()) return file
+  for (let attempt = 0; attempt < 120; attempt++) {
+    if (
+      (await file.exists()) &&
+      (!Number.isFinite(minimumModifiedAt) ||
+        minimumModifiedAt <= 0 ||
+        file.lastModified >= minimumModifiedAt)
+    ) {
+      return file
+    }
+    if (shouldStop()) return null
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
   return null

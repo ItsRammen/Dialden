@@ -22,6 +22,7 @@ interface SettingsControllerDeps {
   onInterludeUpdated?: (
     policy: ChannelInterludePolicy
   ) => Promise<void> | void
+  onLogoUpdated?: () => Promise<void> | void
 }
 
 export function createSettingsController(deps: SettingsControllerDeps) {
@@ -100,6 +101,7 @@ export function createSettingsController(deps: SettingsControllerDeps) {
       enabled: partial.interlude?.enabled === true,
       frequency: partial.interlude?.frequency ?? 1,
     })
+    await deps.onLogoUpdated?.()
     return c.html(html`<div class="toast success">Settings saved</div>`)
   })
 
@@ -114,6 +116,7 @@ export function createSettingsController(deps: SettingsControllerDeps) {
 
     const logoPath = await media.uploadLogo(file)
     await config.update({ logo: { imagePath: logoPath } })
+    await deps.onLogoUpdated?.()
 
     const cacheBust = Date.now()
     return c.html(`

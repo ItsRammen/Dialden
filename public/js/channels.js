@@ -11,6 +11,19 @@
     if (firstControl) firstControl.focus()
   }
 
+  var branding = document.querySelector('[data-branding-editor]')
+  if (branding) {
+    var brandingCustom = branding.querySelector('[data-branding-custom]')
+    var refreshBranding = function () {
+      var selected = branding.querySelector('input[name="brandingMode"]:checked')
+      if (brandingCustom) brandingCustom.hidden = !selected || selected.value !== 'custom'
+    }
+    branding.addEventListener('change', function (event) {
+      if (event.target && event.target.name === 'brandingMode') refreshBranding()
+    })
+    refreshBranding()
+  }
+
   var editor = document.querySelector('[data-schedule-editor]')
   if (!editor) return
 
@@ -40,18 +53,23 @@
     var start = row.querySelector('[data-slot-start]')
     var end = row.querySelector('[data-slot-end]')
     var groups = checkedValues(row, '[data-slot-group]').concat(customGroups(row))
+    var brandingMode = row.querySelector('[data-slot-branding-mode]')
+    var brandingLogo = row.querySelector('[data-slot-branding-logo]')
     return {
       days: checkedValues(row, '[data-slot-day]'),
       start: start ? start.value : '00:00',
       end: end ? end.value : '24:00',
       groups: groups.filter(function (value, index, values) {
         return values.indexOf(value) === index
-      })
+      }),
+      branding: brandingMode && brandingMode.value === 'custom'
+        ? 'custom:' + (brandingLogo ? brandingLogo.value.trim() : '')
+        : (brandingMode ? brandingMode.value : 'channel')
     }
   }
 
   function scheduleLine(slot) {
-    return slot.days.join(',') + ' | ' + slot.start + '-' + slot.end + ' | ' + slot.groups.join(',')
+    return slot.days.join(',') + ' | ' + slot.start + '-' + slot.end + ' | ' + slot.groups.join(',') + ' | ' + slot.branding
   }
 
   function drawCalendar(slots) {

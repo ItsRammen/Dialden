@@ -53,6 +53,53 @@ describe('FfmpegContinuousHlsPipelineFactory', () => {
     expect(command.at(-1)).toBe('/data/streams/kids/live/index.m3u8')
   })
 
+  test('burns a per-channel logo into the normalized video feed', () => {
+    const command = new FfmpegContinuousHlsPipelineFactory().command({
+      ...request(),
+      overlay: {
+        sourcePath: '/data/channel-logos/kids.png',
+        opacity: 0.8,
+        position: 8,
+        x: 32,
+        y: 24,
+        sizePercent: 12,
+      },
+    })
+
+    expect(command).toContain('/data/channel-logos/kids.png')
+    expect(command.slice(0, command.indexOf('/data/channel-logos/kids.png'))).toContain('-loop')
+    const graph = command[command.indexOf('-filter_complex') + 1] ?? ''
+    expect(graph).toContain('colorchannelmixer=aa=0.8')
+    expect(graph).toContain('scale=230:-1[brand0]')
+    expect(graph).toContain('overlay=x=W-w-32:y=H-h-24:shortest=1')
+    expect(graph).toContain('[joinedv]realtime=speed=1[outv]')
+  })
+
+  test('switches scheduled logos between lookahead items before concatenation', () => {
+    const value = request()
+    const first = {
+      ...value.sequence[0]!,
+      overlay: { sourcePath: '/logos/nick.png', opacity: 1, position: 2 as const, x: 20, y: 20, sizePercent: 10 },
+    }
+    const second = {
+      ...value.sequence[1]!,
+      overlay: { sourcePath: '/logos/adult-swim.png', opacity: 0.7, position: 8 as const, x: 30, y: 30, sizePercent: 15 },
+    }
+    const third = { ...value.sequence[2]!, overlay: null }
+    const command = new FfmpegContinuousHlsPipelineFactory().command({
+      ...value,
+      position: first,
+      sequence: [first, second, third],
+    })
+    const graph = command[command.indexOf('-filter_complex') + 1] ?? ''
+    expect(command).toContain('/logos/nick.png')
+    expect(command).toContain('/logos/adult-swim.png')
+    expect(graph).toContain('[brand0]')
+    expect(graph).toContain('[brand1]')
+    expect(graph).toContain('[basev2]null[v2]')
+    expect(graph.indexOf('[brand0]')).toBeLessThan(graph.indexOf('concat=n=3'))
+  })
+
   test('probes unknown audio layouts once per source before spawning', async () => {
     const commands: Array<readonly string[]> = []
     const probed: string[] = []

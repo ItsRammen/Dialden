@@ -25,6 +25,25 @@ export interface ChannelScheduleSlot {
   readonly start: string
   readonly end: string
   readonly groups: readonly string[]
+  /** Optional station identity for this programming window. */
+  readonly branding?: ChannelScheduleBrandingPolicy
+}
+
+export interface ChannelScheduleBrandingPolicy {
+  /** `channel` keeps the channel-wide setting; custom selects an uploaded variant. */
+  readonly mode: 'channel' | 'inherit' | 'custom' | 'off'
+  readonly logoId?: string
+}
+
+export type ChannelBrandingMode = 'inherit' | 'custom' | 'off'
+
+export interface ChannelBrandingPolicy {
+  readonly mode: ChannelBrandingMode
+  readonly opacity: number
+  readonly position: 0 | 2 | 6 | 8
+  readonly x: number
+  readonly y: number
+  readonly sizePercent: number
 }
 
 export interface LibraryChannelPolicy {
@@ -33,6 +52,8 @@ export interface LibraryChannelPolicy {
   readonly enabled: boolean
   readonly timezone: string
   readonly slots: readonly ChannelScheduleSlot[]
+  /** Absent is backwards-compatible and means inherit the global logo. */
+  readonly branding?: ChannelBrandingPolicy
 }
 
 export interface LibraryPolicyDocument {
@@ -219,6 +240,7 @@ export function validateLibraryChannels(input: unknown): LibraryChannelPolicy[] 
       enabled?: unknown
       timezone?: unknown
       slots?: unknown
+      branding?: unknown
     }
     const id = typeof value.id === 'string' ? value.id.trim() : ''
     const name = typeof value.name === 'string' ? value.name.trim() : ''
@@ -259,6 +281,7 @@ export function validateLibraryChannels(input: unknown): LibraryChannelPolicy[] 
         start?: unknown
         end?: unknown
         groups?: unknown
+        branding?: unknown
       }
       if (
         !Array.isArray(slot.days) ||
@@ -304,6 +327,9 @@ export function validateLibraryChannels(input: unknown): LibraryChannelPolicy[] 
         start: slot.start,
         end: slot.end,
         groups,
+        ...(slot.branding === undefined
+          ? {}
+          : { branding: validateScheduleBranding(slot.branding, id, slotIndex) }),
       }
     })
 
@@ -333,8 +359,87 @@ export function validateLibraryChannels(input: unknown): LibraryChannelPolicy[] 
       enabled: value.enabled !== false,
       timezone,
       slots,
+      ...(value.branding === undefined
+        ? {}
+        : { branding: validateChannelBranding(value.branding, id) }),
     }
   })
+}
+
+function validateScheduleBranding(
+  input: unknown,
+  channelId: string,
+  slotIndex: number
+): ChannelScheduleBrandingPolicy {
+  if (!input || typeof input !== 'object') {
+    throw new Error(`Channel ${channelId} slot ${slotIndex} branding must be an object`)
+  }
+  const value = input as Record<string, unknown>
+  const mode = String(value.mode ?? '')
+  if (!['channel', 'inherit', 'custom', 'off'].includes(mode)) {
+    throw new Error(`Channel ${channelId} slot ${slotIndex} branding mode is invalid`)
+  }
+  const logoId = typeof value.logoId === 'string' ? value.logoId.trim() : ''
+  if (mode === 'custom' && !/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(logoId)) {
+    throw new Error(`Channel ${channelId} slot ${slotIndex} custom branding needs a safe logo ID`)
+  }
+  if (mode !== 'custom' && logoId) {
+    throw new Error(`Channel ${channelId} slot ${slotIndex} logo ID requires custom branding`)
+  }
+  return {
+    mode: mode as ChannelScheduleBrandingPolicy['mode'],
+    ...(mode === 'custom' ? { logoId } : {}),
+  }
+}
+
+function validateChannelBranding(
+  input: unknown,
+  channelId: string
+): ChannelBrandingPolicy {
+  if (!input || typeof input !== 'object') {
+    throw new Error(`Channel ${channelId} branding must be an object`)
+  }
+  const value = input as Record<string, unknown>
+  const mode = value.mode
+  const opacity = value.opacity
+  const position = value.position
+  const x = value.x
+  const y = value.y
+  const sizePercent = value.sizePercent
+  if (!['inherit', 'custom', 'off'].includes(String(mode))) {
+    throw new Error(`Channel ${channelId} branding mode is invalid`)
+  }
+  if (!Number.isInteger(opacity) || (opacity as number) < 0 || (opacity as number) > 255) {
+    throw new Error(`Channel ${channelId} branding opacity is invalid`)
+  }
+  if (![0, 2, 6, 8].includes(position as number)) {
+    throw new Error(`Channel ${channelId} branding position is invalid`)
+  }
+  if (
+    !Number.isInteger(x) ||
+    !Number.isInteger(y) ||
+    (x as number) < 0 ||
+    (y as number) < 0 ||
+    (x as number) > 500 ||
+    (y as number) > 500
+  ) {
+    throw new Error(`Channel ${channelId} branding offsets are invalid`)
+  }
+  if (
+    !Number.isInteger(sizePercent) ||
+    (sizePercent as number) < 5 ||
+    (sizePercent as number) > 30
+  ) {
+    throw new Error(`Channel ${channelId} branding size is invalid`)
+  }
+  return {
+    mode: mode as ChannelBrandingMode,
+    opacity: opacity as number,
+    position: position as ChannelBrandingPolicy['position'],
+    x: x as number,
+    y: y as number,
+    sizePercent: sizePercent as number,
+  }
 }
 
 function normalizeProgrammingGroup(value: unknown, errorMessage: string): string {

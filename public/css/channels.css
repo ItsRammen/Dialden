@@ -909,6 +909,106 @@
   color: var(--text-secondary);
 }
 
+.channel-branding {
+  min-width: 0;
+  margin: 1rem 0;
+  padding: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 0.8rem;
+  background: rgba(0, 0, 0, 0.13);
+}
+
+.channel-branding legend {
+  padding: 0 0.4rem;
+  font-weight: 900;
+}
+
+.channel-branding-modes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin-top: 0.75rem;
+}
+
+.channel-branding-modes > label {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 0.65rem;
+  cursor: pointer;
+}
+
+.channel-branding-modes > label:has(input:checked) {
+  border-color: var(--toast-teal);
+  background: rgba(0, 214, 201, 0.1);
+}
+
+.channel-branding-modes input {
+  width: auto;
+  margin-top: 0.2rem;
+}
+
+.channel-branding-modes span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.channel-branding-modes small,
+.channel-branding-custom small {
+  color: var(--text-secondary);
+}
+
+.channel-branding-custom {
+  display: grid;
+  grid-template-columns: minmax(15rem, 1fr) minmax(20rem, 2fr);
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.channel-branding-controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.channel-branding-controls label,
+.channel-branding-custom > label {
+  min-width: 0;
+  margin: 0;
+}
+
+.channel-branding-schedule-assets {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.channel-branding-schedule-assets label,
+.channel-slot-branding label {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.channel-branding-schedule-assets p {
+  margin: 0.6rem 0 0;
+}
+
+.channel-slot-branding {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.channel-slot-branding legend {
+  grid-column: 1 / -1;
+}
+
 @media (max-width: 640px) {
   .channel-admin-hero,
   .channel-admin-editor > header {
@@ -941,6 +1041,16 @@
   .channel-slot {
     display: flex;
     flex-direction: column;
+  }
+
+  .channel-branding-modes,
+  .channel-branding-custom,
+  .channel-branding-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .channel-slot-branding {
+    grid-template-columns: 1fr;
   }
 
   .channel-admin-hero-actions,

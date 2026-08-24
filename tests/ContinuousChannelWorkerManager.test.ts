@@ -15,7 +15,7 @@ function deferred<T>() {
 }
 
 const settle = async () => {
-  for (let index = 0; index < 8; index++) await Promise.resolve()
+  for (let index = 0; index < 20; index++) await Promise.resolve()
 }
 
 class FakeClock implements ChannelWorkerClock {
@@ -50,7 +50,7 @@ const position = (overrides: Partial<ChannelTimelinePosition> = {}): ChannelTime
   ...overrides,
 })
 
-function fixture(options: { missing?: boolean; noFallback?: boolean } = {}) {
+function fixture(options: { missing?: boolean; noFallback?: boolean; overlay?: boolean } = {}) {
   const clock = new FakeClock()
   const requests: ChannelPipelineRequest[] = []
   const exits: ReturnType<typeof deferred<ChannelPipelineExit>>[] = []
@@ -65,6 +65,16 @@ function fixture(options: { missing?: boolean; noFallback?: boolean } = {}) {
       fallback: options.noFallback
         ? undefined
         : async () => position({ scheduleItemId: 'stand-by', sourcePath: '/fallback.mp4', type: 'offair' }),
+      overlay: options.overlay
+        ? async () => ({
+            sourcePath: '/data/channel-logos/kids.png',
+            opacity: 0.8,
+            position: 2,
+            x: 20,
+            y: 20,
+            sizePercent: 12,
+          })
+        : undefined,
     },
     {
       start: async (request) => {
@@ -101,7 +111,18 @@ describe('ContinuousChannelWorkerManager', () => {
     expect(second.viewerCount).toBe(2)
     expect(second.sourceOffsetSeconds).toBe(781)
     expect(f.requests[0]?.playlistPath).toBe('/data/streams/kids/live/index.m3u8')
+    expect(f.requests[0]?.appendToExistingPlaylist).toBe(false)
     expect(f.requests[0]?.profile).toMatchObject({ videoCodec: 'h264', audioCodec: 'aac', audioChannels: 2 })
+  })
+
+  test('passes an available channel overlay to the pipeline', async () => {
+    const f = fixture({ overlay: true })
+    await f.manager.acquire('kids')
+    expect(f.requests[0]?.overlay).toMatchObject({
+      sourcePath: '/data/channel-logos/kids.png',
+      opacity: 0.8,
+      position: 2,
+    })
   })
 
   test('keeps an idle worker warm, cancels shutdown on rejoin, then stops after timeout', async () => {
@@ -133,6 +154,7 @@ describe('ContinuousChannelWorkerManager', () => {
     await settle()
     expect(f.requests).toHaveLength(2)
     expect(f.requests[1]?.position.sourceOffsetSeconds).toBe(782)
+    expect(f.requests[1]?.appendToExistingPlaylist).toBe(true)
     expect(f.manager.getState('kids')?.status).toBe('live')
   })
 
@@ -161,6 +183,43 @@ describe('ContinuousChannelWorkerManager', () => {
     f.clock.advance(43_000)
     expect(f.manager.getState('kids')?.viewerCount).toBe(0)
     expect(f.manager.getState('kids')?.status).toBe('idle')
+  })
+
+  test('warms two adjacent channels without counting viewers and stops them when the lease expires', async () => {
+    const f = fixture()
+    const warmed = await f.manager.warm(['preschool', 'cartoons'], 'living-room')
+
+    expect(warmed.map((state) => state.channelId)).toEqual([
+      'preschool',
+      'cartoons',
+    ])
+    expect(warmed.every((state) => state.viewerCount === 0)).toBe(true)
+    expect(f.requests).toHaveLength(2)
+
+    await f.manager.warm(['preschool', 'cartoons'], 'living-room')
+    expect(f.requests).toHaveLength(2)
+    f.clock.advance(30_000)
+    await settle()
+    expect(f.manager.getState('preschool')?.status).toBe('stopped')
+    expect(f.manager.getState('cartoons')?.status).toBe('stopped')
+    expect(f.stops).toBe(2)
+  })
+
+  test('evicts the oldest speculative worker instead of exceeding the global warm cap', async () => {
+    const f = fixture()
+    await f.manager.warm(['one', 'two'], 'first-tv')
+    f.clock.advance(1)
+    await f.manager.warm(['three'], 'second-tv')
+    await settle()
+
+    expect(f.manager.getState('one')?.status).toBe('stopped')
+    expect(f.manager.getState('two')?.status).toBe('idle')
+    expect(f.manager.getState('three')?.status).toBe('idle')
+    expect(
+      f.manager
+        .listStates()
+        .filter((state) => state.status !== 'stopped' && state.viewerCount === 0)
+    ).toHaveLength(2)
   })
 
   test('surfaces a missing scheduled source and uses emergency fallback', async () => {

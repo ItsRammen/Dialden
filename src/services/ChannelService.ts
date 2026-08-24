@@ -16,6 +16,7 @@ import type {
 import {
   loadStationAutomationCatalog,
   selectStationCollections,
+  STATION_AIRTIME_OPTIONS,
   stationAirtimeSlots,
   type StationAutomationCatalog,
   type StationAirtimeId,
@@ -243,6 +244,47 @@ export class ChannelService {
 
   stationAutomationCatalog(): Promise<StationAutomationCatalog> {
     return loadStationAutomationCatalog(this.repository)
+  }
+
+  /** Reconstruct the exact generated lineup so the existing-channel builder
+   * opens with today's content selected instead of silently defaulting to the
+   * all-shows preset. */
+  async stationAutomationDraft(
+    channelId: string
+  ): Promise<StationBuildRequest | undefined> {
+    const channel = this.channels.find((item) => item.id === channelId)
+    if (!channel) return undefined
+    const group = this.generatedGroup(channelId)
+    const assignments = this.configuredCollectionGroups().filter((assignment) =>
+      assignment.groups.includes(group)
+    )
+    if (assignments.length === 0) return undefined
+
+    const catalog = await this.stationAutomationCatalog()
+    const collectionIds = catalog.collections
+      .filter((collection) =>
+        assignments.some(
+          (assignment) =>
+            assignment.collectionId === collection.id ||
+            (assignment.rootId === collection.rootId &&
+              assignment.libraryKind === collection.libraryKind &&
+              assignment.collectionIdentityKey === collection.identityKey)
+        )
+      )
+      .map((collection) => collection.id)
+    const airtime = STATION_AIRTIME_OPTIONS.map((option) => option.id).find(
+      (candidate) =>
+        JSON.stringify(channel.slots) ===
+        JSON.stringify(stationAirtimeSlots(candidate, group))
+    )
+    return {
+      id: channel.id,
+      name: channel.name,
+      timezone: channel.timezone,
+      preset: 'custom',
+      collectionIds,
+      ...(airtime ? { airtime } : {}),
+    }
   }
 
   async previewAutomatedStation(

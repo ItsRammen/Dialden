@@ -6,6 +6,7 @@ import {
   parseChannelSlots,
 } from '../src/controllers/ChannelController'
 import type { ChannelService } from '../src/services/ChannelService'
+import type { ChannelLogoStore } from '../src/services/ChannelLogoStore'
 
 describe('ChannelController', () => {
   test('serves list and now endpoints and returns 404 for unknown channels', async () => {
@@ -218,6 +219,74 @@ describe('ChannelController', () => {
     )
   })
 
+  test('uploads channel branding and restarts only the edited channel', async () => {
+    const channels = mock<ChannelService>()
+    const logos = mock<ChannelLogoStore>()
+    const restarted: string[] = []
+    channels.update.mockReturnValue({
+      id: 'kids-club',
+      name: 'Kids Club',
+      enabled: true,
+      timezone: 'UTC',
+      slots: [
+        { days: ['mon'], start: '06:00', end: '08:00', groups: ['kids'] },
+      ],
+      branding: {
+        mode: 'custom',
+        opacity: 204,
+        position: 8,
+        x: 20,
+        y: 20,
+        sizePercent: 14,
+      },
+    })
+    const app = new Hono().route(
+      '/',
+      createChannelController({
+        channels,
+        logos,
+        onBrandingUpdated: async (id) => {
+          restarted.push(id)
+        },
+      })
+    )
+    const body = new FormData()
+    body.set('id', 'kids-club')
+    body.set('name', 'Kids Club')
+    body.set('timezone', 'UTC')
+    body.set('enabled', 'on')
+    body.set('slots', 'mon | 06:00-08:00 | kids')
+    body.set('brandingMode', 'custom')
+    body.set('brandingOpacity', '204')
+    body.set('brandingPosition', '8')
+    body.set('brandingX', '20')
+    body.set('brandingY', '20')
+    body.set('brandingSizePercent', '14')
+    body.set(
+      'brandingLogo',
+      new File(
+        [new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
+        'kids.png',
+        { type: 'image/png' }
+      )
+    )
+
+    const response = await app.request('/channels/kids-club', {
+      method: 'POST',
+      body,
+    })
+
+    expect(response.status).toBe(303)
+    expect(logos.save).toHaveBeenCalledWith('kids-club', expect.any(File))
+    expect(channels.update).toHaveBeenCalledWith(
+      'kids-club',
+      expect.objectContaining({
+        branding: expect.objectContaining({ mode: 'custom', position: 8 }),
+      })
+    )
+    expect(restarted).toEqual(['kids-club'])
+  })
+
   test('keeps channel administration available when automation catalog loading fails', async () => {
     const channels = mock<ChannelService>()
     channels.administrationSnapshot.mockReturnValue({
@@ -242,7 +311,7 @@ describe('ChannelController', () => {
   test('parses the human-editable schedule format', () => {
     expect(
       parseChannelSlots(
-        'mon,tue,wed | 06:30-08:30 | comfort,learning\nsat | 08:00-10:00 | adventure'
+        'mon,tue,wed | 06:30-08:30 | comfort,learning\nsat | 08:00-10:00 | adventure | custom:nick'
       )
     ).toEqual([
       {
@@ -256,6 +325,7 @@ describe('ChannelController', () => {
         start: '08:00',
         end: '10:00',
         groups: ['adventure'],
+        branding: { mode: 'custom', logoId: 'nick' },
       },
     ])
   })

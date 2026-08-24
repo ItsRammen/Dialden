@@ -1,5 +1,6 @@
 import type { MiddlewareHandler } from 'hono'
 import { CLIENT_HEARTBEAT_ROUTE } from '../controllers/ClientPresenceController'
+import { CLIENT_CHANNEL_WARM_ROUTE } from '../controllers/ChannelStreamController'
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
@@ -12,7 +13,8 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 export const mutationOriginGuard: MiddlewareHandler = async (c, next) => {
   if (
     SAFE_METHODS.has(c.req.method) ||
-    c.req.path === CLIENT_HEARTBEAT_ROUTE
+    c.req.path === CLIENT_HEARTBEAT_ROUTE ||
+    c.req.path === CLIENT_CHANNEL_WARM_ROUTE
   ) {
     await next()
     return

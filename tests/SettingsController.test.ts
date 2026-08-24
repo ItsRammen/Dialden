@@ -97,4 +97,25 @@ describe('SettingsController', () => {
     const json = await res.json()
     expect(json).toEqual({ server: { port: 3000 } })
   })
+
+  test('refreshes inherited live channel branding after settings save', async () => {
+    const refreshed: string[] = []
+    const controller = createSettingsController({
+      config: configService,
+      media: mediaService,
+      update: updateService,
+      onLogoUpdated: async () => {
+        refreshed.push('logo')
+      },
+    })
+    const local = new Hono().route('/', controller)
+
+    const response = await local.request('/api/config', {
+      method: 'POST',
+      body: new URLSearchParams({ serverPort: '1993' }),
+    })
+
+    expect(response.status).toBe(200)
+    expect(refreshed).toEqual(['logo'])
+  })
 })

@@ -127,6 +127,15 @@ describe('station automation', () => {
         networks: ['ABC Kids'],
         studios: ['Ludo Studio'],
       }),
+      collection(4, 'PAW Patrol', {
+        genres: ['Animation', 'Family'],
+        networks: ['Nickelodeon'],
+        studios: ['Nickelodeon Animation Studio'],
+      }),
+      collection(5, 'Bubble Guppies', {
+        genres: ['Animation', 'Family'],
+        networks: ['Nick Jr.'],
+      }),
       collection(3, 'Broken Show', {
         scheduleEligibleCount: 0,
       }),
@@ -139,14 +148,27 @@ describe('station automation', () => {
     }
 
     const catalog = await loadStationAutomationCatalog(repository)
-    expect(catalog.collections).toHaveLength(2)
+    expect(catalog.collections).toHaveLength(4)
     expect(catalog.networks).toContainEqual({
       name: 'Nickelodeon',
-      collections: 1,
+      collections: 2,
     })
     expect(
       catalog.presets.find((preset) => preset.id === 'nickelodeon-style')
     ).toMatchObject({ matchedCollections: 1, unofficial: true })
+    expect(
+      catalog.presets.find((preset) => preset.id === 'nick-jr-style')
+    ).toMatchObject({ matchedCollections: 2, unofficial: true })
+    expect(
+      selectStationCollections(catalog, { preset: 'nickelodeon-style' }).map(
+        (item) => item.displayTitle
+      )
+    ).toEqual(['SpongeBob SquarePants'])
+    expect(
+      selectStationCollections(catalog, { preset: 'nick-jr-style' }).map(
+        (item) => item.displayTitle
+      )
+    ).toEqual(['Bubble Guppies', 'PAW Patrol'])
     expect(
       selectStationCollections(catalog, {
         preset: 'custom',

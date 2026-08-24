@@ -28,7 +28,9 @@
     var live = liveDescriptor(nowResult);
     var liveUrl = live ? resolveUrl(live.url, serverUrl) : null;
     liveUrl = appendClientId(liveUrl, clientId);
-    if (liveUrl && liveUrl !== failedLiveUrl) {
+    /* A server-advertised live stream is already normalized for the TV. Never
+       leak back to the original MKV merely because the HLS worker is warming. */
+    if (liveUrl) {
       return { mode: 'channel-hls', url: liveUrl, seekToProgramOffset: false };
     }
 

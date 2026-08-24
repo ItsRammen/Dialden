@@ -23,6 +23,8 @@ interface ChannelAdministrationOptions {
   readonly automationSearch?: string
   readonly automationOpen?: boolean
   readonly automationTargetId?: string
+  readonly channelLogoIds?: readonly string[]
+  readonly channelLogoVariants?: Readonly<Record<string, readonly string[]>>
 }
 
 export function renderChannelAdministration(
@@ -104,11 +106,11 @@ export function renderChannelAdministration(
             <h2 id="manual-editor-title">${edit ? escapeHtml(edit.name) : 'Add a channel manually'}</h2>
           </div>
           <div class="channel-admin-editor-actions">
-            ${edit ? `<a href="/channels?builder=${encodeURIComponent(edit.id)}#station-builder">Auto setup</a>` : ''}
+            ${edit ? `<a href="/channels?builder=${encodeURIComponent(edit.id)}#station-builder">Edit channel lineup</a>` : ''}
             <a href="/channels">Cancel</a>
           </div>
         </header>
-        <form method="post" action="${edit ? `/channels/${encodeURIComponent(edit.id)}` : '/channels'}">
+        <form method="post" enctype="multipart/form-data" action="${edit ? `/channels/${encodeURIComponent(edit.id)}` : '/channels'}">
           <div class="channel-admin-fields">
             <label>Channel ID
               <input type="text" name="id" required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_-]*" value="${escapeHtml(edit?.id ?? '')}" ${edit ? 'readonly' : ''} placeholder="cartoon-classics">
@@ -123,7 +125,8 @@ export function renderChannelAdministration(
             </label>
             <label class="channel-admin-checkbox"><input type="checkbox" name="enabled" ${edit?.enabled === false ? '' : 'checked'}> Enabled and visible to TV clients</label>
           </div>
-          ${renderScheduleDesigner(edit?.slots ?? [], groups)}
+          ${renderBrandingEditor(edit, new Set(options.channelLogoIds ?? []), edit ? options.channelLogoVariants?.[edit.id] ?? [] : [])}
+          ${renderScheduleDesigner(edit?.slots ?? [], groups, edit ? options.channelLogoVariants?.[edit.id] ?? [] : [])}
           <div class="channel-admin-groups">
             <strong>Groups currently assigned by the library policy</strong>
             ${
@@ -139,6 +142,75 @@ export function renderChannelAdministration(
       }
     </div>`
   )
+}
+
+function renderBrandingEditor(
+  channel: LibraryChannelPolicy | undefined,
+  uploadedLogoIds: ReadonlySet<string>,
+  scheduledLogoIds: readonly string[]
+): string {
+  const branding = channel?.branding ?? {
+    mode: 'inherit' as const,
+    opacity: 210,
+    position: 2 as const,
+    x: 24,
+    y: 24,
+    sizePercent: 12,
+  }
+  const hasCustomLogo = channel ? uploadedLogoIds.has(channel.id) : false
+  return `<fieldset class="channel-branding" data-branding-editor>
+    <legend>Channel branding overlay</legend>
+    <p class="channel-admin-help">Branding is burned into this channel’s live video feed, so every TV and player sees the same station identity.</p>
+    <div class="channel-branding-modes">
+      ${brandingMode('inherit', 'Use global branding', 'Use the logo and placement from Settings.', branding.mode)}
+      ${brandingMode('custom', 'Custom channel logo', 'Use a separate transparent PNG and channel-specific placement.', branding.mode)}
+      ${brandingMode('off', 'No branding', 'Keep this channel feed completely clean.', branding.mode)}
+    </div>
+    <div class="channel-branding-custom" data-branding-custom>
+      <label>Channel logo (PNG, up to 5 MB)
+        ${channel ? '<input type="file" name="brandingLogo" accept="image/png">' : ''}
+        <small>${hasCustomLogo ? 'A custom logo is uploaded. Choose another file to replace it.' : channel ? 'No custom logo is uploaded yet.' : 'Create the channel first, then edit it to upload its custom logo.'}</small>
+      </label>
+      <div class="channel-branding-controls">
+        <label>Corner
+          <select name="brandingPosition">
+            ${brandingPosition(0, 'Top left', branding.position)}
+            ${brandingPosition(2, 'Top right', branding.position)}
+            ${brandingPosition(6, 'Bottom left', branding.position)}
+            ${brandingPosition(8, 'Bottom right', branding.position)}
+          </select>
+        </label>
+        <label>Size (%) <input type="number" name="brandingSizePercent" min="5" max="30" value="${branding.sizePercent}"></label>
+        <label>Opacity <input type="range" name="brandingOpacity" min="0" max="255" value="${branding.opacity}"></label>
+        <label>X offset <input type="number" name="brandingX" min="0" max="500" value="${branding.x}"></label>
+        <label>Y offset <input type="number" name="brandingY" min="0" max="500" value="${branding.y}"></label>
+      </div>
+    </div>
+    <div class="channel-branding-schedule-assets">
+      <label>Scheduled logo variants (PNG, up to 5 MB each)
+        ${channel ? '<input type="file" name="brandingVariantLogos" accept="image/png" multiple>' : ''}
+        <small>Upload user-supplied logos for time blocks. The filename becomes its ID—for example, <code>adult-swim.png</code> becomes <code>adult-swim</code>.</small>
+      </label>
+      <p>${scheduledLogoIds.length > 0 ? `Available IDs: ${scheduledLogoIds.map((id) => `<code>${escapeHtml(id)}</code>`).join(' ')}` : 'No scheduled logo variants uploaded yet.'}</p>
+    </div>
+  </fieldset>`
+}
+
+function brandingMode(
+  value: 'inherit' | 'custom' | 'off',
+  title: string,
+  description: string,
+  selected: string
+): string {
+  return `<label><input type="radio" name="brandingMode" value="${value}" ${selected === value ? 'checked' : ''}><span><strong>${title}</strong><small>${description}</small></span></label>`
+}
+
+function brandingPosition(
+  value: 0 | 2 | 6 | 8,
+  label: string,
+  selected: number
+): string {
+  return `<option value="${value}" ${selected === value ? 'selected' : ''}>${label}</option>`
 }
 
 function renderAutomationBuilder(
@@ -182,7 +254,7 @@ function renderAutomationBuilder(
       <div>
         <p class="channel-admin-eyebrow">Catalog automation</p>
         <h2>${target ? `Auto setup for ${escapeHtml(target.name)}` : 'Create an automatic station'}</h2>
-        <p>${target ? 'Apply a preset to this station and regenerate its schedule and playable library selection.' : 'Choose playable shows directly or build a mix from TMDB genres, original networks, and production studios.'}</p>
+        <p>${target ? draft ? 'Change this station’s playable shows, preset, metadata facets, and airtime. Its current generated lineup is selected below.' : 'Choose this station’s playable shows, preset, metadata facets, and airtime.' : 'Choose playable shows directly or build a mix from TMDB genres, original networks, and production studios.'}</p>
       </div>
       <span class="channel-auto-count">${countLabel(catalog.collections.length, 'playable collection')}</span>
     </header>
@@ -225,6 +297,7 @@ function renderAutomationBuilder(
 
             <fieldset class="channel-auto-presets">
               <legend>Start with a preset</legend>
+              ${target && draft?.preset === 'custom' ? `<p class="channel-admin-help"><strong>Current lineup loaded:</strong> ${countLabel(selectedIds.size, 'selected collection')}. Change the checks below, choose metadata facets, or switch to another preset.</p>` : ''}
               <div class="channel-auto-preset-grid">
                 ${catalog.presets
                   .map(
@@ -395,7 +468,7 @@ function renderChannelCard(
     </dl>
     <div class="channel-admin-actions">
       <a href="/channels?edit=${encodeURIComponent(channel.id)}#editor">Edit</a>
-      <a href="/channels?builder=${encodeURIComponent(channel.id)}#station-builder">Auto setup</a>
+      <a href="/channels?builder=${encodeURIComponent(channel.id)}#station-builder">Edit lineup</a>
       <form method="post" action="/channels/${encodeURIComponent(channel.id)}/enabled">
         <input type="hidden" name="enabled" value="${channel.enabled ? 'false' : 'true'}">
         <button type="submit">${channel.enabled ? 'Disable' : 'Enable'}</button>
@@ -411,7 +484,7 @@ function formatSlots(slots: LibraryChannelPolicy['slots']): string {
   return slots
     .map(
       (slot) =>
-        `${slot.days.join(',')} | ${slot.start}-${slot.end} | ${slot.groups.join(',')}`
+        `${slot.days.join(',')} | ${slot.start}-${slot.end} | ${slot.groups.join(',')} | ${formatSlotBranding(slot.branding)}`
     )
     .join('\n')
 }
@@ -428,7 +501,8 @@ const SCHEDULE_DAYS = [
 
 function renderScheduleDesigner(
   slots: LibraryChannelPolicy['slots'],
-  configuredGroups: readonly string[]
+  configuredGroups: readonly string[],
+  scheduledLogoIds: readonly string[]
 ): string {
   const groups = [...new Set([
     ...configuredGroups,
@@ -445,6 +519,7 @@ function renderScheduleDesigner(
     <div class="channel-week" data-calendar aria-label="Weekly schedule preview">
       ${SCHEDULE_DAYS.map(([day, label]) => `<section><strong>${label}</strong><div data-calendar-day="${day}">${renderCalendarEntries(slots, day)}</div></section>`).join('')}
     </div>
+    ${scheduledLogoIds.length > 0 ? `<datalist id="scheduled-logo-ids">${scheduledLogoIds.map((id) => `<option value="${escapeHtml(id)}"></option>`).join('')}</datalist>` : ''}
     <div class="channel-slot-list" data-slot-list>
       ${slots.map((slot, index) => renderSlotEditor(slot, groups, index)).join('')}
     </div>
@@ -452,7 +527,7 @@ function renderScheduleDesigner(
     <details class="channel-schedule-advanced">
       <summary>Advanced schedule text</summary>
       <p>Edit the serialized schedule only when you need an unusual time or group. Saving uses this value.</p>
-      <textarea name="slots" rows="7" spellcheck="false" data-schedule-serialized placeholder="mon,tue,wed,thu,fri | 06:30-08:30 | comfort,learning">${escapeHtml(formatSlots(slots))}</textarea>
+      <textarea name="slots" rows="7" spellcheck="false" data-schedule-serialized placeholder="mon,tue,wed,thu,fri | 06:30-08:30 | comfort,learning | custom:nick">${escapeHtml(formatSlots(slots))}</textarea>
     </details>
     <template data-slot-template>${renderSlotEditor(undefined, groups, 0)}</template>
   </section>`
@@ -477,7 +552,35 @@ function renderSlotEditor(
       ${groups.length > 0 ? `<div>${groups.map((group) => `<label><input type="checkbox" value="${escapeHtml(group)}" data-slot-group ${slot?.groups.includes(group) ? 'checked' : ''}><span>${escapeHtml(group)}</span></label>`).join('')}</div>` : '<p>No assigned groups are available yet.</p>'}
       <label class="channel-slot-custom">Additional groups <input type="text" data-slot-custom-groups placeholder="Optional, comma-separated"></label>
     </fieldset>
+    <fieldset class="channel-slot-branding"><legend>Logo during this block</legend>
+      <label>Branding
+        <select data-slot-branding-mode>
+          ${slotBrandingOption('channel', 'Channel default', slot?.branding?.mode)}
+          ${slotBrandingOption('inherit', 'Global logo', slot?.branding?.mode)}
+          ${slotBrandingOption('custom', 'Scheduled logo', slot?.branding?.mode)}
+          ${slotBrandingOption('off', 'No logo', slot?.branding?.mode)}
+        </select>
+      </label>
+      <label>Scheduled logo ID
+        <input type="text" list="scheduled-logo-ids" data-slot-branding-logo value="${escapeHtml(slot?.branding?.logoId ?? '')}" placeholder="nick">
+      </label>
+    </fieldset>
   </article>`
+}
+
+function slotBrandingOption(
+  value: 'channel' | 'inherit' | 'custom' | 'off',
+  label: string,
+  selected: string | undefined
+): string {
+  return `<option value="${value}" ${(selected ?? 'channel') === value ? 'selected' : ''}>${label}</option>`
+}
+
+function formatSlotBranding(
+  branding: LibraryChannelPolicy['slots'][number]['branding']
+): string {
+  if (!branding || branding.mode === 'channel') return 'channel'
+  return branding.mode === 'custom' ? `custom:${branding.logoId}` : branding.mode
 }
 
 function renderTimeSelect(kind: 'start' | 'end', selected: string): string {

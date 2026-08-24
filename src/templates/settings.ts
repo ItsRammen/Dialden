@@ -7,6 +7,7 @@
 
 import type { AppConfig } from '../repositories/ConfigRepository'
 import { renderLayout } from './layout'
+import { escapeHtml } from './utils'
 
 export interface SettingsProps {
   config: AppConfig
@@ -25,21 +26,33 @@ export function renderSettings(props: SettingsProps): string {
   return renderLayout(
     'Settings',
     `
-    <div class="settings">
-      <h1>⚙️ Settings</h1>
+    <div class="settings settings-page">
+      <header class="settings-page-header">
+        <div>
+          <p class="settings-eyebrow">Server configuration</p>
+          <h1>Settings</h1>
+          <p class="settings-lede">Manage playback, library services, and this ToastTV server from one place.</p>
+        </div>
+        <nav class="settings-section-nav" aria-label="Settings sections">
+          <a href="#branding">Branding</a>
+          <a href="#playback">Playback</a>
+          <a href="#library-services">Library</a>
+          <a href="#server-system">System</a>
+        </nav>
+      </header>
       
       <form id="settings-form"
             hx-post="/api/config"
             hx-target="#toast-container"
             hx-swap="innerHTML">
-        <!-- Logo Section (full-width, at top) -->
-        <section class="settings-card">
+        <section class="settings-card settings-branding-card" id="branding">
           <div class="card-header">
             <div>
-              <h2>🖼️ Logo Overlay</h2>
-              <p style="font-size: 0.8rem; color: var(--toast-yellow); margin-top: 0.25rem;">⚠️ Changes require restart</p>
+              <p class="settings-card-kicker">Channel identity</p>
+              <h2>Default logo overlay</h2>
+              <p class="settings-card-description">Shown over playback when a channel does not provide its own branding.</p>
             </div>
-            <label class="toggle">
+            <label class="toggle" aria-label="Enable default logo overlay">
               <input type="checkbox" id="logoEnabled" name="logoEnabled" value="true" ${config.logo.enabled ? 'checked' : ''}>
               <span class="toggle-slider"></span>
             </label>
@@ -55,19 +68,25 @@ export function renderSettings(props: SettingsProps): string {
             
             ${renderLogoPreview(hasLogo, config.logo.opacity, config.logo.position, config.logo.x, config.logo.y)}
           </div>
+          <p class="settings-restart-note">Active channels using the default overlay refresh automatically after saving.</p>
         </section>
-        
-        <div style="height: 1.5rem;"></div>
-        
-        <div class="settings-grid">
-          <!-- Session Settings Card -->
+
+        <section class="settings-group" id="playback">
+          <header class="settings-group-heading">
+            <div>
+              <p class="settings-eyebrow">Viewing experience</p>
+              <h2>Playback and scheduling</h2>
+            </div>
+            <p>Control watch limits, interludes, and compatibility safeguards.</p>
+          </header>
+          <div class="settings-grid settings-grid-three">
           <section class="settings-card">
             <div class="card-header">
-              <h2>🎬 Session</h2>
+              <div><p class="settings-card-kicker">Household</p><h3>Session limits</h3></div>
             </div>
             
             <div class="form-group">
-              <label for="sessionLimit">Daily Limit (minutes)</label>
+              <label for="sessionLimit">Daily limit (minutes)</label>
               <input type="number" 
                      id="sessionLimit" 
                      name="sessionLimit" 
@@ -78,21 +97,20 @@ export function renderSettings(props: SettingsProps): string {
             </div>
             
             <div class="form-group">
-              <label for="resetHour">New Day Starts At</label>
+              <label for="resetHour">New day starts at</label>
               <select id="resetHour" name="resetHour">
                 ${renderHourOptions(config.session.resetHour)}
               </select>
               <span class="hint">Quota resets at this hour each day</span>
             </div>
             
-            <p class="card-note">💡 Set intro, outro, and off-air screens in <a href="/library">Library</a></p>
+            <p class="card-note">Intro, outro, and off-air screens are managed in the <a href="/library">Library</a>.</p>
           </section>
-          
-          <!-- Interlude Settings Card -->
+
           <section class="settings-card">
             <div class="card-header">
-              <h2>🎞️ Interludes</h2>
-              <label class="toggle">
+              <div><p class="settings-card-kicker">Continuity</p><h3>Interludes</h3></div>
+              <label class="toggle" aria-label="Enable interludes">
                 <input type="checkbox" id="interludeEnabled" name="interludeEnabled" value="true" ${config.interlude.enabled ? 'checked' : ''}>
                 <span class="toggle-slider"></span>
               </label>
@@ -111,54 +129,87 @@ export function renderSettings(props: SettingsProps): string {
               <span class="hint">Insert interlude after every N videos</span>
             </div>
           </section>
-          
-          <!-- Player Connection Card -->
+
           <section class="settings-card">
             <div class="card-header">
-              <h2>🎞️ MPV Socket</h2>
+              <div><p class="settings-card-kicker">Compatibility</p><h3>Playback safety</h3></div>
             </div>
-            
-            <div class="form-row">
-              <div class="form-group">
-                <label for="mpvSocket">IPC Socket Path</label>
-                <input type="text" id="mpvSocket" name="mpvSocket" value="${config.mpv.ipcSocket}">
+
+            <div class="setting-row settings-toggle-row">
+              <div>
+                <label for="safeMode">Safe mode</label>
+                <span class="hint">Exclude incompatible files from the playback queue.</span>
+              </div>
+              <label class="toggle" aria-label="Enable safe mode">
+                <input type="checkbox" id="safeMode" name="safeMode" value="true" ${config.playback.safeMode ? 'checked' : ''}>
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+
+            <div class="form-group" id="hardware-profile-section">
+              <label>Hardware profile</label>
+              <div class="hardware-profile-display">
+                <span class="profile-badge">${escapeHtml(props.hardwareProfileName ?? 'Unknown')}</span>
+                <span class="hint">Device capabilities are detected automatically.</span>
               </div>
             </div>
           </section>
-          
-          <!-- Media Management Card -->
+          </div>
+        </section>
+
+        <section class="settings-group" id="library-services">
+          <header class="settings-group-heading">
+            <div>
+              <p class="settings-eyebrow">Catalog services</p>
+              <h2>Library and metadata</h2>
+            </div>
+            <p>Rescan mounted media and manage title matching.</p>
+          </header>
+          <div class="settings-grid settings-grid-two">
           <section class="settings-card">
             <div class="card-header">
-              <h2>📂 Media Library</h2>
+              <div><p class="settings-card-kicker">Mounted media</p><h3>Media library</h3></div>
             </div>
             
             <div class="form-group">
-              <label>Media Directory</label>
-              <code class="path-display">${mediaDirectory}</code>
+              <label>Media directory</label>
+              <code class="path-display">${escapeHtml(mediaDirectory)}</code>
             </div>
-            
-            <button type="button" class="btn btn-secondary"
+            <div class="settings-card-actions">
+              <button type="button" class="btn btn-secondary"
                     hx-post="/api/rescan"
                     hx-target="#toast-container"
                     hx-swap="innerHTML">
-              🔄 Rescan Library
-            </button>
-            <span class="hint">Scan for new files added via filesystem</span>
-          </section>
-          
-          <!-- Metadata Card -->
-          <section class="settings-card">
-            <div class="card-header">
-              <h2>Metadata</h2>
+                Rescan library
+              </button>
+              <span class="hint">Find files added to the mounted directory.</span>
             </div>
-            <p>Configure TMDB matching and preferred certification regions.</p>
-            <a class="btn btn-secondary" href="/settings/metadata">Metadata settings</a>
           </section>
 
-          <!-- Server Card -->
           <section class="settings-card">
             <div class="card-header">
-              <h2>🌐 Web Server</h2>
+              <div><p class="settings-card-kicker">Title matching</p><h3>Metadata provider</h3></div>
+            </div>
+            <p class="settings-card-copy">Configure TMDB matching, language, and preferred certification regions.</p>
+            <div class="settings-card-actions">
+              <a class="btn btn-secondary" href="/settings/metadata">Open metadata settings</a>
+            </div>
+          </section>
+          </div>
+        </section>
+
+        <section class="settings-group" id="server-system">
+          <header class="settings-group-heading">
+            <div>
+              <p class="settings-eyebrow">Administration</p>
+              <h2>Server and system</h2>
+            </div>
+            <p>Connection details, server identity, and software updates.</p>
+          </header>
+          <div class="settings-grid settings-grid-three">
+          <section class="settings-card">
+            <div class="card-header">
+              <div><p class="settings-card-kicker">Network</p><h3>Web server</h3></div>
             </div>
             
             <div class="form-group">
@@ -167,43 +218,27 @@ export function renderSettings(props: SettingsProps): string {
               <span class="hint">Default: 1993. Requires restart.</span>
             </div>
           </section>
-          
-          <!-- Playback Settings Card -->
+
           <section class="settings-card">
             <div class="card-header">
-              <h2>🎮 Playback</h2>
+              <div><p class="settings-card-kicker">Local player</p><h3>MPV connection</h3></div>
             </div>
-            
+
             <div class="form-group">
-              <div class="setting-row">
-                <div>
-                  <label for="safeMode">Safe Mode</label>
-                  <span class="hint">Exclude incompatible files from queue</span>
-                </div>
-                <label class="toggle">
-                  <input type="checkbox" id="safeMode" name="safeMode" value="true" ${config.playback.safeMode ? 'checked' : ''}>
-                  <span class="toggle-slider"></span>
-                </label>
-              </div>
-            </div>
-            
-            <div class="form-group" id="hardware-profile-section">
-              <label>Hardware Profile</label>
-              <div class="hardware-profile-display">
-                <span class="profile-badge">${props.hardwareProfileName ?? 'Unknown'}</span>
-                <span class="hint">Device capabilities are auto-detected</span>
-              </div>
+              <label for="mpvSocket">IPC socket path</label>
+              <input type="text" id="mpvSocket" name="mpvSocket" value="${escapeHtml(config.mpv.ipcSocket)}">
+              <span class="hint">Used when ToastTV controls a local MPV process.</span>
             </div>
           </section>
-          <!-- About Section -->
+
           <section class="settings-card" id="about">
             <div class="card-header">
-              <h2>📡 About</h2>
+              <div><p class="settings-card-kicker">ToastTV</p><h3>Version and updates</h3></div>
             </div>
             
             <div class="form-group">
               <label>Version</label>
-              <span class="version-display">${props.currentVersion ?? 'unknown'}</span>
+              <span class="version-display">${escapeHtml(props.currentVersion ?? 'unknown')}</span>
             </div>
 
             <div class="form-group" aria-label="TMDB attribution">
@@ -221,10 +256,10 @@ export function renderSettings(props: SettingsProps): string {
                     </div>`
                   : props.updateAvailable
                   ? `<div class="update-result update-available">
-                      <span class="update-status">🎉 Update available: ${props.latestVersion}</span>
+                      <span class="update-status">Update available: ${escapeHtml(props.latestVersion ?? '')}</span>
                       <button type="button" class="btn btn-primary" id="update-apply-btn"
                               onclick="startUpdate()">
-                        Update to ${props.latestVersion}
+                        Update to ${escapeHtml(props.latestVersion ?? '')}
                       </button>
                     </div>`
                   : ''
@@ -238,16 +273,17 @@ export function renderSettings(props: SettingsProps): string {
                     hx-get="/api/update/check"
                     hx-target="#update-result"
                     hx-swap="innerHTML">
-              🔍 Check for Updates
+              Check for updates
             </button>`
             }
 
           </section>
-        </div>
+          </div>
+        </section>
         
         <div class="form-actions-sticky">
           <button type="submit" class="btn btn-primary btn-large">
-            💾 Save Settings
+            Save settings
           </button>
         </div>
       </form>

@@ -5,6 +5,7 @@ import {
   type LibraryChannelPolicy,
 } from '../config/library'
 import type { ChannelService } from '../services/ChannelService'
+import type { ChannelLogoStore } from '../services/ChannelLogoStore'
 import type { StationBuildRequest } from '../services/ChannelService'
 import type {
   StationAirtimeId,
@@ -14,10 +15,16 @@ import { renderChannelAdministration } from '../templates/channelAdministration'
 
 interface ChannelControllerDeps {
   channels: ChannelService
+  logos?: ChannelLogoStore
+  onBrandingUpdated?: (channelId: string) => Promise<void> | void
 }
 
 /** Schedule API, same-origin channel administration, and browser editor. */
-export function createChannelController({ channels }: ChannelControllerDeps) {
+export function createChannelController({
+  channels,
+  logos,
+  onBrandingUpdated,
+}: ChannelControllerDeps) {
   const controller = new Hono()
 
   controller.get('/api/v1/channels', (c) => c.json(channels.list()))
@@ -90,13 +97,14 @@ export function createChannelController({ channels }: ChannelControllerDeps) {
 
   controller.put('/api/admin/v1/channels/:id', async (c) => {
     try {
+      const id = c.req.param('id')
       const channel = channels.update(
-        c.req.param('id'),
+        id,
         await readJsonChannel(c.req.raw)
       )
-      return channel
-        ? c.json({ channel })
-        : c.json({ error: 'Channel not found' }, 404)
+      if (!channel) return c.json({ error: 'Channel not found' }, 404)
+      await onBrandingUpdated?.(id)
+      return c.json({ channel })
     } catch (error) {
       return c.json({ error: safeMessage(error) }, 400)
     }
@@ -104,9 +112,10 @@ export function createChannelController({ channels }: ChannelControllerDeps) {
 
   controller.delete('/api/admin/v1/channels/:id', (c) => {
     try {
-      return channels.delete(c.req.param('id'))
-        ? c.json({ deleted: true })
-        : c.json({ error: 'Channel not found' }, 404)
+      const id = c.req.param('id')
+      if (!channels.delete(id)) return c.json({ error: 'Channel not found' }, 404)
+      logos?.remove(id)
+      return c.json({ deleted: true })
     } catch (error) {
       return c.json({ error: safeMessage(error) }, 500)
     }
@@ -149,15 +158,30 @@ export function createChannelController({ channels }: ChannelControllerDeps) {
   controller.get('/channels', async (c) => {
     const changed = c.req.query('changed')
     const builder = textValue(c.req.query('builder'))
+    const automationTargetId =
+      builder && builder !== 'create' ? builder : undefined
+    let automationDraft: StationBuildRequest | undefined
+    if (automationTargetId) {
+      try {
+        automationDraft = await channels.stationAutomationDraft(
+          automationTargetId
+        )
+      } catch {
+        // The catalog surface below reports catalog failures without taking
+        // the rest of channel administration offline.
+      }
+    }
     return c.html(
       renderChannelAdministration(channels.administrationSnapshot(), {
         ...(await automationSurface(channels)),
         editId: c.req.query('edit'),
         newChannel: c.req.query('new') === 'manual',
-        automationTargetId:
-          builder && builder !== 'create' ? builder : undefined,
+        automationTargetId,
+        automationDraft,
         automationOpen: builder === 'create' || Boolean(builder),
         automationSearch: readCatalogSearch(c.req.query('catalogSearch')),
+        channelLogoIds: channelLogoIds(channels, logos),
+        channelLogoVariants: channelLogoVariants(channels, logos),
         changed:
           changed === 'created' ||
           changed === 'updated' ||
@@ -242,7 +266,8 @@ export function createChannelController({ channels }: ChannelControllerDeps) {
 
   controller.post('/channels', async (c) => {
     try {
-      channels.create(await readFormChannel(c.req.raw))
+      const { channel } = await readFormChannel(c.req.raw)
+      channels.create(channel)
       return c.redirect('/channels?changed=created', 303)
     } catch (error) {
       return c.html(
@@ -259,14 +284,24 @@ export function createChannelController({ channels }: ChannelControllerDeps) {
   controller.post('/channels/:id', async (c) => {
     try {
       const id = c.req.param('id')
-      const channel = channels.update(id, await readFormChannel(c.req.raw))
+      const { channel: input, logo, scheduledLogos } = await readFormChannel(c.req.raw)
+      if (logo && logos) await logos.save(id, logo)
+      if (logos) {
+        for (const scheduled of scheduledLogos) {
+          await logos.save(id, scheduled.file, scheduled.id)
+        }
+      }
+      const channel = channels.update(id, input)
       if (!channel) return c.text('Channel not found', 404)
+      await onBrandingUpdated?.(id)
       return c.redirect('/channels?changed=updated', 303)
     } catch (error) {
       return c.html(
         renderChannelAdministration(channels.administrationSnapshot(), {
           ...(await automationSurface(channels)),
           editId: c.req.param('id'),
+          channelLogoIds: channelLogoIds(channels, logos),
+          channelLogoVariants: channelLogoVariants(channels, logos),
           error: safeMessage(error),
         }),
         400
@@ -288,9 +323,10 @@ export function createChannelController({ channels }: ChannelControllerDeps) {
 
   controller.post('/channels/:id/delete', (c) => {
     try {
-      return channels.delete(c.req.param('id'))
-        ? c.redirect('/channels?changed=deleted', 303)
-        : c.text('Channel not found', 404)
+      const id = c.req.param('id')
+      if (!channels.delete(id)) return c.text('Channel not found', 404)
+      logos?.remove(id)
+      return c.redirect('/channels?changed=deleted', 303)
     } catch (error) {
       return c.text(safeMessage(error), 500)
     }
@@ -423,6 +459,7 @@ function isStationPreset(value: string): value is StationPresetId {
     'family-animation',
     'nature-documentaries',
     'nickelodeon-style',
+    'nick-jr-style',
     'movie-night',
     'custom',
   ].includes(value)
@@ -448,7 +485,13 @@ async function readJsonChannel(request: Request): Promise<LibraryChannelPolicy> 
   return validateLibraryChannels([value])[0] as LibraryChannelPolicy
 }
 
-async function readFormChannel(request: Request): Promise<LibraryChannelPolicy> {
+async function readFormChannel(
+  request: Request
+): Promise<{
+  channel: LibraryChannelPolicy
+  logo?: File
+  scheduledLogos: Array<{ id: string; file: File }>
+}> {
   const data = await request.formData()
   const value = {
     id: textValue(data.get('id')),
@@ -456,8 +499,73 @@ async function readFormChannel(request: Request): Promise<LibraryChannelPolicy> 
     timezone: textValue(data.get('timezone')),
     enabled: data.get('enabled') !== null,
     slots: parseChannelSlots(textValue(data.get('slots'))),
+    branding: {
+      mode: textValue(data.get('brandingMode')) || 'inherit',
+      opacity: integerValue(data.get('brandingOpacity'), 210),
+      position: integerValue(data.get('brandingPosition'), 2),
+      x: integerValue(data.get('brandingX'), 24),
+      y: integerValue(data.get('brandingY'), 24),
+      sizePercent: integerValue(data.get('brandingSizePercent'), 12),
+    },
   }
-  return validateLibraryChannels([value])[0] as LibraryChannelPolicy
+  const logo = data.get('brandingLogo')
+  const scheduledLogos: Array<{ id: string; file: File }> = []
+  for (const value of data.getAll('brandingVariantLogos')) {
+    if (typeof value === 'string' || value.size <= 0) continue
+    const file = value as unknown as File
+    scheduledLogos.push({ id: scheduledLogoId(value.name), file })
+  }
+  const duplicate = scheduledLogos.find(
+    (item, index) => scheduledLogos.findIndex((candidate) => candidate.id === item.id) !== index
+  )
+  if (duplicate) throw new Error(`More than one scheduled logo uses ID ${duplicate.id}`)
+  return {
+    channel: validateLibraryChannels([value])[0] as LibraryChannelPolicy,
+    ...(logo instanceof File && logo.size > 0 ? { logo } : {}),
+    scheduledLogos,
+  }
+}
+
+function scheduledLogoId(filename: string): string {
+  const stem = filename.replace(/\.png$/i, '')
+  const id = stem
+    .normalize('NFKD')
+    .replace(/[^a-zA-Z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64)
+    .toLowerCase()
+  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(id)) {
+    throw new Error('Scheduled logo filenames must contain letters or numbers')
+  }
+  return id
+}
+
+function integerValue(value: unknown, fallback: number): number {
+  const text = textValue(value)
+  return /^-?\d+$/.test(text) ? Number(text) : fallback
+}
+
+function channelLogoIds(
+  channels: ChannelService,
+  logos?: ChannelLogoStore
+): string[] {
+  if (!logos) return []
+  return channels
+    .administrationSnapshot()
+    .channels.filter((channel) => logos.has(channel.id))
+    .map((channel) => channel.id)
+}
+
+function channelLogoVariants(
+  channels: ChannelService,
+  logos?: ChannelLogoStore
+): Record<string, string[]> {
+  if (!logos) return {}
+  return Object.fromEntries(
+    channels
+      .administrationSnapshot()
+      .channels.map((channel) => [channel.id, logos.variants(channel.id)])
+  )
 }
 
 export function parseChannelSlots(value: string): ChannelScheduleSlot[] {
@@ -468,20 +576,34 @@ export function parseChannelSlots(value: string): ChannelScheduleSlot[] {
     .filter(Boolean)
   return lines.map((line, index) => {
     const parts = line.split('|').map((part) => part.trim())
-    if (parts.length !== 3) {
-      throw new Error(`Schedule line ${index + 1} must contain days, time, and groups`)
+    if (parts.length !== 3 && parts.length !== 4) {
+      throw new Error(`Schedule line ${index + 1} must contain days, time, groups, and optional branding`)
     }
     const time = /^(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})$/.exec(parts[1] ?? '')
     if (!time) {
       throw new Error(`Schedule line ${index + 1} has an invalid time range`)
     }
+    const branding = parseSlotBranding(parts[3] ?? 'channel', index)
     return {
       days: (parts[0] ?? '').split(',').map((day) => day.trim().toLowerCase()),
       start: time[1] as string,
       end: time[2] as string,
       groups: (parts[2] ?? '').split(',').map((group) => group.trim()),
+      ...(branding.mode === 'channel' ? {} : { branding }),
     } as ChannelScheduleSlot
   })
+}
+
+function parseSlotBranding(
+  value: string,
+  index: number
+): NonNullable<ChannelScheduleSlot['branding']> {
+  if (value === 'channel' || value === 'inherit' || value === 'off') {
+    return { mode: value }
+  }
+  const custom = /^custom:([a-z0-9][a-z0-9_-]{0,63})$/i.exec(value)
+  if (custom) return { mode: 'custom', logoId: custom[1] }
+  throw new Error(`Schedule line ${index + 1} has invalid branding; use channel, inherit, off, or custom:logo-id`)
 }
 
 function textValue(value: unknown): string {

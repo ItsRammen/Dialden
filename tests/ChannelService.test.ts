@@ -819,6 +819,12 @@ describe('ChannelService', () => {
       expect(service.administrationSnapshot().manuallyOffAir).toContain(
         'kids-club'
       )
+      expect(await service.stationAutomationDraft('kids-club')).toMatchObject({
+        id: 'kids-club',
+        preset: 'custom',
+        airtime: 'all-day',
+        collectionIds: [8],
+      })
 
       const restored = new ChannelService(repository, policy, undefined, store)
       expect(

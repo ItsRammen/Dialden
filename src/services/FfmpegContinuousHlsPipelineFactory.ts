@@ -97,7 +97,7 @@ export class FfmpegContinuousHlsPipelineFactory implements ChannelPipelineFactor
 
   command(request: ChannelPipelineRequest): string[] {
     const args: string[] = [this.ffmpegPath, '-hide_banner', '-nostdin', '-loglevel', 'warning']
-    const streams: Array<{ video: number; audio: number }> = []
+    const streams: Array<{ video: number; audio: number; overlay?: number }> = []
     let inputIndex = 0
     for (const item of request.sequence) {
       if (item.loopSource) args.push('-stream_loop', '-1')
@@ -113,20 +113,41 @@ export class FfmpegContinuousHlsPipelineFactory implements ChannelPipelineFactor
         args.push('-f', 'lavfi', '-t', decimal(item.sourceDurationSeconds), '-i', 'anullsrc=r=48000:cl=stereo')
         audio = inputIndex++
       }
-      streams.push({ video, audio })
+      const itemOverlay = item.overlay === undefined ? request.overlay : item.overlay ?? undefined
+      let overlay: number | undefined
+      if (itemOverlay) {
+        args.push('-loop', '1', '-i', itemOverlay.sourcePath)
+        overlay = inputIndex++
+      }
+      streams.push({ video, audio, overlay })
     }
 
     const chains: string[] = []
-    streams.forEach(({ video, audio }, index) => {
+    streams.forEach(({ video, audio, overlay }, index) => {
+      const itemOverlay = request.sequence[index]?.overlay === undefined
+        ? request.overlay
+        : request.sequence[index]?.overlay ?? undefined
+      const normalizedVideo = `[basev${index}]`
       chains.push(
         `[${video}:v:0]scale=${request.profile.maximumWidth}:${request.profile.maximumHeight}:force_original_aspect_ratio=decrease,` +
           `pad=${request.profile.maximumWidth}:${request.profile.maximumHeight}:(ow-iw)/2:(oh-ih)/2,` +
-          `setsar=1,fps=30,format=yuv420p,setpts=PTS-STARTPTS[v${index}]`
+          `setsar=1,fps=30,format=yuv420p,setpts=PTS-STARTPTS${normalizedVideo}`
       )
       chains.push(
         `[${audio}:a:0]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,` +
           `aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS[a${index}]`
       )
+      if (itemOverlay && overlay !== undefined) {
+        const width = Math.max(1, Math.round(request.profile.maximumWidth * (itemOverlay.sizePercent / 100)))
+        const left = itemOverlay.position === 0 || itemOverlay.position === 6
+        const top = itemOverlay.position === 0 || itemOverlay.position === 2
+        const x = left ? String(itemOverlay.x) : `W-w-${itemOverlay.x}`
+        const y = top ? String(itemOverlay.y) : `H-h-${itemOverlay.y}`
+        chains.push(`[${overlay}:v:0]format=rgba,colorchannelmixer=aa=${decimalUnit(itemOverlay.opacity)},scale=${width}:-1[brand${index}]`)
+        chains.push(`${normalizedVideo}[brand${index}]overlay=x=${x}:y=${y}:shortest=1[v${index}]`)
+      } else {
+        chains.push(`${normalizedVideo}null[v${index}]`)
+      }
     })
     const pads = streams.map((_, index) => `[v${index}][a${index}]`).join('')
     // Pace the joined broadcast clock, not each input clock. Applying `-re` to
@@ -172,4 +193,11 @@ export class FfmpegContinuousHlsPipelineFactory implements ChannelPipelineFactor
 function decimal(value: number): string {
   if (!Number.isFinite(value) || value < 0) throw new Error('FFmpeg time values must be finite and non-negative')
   return value.toFixed(3).replace(/\.000$/, '')
+}
+
+function decimalUnit(value: number): string {
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    throw new Error('FFmpeg overlay opacity must be between 0 and 1')
+  }
+  return value.toFixed(3).replace(/0+$/, '').replace(/\.$/, '')
 }
