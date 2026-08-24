@@ -121,6 +121,35 @@ describe('ChannelController', () => {
     )
   })
 
+  test('creates an all-day station directly from the browser builder', async () => {
+    const channels = mock<ChannelService>()
+    const app = new Hono().route('/', createChannelController({ channels }))
+    const body = new URLSearchParams({
+      action: 'create',
+      id: 'all-shows',
+      name: 'All Shows',
+      timezone: 'Asia/Taipei',
+      preset: 'all-approved-tv',
+      airtime: 'all-day',
+    })
+
+    const response = await app.request('/channels/auto-build', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body,
+    })
+
+    expect(response.status).toBe(303)
+    expect(response.headers.get('location')).toBe('/channels?changed=generated')
+    expect(channels.createAutomatedStation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'all-shows',
+        preset: 'all-approved-tv',
+        airtime: 'all-day',
+      })
+    )
+  })
+
   test('keeps channel administration available when automation catalog loading fails', async () => {
     const channels = mock<ChannelService>()
     channels.administrationSnapshot.mockReturnValue({

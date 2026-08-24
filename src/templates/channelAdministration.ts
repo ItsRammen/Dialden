@@ -33,6 +33,7 @@ export function renderChannelAdministration(
   return renderLayout(
     'Channels',
     `<link rel="stylesheet" href="/css/channels.css">
+    <script src="/js/channels.js" defer></script>
     <div class="channel-admin">
       <header class="channel-admin-hero">
         <div>
@@ -91,22 +92,19 @@ export function renderChannelAdministration(
         <form method="post" action="${edit ? `/channels/${encodeURIComponent(edit.id)}` : '/channels'}">
           <div class="channel-admin-fields">
             <label>Channel ID
-              <input name="id" required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_-]*" value="${escapeHtml(edit?.id ?? '')}" ${edit ? 'readonly' : ''} placeholder="cartoon-classics">
+              <input type="text" name="id" required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_-]*" value="${escapeHtml(edit?.id ?? '')}" ${edit ? 'readonly' : ''} placeholder="cartoon-classics">
               <small>Stable identifier used by TV clients; it cannot be renamed.</small>
             </label>
             <label>Display name
-              <input name="name" required maxlength="100" value="${escapeHtml(edit?.name ?? '')}" placeholder="Cartoon Classics">
+              <input type="text" name="name" required maxlength="100" value="${escapeHtml(edit?.name ?? '')}" placeholder="Cartoon Classics">
             </label>
             <label>Timezone
-              <input name="timezone" required maxlength="100" value="${escapeHtml(edit?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone)}" placeholder="America/New_York">
+              <input type="text" name="timezone" required maxlength="100" value="${escapeHtml(edit?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone)}" placeholder="America/New_York">
               <small>Use an IANA timezone such as America/New_York or Asia/Taipei.</small>
             </label>
             <label class="channel-admin-checkbox"><input type="checkbox" name="enabled" ${edit?.enabled === false ? '' : 'checked'}> Enabled and visible to TV clients</label>
           </div>
-          <label>Schedule slots
-            <textarea name="slots" rows="9" spellcheck="false" placeholder="mon,tue,wed,thu,fri | 06:30-08:30 | comfort,learning">${escapeHtml(formatSlots(edit?.slots ?? []))}</textarea>
-          </label>
-          <p class="channel-admin-help">Enter one slot per line: <code>days | start-end | programming groups</code>. Times use 24-hour local channel time and slots cannot cross midnight.</p>
+          ${renderScheduleDesigner(edit?.slots ?? [], groups)}
           <div class="channel-admin-groups">
             <strong>Groups currently assigned by the library policy</strong>
             ${
@@ -187,14 +185,14 @@ function renderAutomationBuilder(
             </div>
             <div class="channel-admin-fields">
               <label>Station ID
-                <input name="id" required maxlength="59" pattern="[A-Za-z0-9][A-Za-z0-9_-]*" value="${escapeHtml(draft?.id ?? '')}" placeholder="saturday-cartoons">
+                <input type="text" name="id" required maxlength="59" pattern="[A-Za-z0-9][A-Za-z0-9_-]*" value="${escapeHtml(draft?.id ?? '')}" placeholder="saturday-cartoons">
                 <small>Used by TV clients. The generated group uses the same stable ID.</small>
               </label>
               <label>Display name
-                <input name="name" required maxlength="100" value="${escapeHtml(draft?.name ?? '')}" placeholder="Saturday Cartoons">
+                <input type="text" name="name" required maxlength="100" value="${escapeHtml(draft?.name ?? '')}" placeholder="Saturday Cartoons">
               </label>
               <label>Timezone
-                <input name="timezone" required maxlength="100" value="${escapeHtml(timezone)}" placeholder="America/New_York">
+                <input type="text" name="timezone" required maxlength="100" value="${escapeHtml(timezone)}" placeholder="America/New_York">
               </label>
             </div>
 
@@ -254,10 +252,11 @@ function renderAutomationBuilder(
 
             ${renderAutomationPreview(preview)}
             <div class="channel-auto-actions">
-              <button type="submit" name="action" value="preview" class="btn-secondary">Preview matches</button>
+              <button type="submit" name="action" value="preview" class="btn-secondary">Preview lineup</button>
+              <button type="submit" name="action" value="create">Create ${escapeHtml(airtimeActionLabel(selectedAirtime))} station</button>
             </div>
           </form>
-          ${renderAutomationCreateForm(preview, draft)}`
+          `
     }
   </section>`
 }
@@ -300,36 +299,6 @@ function renderAutomationPreview(preview?: StationBuildPreview): string {
       .join(' · ')}${preview.collectionCount > 12 ? ` · and ${preview.collectionCount - 12} more` : ''}</p>
     <small>The generated station is enabled immediately and receives the selected editable airtime schedule.</small>
   </div>`
-}
-
-function renderAutomationCreateForm(
-  preview?: StationBuildPreview,
-  draft?: StationBuildRequest
-): string {
-  if (
-    !preview ||
-    !draft ||
-    preview.collectionCount === 0 ||
-    preview.eligibleFiles === 0
-  ) {
-    return ''
-  }
-  const hidden = (name: string, value: string | number) =>
-    `<input type="hidden" name="${name}" value="${escapeHtml(String(value))}">`
-  return `<form method="post" action="/channels/auto-build" class="channel-auto-confirm">
-    ${hidden('action', 'create')}
-    ${hidden('id', draft.id)}
-    ${hidden('name', draft.name)}
-    ${hidden('timezone', draft.timezone)}
-    ${hidden('preset', draft.preset)}
-    ${hidden('airtime', draft.airtime ?? 'all-day')}
-    ${(draft.collectionIds ?? []).map((value) => hidden('collectionIds', value)).join('')}
-    ${(draft.genres ?? []).map((value) => hidden('genres', value)).join('')}
-    ${(draft.networks ?? []).map((value) => hidden('networks', value)).join('')}
-    ${(draft.studios ?? []).map((value) => hidden('studios', value)).join('')}
-    <p>This creates the exact lineup shown in the preview. Preview again after changing any selector.</p>
-    <button type="submit">Create enabled station</button>
-  </form>`
 }
 
 function normalizedSet(values: readonly string[]): Set<string> {
@@ -405,4 +374,94 @@ function formatSlots(slots: LibraryChannelPolicy['slots']): string {
         `${slot.days.join(',')} | ${slot.start}-${slot.end} | ${slot.groups.join(',')}`
     )
     .join('\n')
+}
+
+const SCHEDULE_DAYS = [
+  ['mon', 'Mon'],
+  ['tue', 'Tue'],
+  ['wed', 'Wed'],
+  ['thu', 'Thu'],
+  ['fri', 'Fri'],
+  ['sat', 'Sat'],
+  ['sun', 'Sun'],
+] as const
+
+function renderScheduleDesigner(
+  slots: LibraryChannelPolicy['slots'],
+  configuredGroups: readonly string[]
+): string {
+  const groups = [...new Set([
+    ...configuredGroups,
+    ...slots.flatMap((slot) => slot.groups),
+  ])].sort((left, right) => left.localeCompare(right))
+  return `<section class="channel-schedule" data-schedule-editor>
+    <header class="channel-schedule-header">
+      <div>
+        <h3>Weekly schedule</h3>
+        <p>Build time blocks visually. A full-day channel uses every day from 00:00 to 24:00.</p>
+      </div>
+      <button type="button" class="btn-secondary" data-add-slot>Add time block</button>
+    </header>
+    <div class="channel-week" data-calendar aria-label="Weekly schedule preview">
+      ${SCHEDULE_DAYS.map(([day, label]) => `<section><strong>${label}</strong><div data-calendar-day="${day}">${renderCalendarEntries(slots, day)}</div></section>`).join('')}
+    </div>
+    <div class="channel-slot-list" data-slot-list>
+      ${slots.map((slot, index) => renderSlotEditor(slot, groups, index)).join('')}
+    </div>
+    <p class="channel-schedule-empty" data-schedule-empty ${slots.length > 0 ? 'hidden' : ''}>No airtime blocks yet. Add one to put this channel on the guide.</p>
+    <details class="channel-schedule-advanced">
+      <summary>Advanced schedule text</summary>
+      <p>Edit the serialized schedule only when you need an unusual time or group. Saving uses this value.</p>
+      <textarea name="slots" rows="7" spellcheck="false" data-schedule-serialized placeholder="mon,tue,wed,thu,fri | 06:30-08:30 | comfort,learning">${escapeHtml(formatSlots(slots))}</textarea>
+    </details>
+    <template data-slot-template>${renderSlotEditor(undefined, groups, 0)}</template>
+  </section>`
+}
+
+function renderSlotEditor(
+  slot: LibraryChannelPolicy['slots'][number] | undefined,
+  groups: readonly string[],
+  index: number
+): string {
+  return `<article class="channel-slot" data-slot>
+    <header><strong>Time block <span data-slot-number>${index + 1}</span></strong><button type="button" class="channel-slot-remove" data-remove-slot>Remove</button></header>
+    <fieldset class="channel-slot-days"><legend>Days</legend><div>
+      ${SCHEDULE_DAYS.map(([day, label]) => `<label><input type="checkbox" value="${day}" data-slot-day ${slot?.days.includes(day) ? 'checked' : ''}><span>${label}</span></label>`).join('')}
+    </div></fieldset>
+    <div class="channel-slot-time">
+      <label>Starts ${renderTimeSelect('start', slot?.start ?? '00:00')}</label>
+      <span aria-hidden="true">→</span>
+      <label>Ends ${renderTimeSelect('end', slot?.end ?? '24:00')}</label>
+    </div>
+    <fieldset class="channel-slot-groups"><legend>Programming groups</legend>
+      ${groups.length > 0 ? `<div>${groups.map((group) => `<label><input type="checkbox" value="${escapeHtml(group)}" data-slot-group ${slot?.groups.includes(group) ? 'checked' : ''}><span>${escapeHtml(group)}</span></label>`).join('')}</div>` : '<p>No assigned groups are available yet.</p>'}
+      <label class="channel-slot-custom">Additional groups <input type="text" data-slot-custom-groups placeholder="Optional, comma-separated"></label>
+    </fieldset>
+  </article>`
+}
+
+function renderTimeSelect(kind: 'start' | 'end', selected: string): string {
+  const values: string[] = []
+  const firstMinutes = kind === 'start' ? 0 : 30
+  const lastMinutes = kind === 'start' ? 23 * 60 + 30 : 24 * 60
+  for (let minutes = firstMinutes; minutes <= lastMinutes; minutes += 30) {
+    values.push(`${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`)
+  }
+  if (!values.includes(selected)) values.push(selected)
+  values.sort()
+  return `<select data-slot-${kind}>${values.map((value) => `<option value="${value}" ${value === selected ? 'selected' : ''}>${value}</option>`).join('')}</select>`
+}
+
+function renderCalendarEntries(
+  slots: LibraryChannelPolicy['slots'],
+  day: string
+): string {
+  return slots
+    .filter((slot) => slot.days.includes(day as (typeof SCHEDULE_DAYS)[number][0]))
+    .map((slot) => `<span><b>${escapeHtml(slot.start)}–${escapeHtml(slot.end)}</b><small>${escapeHtml(slot.groups.join(', '))}</small></span>`)
+    .join('')
+}
+
+function airtimeActionLabel(airtime: string): string {
+  return airtime === 'all-day' ? 'all-day' : airtime.replaceAll('-', ' ')
 }

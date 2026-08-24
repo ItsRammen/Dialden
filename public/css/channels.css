@@ -152,6 +152,7 @@
 
 .channel-admin button:focus-visible,
 .channel-admin input:focus-visible,
+.channel-admin select:focus-visible,
 .channel-admin textarea:focus-visible,
 .channel-admin summary:focus-visible,
 .channel-admin a:focus-visible {
@@ -201,7 +202,10 @@
 
 .channel-admin input[type="text"],
 .channel-admin input[type="search"],
+.channel-admin input[type="time"],
+.channel-admin select,
 .channel-admin textarea {
+  box-sizing: border-box;
   padding: 0.7rem 0.8rem;
   border: 1px solid rgba(255, 255, 255, 0.28);
   border-radius: 0.55rem;
@@ -220,6 +224,20 @@
   min-height: 12rem;
   resize: vertical;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.channel-admin input[readonly] {
+  color: var(--text-secondary);
+  background: rgba(5, 18, 39, 0.72);
+  cursor: not-allowed;
+}
+
+.channel-admin input[type="checkbox"],
+.channel-admin input[type="radio"] {
+  flex: 0 0 auto;
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--toast-teal);
 }
 
 .channel-admin-checkbox {
@@ -258,6 +276,226 @@
   background: rgba(0, 0, 0, 0.24);
 }
 
+.channel-schedule {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid rgba(0, 214, 201, 0.36);
+  border-radius: 0.8rem;
+  background: rgba(4, 24, 51, 0.34);
+}
+
+.channel-schedule-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.channel-schedule-header h3,
+.channel-schedule-header p {
+  margin: 0;
+}
+
+.channel-schedule-header p {
+  margin-top: 0.3rem;
+  color: var(--text-secondary);
+}
+
+.channel-week {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(7rem, 1fr));
+  gap: 1px;
+  overflow-x: auto;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 0.7rem;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.channel-week > section {
+  min-height: 7.2rem;
+  padding: 0.55rem;
+  background: #102f57;
+}
+
+.channel-week > section > strong {
+  display: block;
+  margin-bottom: 0.5rem;
+  color: var(--toast-teal);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+}
+
+.channel-week [data-calendar-day] {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.channel-week [data-calendar-day] > span {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  padding: 0.4rem;
+  overflow: hidden;
+  border-left: 3px solid var(--toast-yellow);
+  border-radius: 0.35rem;
+  background: rgba(255, 210, 63, 0.11);
+}
+
+.channel-week b,
+.channel-week small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channel-week small {
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+}
+
+.channel-slot-list {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.channel-slot {
+  display: grid;
+  grid-template-columns: minmax(17rem, 1.25fr) minmax(13rem, 0.8fr);
+  gap: 0.85rem 1rem;
+  padding: 0.9rem;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 0.7rem;
+  background: rgba(0, 0, 0, 0.14);
+}
+
+.channel-slot > header {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.channel-slot-remove {
+  padding: 0.35rem 0.55rem !important;
+  color: #ffd7df !important;
+  background: rgba(189, 53, 81, 0.55) !important;
+}
+
+.channel-slot fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.channel-slot legend {
+  margin-bottom: 0.45rem;
+  font-weight: 800;
+}
+
+.channel-slot-days > div,
+.channel-slot-groups > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.channel-slot-days label,
+.channel-slot-groups > div label {
+  position: relative;
+  display: inline-flex;
+  cursor: pointer;
+}
+
+.channel-slot-days input,
+.channel-slot-groups > div input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.channel-slot-days span,
+.channel-slot-groups > div span {
+  padding: 0.38rem 0.58rem;
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background: rgba(5, 25, 53, 0.56);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.channel-slot-days input:checked + span,
+.channel-slot-groups > div input:checked + span {
+  border-color: var(--toast-teal);
+  color: #041417;
+  background: var(--toast-teal);
+}
+
+.channel-slot-days input:focus-visible + span,
+.channel-slot-groups > div input:focus-visible + span {
+  outline: 3px solid var(--toast-yellow);
+  outline-offset: 2px;
+}
+
+.channel-slot-time {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: end;
+  gap: 0.55rem;
+}
+
+.channel-slot-time label {
+  min-width: 0;
+}
+
+.channel-slot-time select {
+  width: 100%;
+}
+
+.channel-slot-groups {
+  grid-column: 1 / -1;
+}
+
+.channel-slot-groups > p {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.channel-slot-custom {
+  max-width: 28rem;
+  margin-top: 0.65rem;
+}
+
+.channel-schedule-empty {
+  margin: 0;
+  padding: 1rem;
+  border: 1px dashed rgba(255, 255, 255, 0.3);
+  border-radius: 0.65rem;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.channel-schedule-advanced {
+  padding: 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 0.65rem;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.channel-schedule-advanced summary {
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.channel-schedule-advanced p {
+  color: var(--text-secondary);
+}
+
 .channel-admin-empty {
   padding: 1.25rem;
   border: 1px dashed rgba(255, 255, 255, 0.35);
@@ -276,6 +514,12 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
+}
+
+.channel-auto-actions button[value="create"] {
+  padding: 0.7rem 1rem;
+  background: var(--toast-green);
+  color: #031b13;
 }
 
 .channel-auto-confirm {
@@ -562,8 +806,7 @@
   width: auto;
 }
 
-.channel-admin-editor button[type="submit"],
-.channel-auto-actions button[value="create"] {
+.channel-admin-editor button[type="submit"] {
   background: var(--toast-pink);
   color: #fff;
 }
@@ -585,13 +828,20 @@
   }
 
   .channel-auto-search > div,
-  .channel-auto-confirm {
+  .channel-auto-confirm,
+  .channel-schedule-header {
     align-items: stretch;
     flex-direction: column;
   }
 
   .channel-auto-search button,
-  .channel-auto-confirm button {
+  .channel-auto-confirm button,
+  .channel-schedule-header button {
     width: 100%;
+  }
+
+  .channel-slot {
+    display: flex;
+    flex-direction: column;
   }
 }

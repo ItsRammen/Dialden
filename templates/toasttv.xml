@@ -16,7 +16,7 @@
   <Category>MediaApp:Video</Category>
   <ExtraSearchTerms>kids television channels schedule family media</ExtraSearchTerms>
   <Requires>Readable local TV and Movies directories on the Unraid host. Keep the Web UI on a trusted LAN because authentication is not implemented yet.</Requires>
-  <Changes>0.7.3 improves automatic TMDB matching for exact titles whose regional release year differs by one.</Changes>
+  <Changes>0.7.4 adds direct all-day station creation, a visual weekly schedule editor, consistent channel form styling, and responsive navigation fixes.</Changes>
   <Date>2026-08-24</Date>
   <MinVer>6.12.0</MinVer>
   <License>MIT</License>

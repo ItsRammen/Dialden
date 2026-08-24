@@ -30,12 +30,17 @@ describe('channel administration template', () => {
 
     expect(markup).toContain('Manually off air')
     expect(markup).toContain('mon,tue | 06:30-08:30 | comfort,learning')
+    expect(markup).toContain('data-schedule-editor')
+    expect(markup).toContain('data-calendar-day="mon"')
+    expect(markup).toContain('data-slot-day checked')
+    expect(markup).toContain('data-slot-group checked')
+    expect(markup).toContain('/js/channels.js')
     expect(markup).toContain('action="/channels/kids"')
     expect(markup).toContain('&lt;script&gt;Kids&lt;/script&gt;')
     expect(markup).not.toContain('<script>Kids</script>')
   })
 
-  test('renders an honest auto-build dry run and only offers creation for playable matches', () => {
+  test('renders an honest auto-build preview with a direct all-day creation action', () => {
     const markup = renderChannelAdministration(
       {
         channels: [],
@@ -101,10 +106,9 @@ describe('channel administration template', () => {
 
     expect(markup).toContain('Personal library mix—not an official network feed')
     expect(markup).toContain('Ready to build: 1 collection · 12 schedulable files')
-    expect(markup).toContain('Create enabled station')
-    expect(markup).toContain('class="channel-auto-confirm"')
+    expect(markup).toContain('Create all-day station')
     expect(markup).toContain('name="action" value="create"')
-    expect(markup).toContain('creates the exact lineup shown in the preview')
+    expect(markup).toContain('Preview lineup')
     expect(markup).toContain('name="networks" value="ABC Kids"')
   })
 
