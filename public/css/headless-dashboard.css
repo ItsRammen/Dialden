@@ -136,6 +136,14 @@
   font-size: 0.75rem;
 }
 
+.headless-channel-card > header > div {
+  min-width: 0;
+}
+
+.headless-channel-card > header h3 {
+  overflow-wrap: anywhere;
+}
+
 .headless-status,
 .headless-state-label {
   display: inline-flex;
@@ -145,6 +153,10 @@
   font-weight: 800;
   letter-spacing: 0.05em;
   text-transform: uppercase;
+}
+
+.headless-status {
+  flex: 0 0 auto;
 }
 
 .headless-programs {
@@ -172,6 +184,12 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
+}
+
+.headless-program dd strong,
+.headless-program dd span {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .headless-program dd span,

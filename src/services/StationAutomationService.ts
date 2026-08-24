@@ -5,6 +5,7 @@ import type { ChannelScheduleSlot } from '../config/library'
 export type StationPresetId =
   | 'all-approved-tv'
   | 'family-animation'
+  | 'nature-documentaries'
   | 'nickelodeon-style'
   | 'movie-night'
   | 'custom'
@@ -124,6 +125,25 @@ const NICK_NETWORKS = new Set([
   'nicktoons',
 ])
 const NICK_STUDIO_TERMS = ['nickelodeon']
+const NATURE_DOCUMENTARY_NETWORK_TERMS = [
+  'bbc',
+  'discovery',
+  'national geographic',
+  'pbs',
+]
+const NATURE_DOCUMENTARY_TITLE_TERMS = [
+  'animal',
+  'blue planet',
+  'dinosaurs',
+  'dogs in the wild',
+  'green planet',
+  'nature',
+  'ocean',
+  'our planet',
+  'planet earth',
+  'prehistoric planet',
+  'wildlife',
+]
 const NICK_TITLES = new Set(
   [
     'aaahh real monsters',
@@ -273,6 +293,13 @@ const presetDefinitions: readonly PresetDefinition[] = [
     matches: matchesNickelodeonStyle,
   },
   {
+    id: 'nature-documentaries',
+    name: 'Nature documentaries',
+    description:
+      'Parent-allowed TMDB documentaries from nature-focused titles or documentary networks; animation is excluded.',
+    matches: matchesNatureDocumentary,
+  },
+  {
     id: 'movie-night',
     name: 'Movie night',
     description: 'Every parent-allowed, technically playable movie collection.',
@@ -295,6 +322,27 @@ function matchesNickelodeonStyle(collection: StationCollectionOption): boolean {
     return true
   }
   return NICK_TITLES.has(normalizeTitle(collection.displayTitle))
+}
+
+function matchesNatureDocumentary(
+  collection: StationCollectionOption
+): boolean {
+  if (
+    collection.libraryKind !== 'tv' ||
+    !collection.genres.some((genre) => normalize(genre) === 'documentary') ||
+    collection.genres.some((genre) => normalize(genre) === 'animation')
+  ) {
+    return false
+  }
+  const providers = [...collection.networks, ...collection.studios].map(normalize)
+  return (
+    providers.some((provider) =>
+      NATURE_DOCUMENTARY_NETWORK_TERMS.some((term) => provider.includes(term))
+    ) ||
+    NATURE_DOCUMENTARY_TITLE_TERMS.some((term) =>
+      normalizeTitle(collection.displayTitle).includes(term)
+    )
+  )
 }
 
 function toOption(collection: MediaCollection): StationCollectionOption {

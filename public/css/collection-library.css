@@ -633,6 +633,26 @@
   font-variant-numeric: tabular-nums;
 }
 
+.collection-episode-copy {
+  min-width: 0;
+}
+
+.collection-episode-copy strong,
+.collection-episode-copy small {
+  display: block;
+}
+
+.collection-episode-copy small,
+.collection-episode-copy p {
+  margin-top: 0.2rem;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+.collection-episode-copy p {
+  line-height: 1.4;
+}
+
 @media (max-width: 850px) {
   .collection-summary-grid,
   .collection-detail-states {

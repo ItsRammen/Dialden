@@ -381,6 +381,7 @@ function isStationPreset(value: string): value is StationPresetId {
   return [
     'all-approved-tv',
     'family-animation',
+    'nature-documentaries',
     'nickelodeon-style',
     'movie-night',
     'custom',

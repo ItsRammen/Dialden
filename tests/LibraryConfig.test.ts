@@ -42,6 +42,11 @@ describe('library configuration', () => {
       'nature-discovery',
       'family-movies',
     ])
+    const thornberrys = config.policy?.roots.tv?.collections.find(
+      (collection) => collection.name === 'The Wild Thornberrys'
+    )
+    expect(thornberrys?.groups).toContain('cartoons')
+    expect(thornberrys?.groups).not.toContain('nature')
   })
 
   test('rejects ancestor and descendant managed roots', () => {

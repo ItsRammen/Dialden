@@ -35,6 +35,15 @@ export interface ProviderTitleDetails extends MetadataCandidate {
   readonly studios?: readonly string[]
 }
 
+export interface ProviderEpisodeDetails {
+  readonly seasonNumber: number
+  readonly episodeNumber: number
+  readonly title: string
+  readonly overview?: string
+  readonly airDate?: string
+  readonly stillPath?: string
+}
+
 /**
  * One raw certification reported by a metadata provider. `releaseType` is
  * provider-specific supporting information (TMDB uses values 1-6 for movies).
@@ -70,6 +79,13 @@ export interface MetadataProvider {
     externalId: string,
     input: Pick<MetadataSearchInput, 'language' | 'signal'>
   ): Promise<ProviderTitleDetails>
+
+  /** Optional for providers that expose episode-level TV metadata. */
+  getTVSeason?(
+    externalId: string,
+    seasonNumber: number,
+    input: Pick<MetadataSearchInput, 'language' | 'signal'>
+  ): Promise<readonly ProviderEpisodeDetails[]>
 
   /** Regions are ordered from preferred to least-preferred fallback. */
   getMovieCertification(

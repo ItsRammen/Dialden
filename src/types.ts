@@ -133,6 +133,15 @@ export interface CollectionMetadataUpdate {
   readonly matchedAt?: string | null
 }
 
+export interface EpisodeMetadataUpdate {
+  readonly seasonNumber: number
+  readonly episodeNumber: number
+  readonly title: string
+  readonly overview?: string | null
+  readonly airDate?: string | null
+  readonly stillPath?: string | null
+}
+
 export interface LibrarySummary {
   readonly tvCollections: number
   readonly tvEpisodes: number
@@ -242,6 +251,9 @@ export interface MediaItem {
   readonly relativePath?: string
   readonly libraryKind?: LibraryKind
   readonly collectionTitle?: string
+  /** Provider-normalized collection title, when metadata matching succeeded. */
+  readonly collectionMetadataTitle?: string | null
+  readonly collectionGenres?: readonly string[]
   readonly policyEnabled?: boolean
   readonly playbackOverride?: boolean | null
   /** False until this configured root completes a successful current scan. */
@@ -253,6 +265,10 @@ export interface MediaItem {
   readonly seasonNumber?: number | null
   readonly episodeNumber?: number | null
   readonly episodeTitle?: string | null
+  readonly episodeMetadataTitle?: string | null
+  readonly episodeOverview?: string | null
+  readonly episodeAirDate?: string | null
+  readonly episodeStillPath?: string | null
 }
 
 /** Filters supported by the file-level Advanced Files catalog. */

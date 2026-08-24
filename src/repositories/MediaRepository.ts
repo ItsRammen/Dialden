@@ -13,6 +13,7 @@ import type {
   LibraryKind,
   CollectionListOptions,
   CollectionMetadataUpdate,
+  EpisodeMetadataUpdate,
   CollectionUpsertInput,
   LibrarySummary,
   MediaCollection,
@@ -46,6 +47,10 @@ CREATE TABLE IF NOT EXISTS media (
   season_number INTEGER,
   episode_number INTEGER,
   episode_title TEXT,
+  episode_metadata_title TEXT,
+  episode_overview TEXT,
+  episode_air_date TEXT,
+  episode_still_path TEXT,
   date_start TEXT,
   date_end TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
@@ -121,7 +126,12 @@ const MEDIA_COLUMNS = `
   collection_id,
   (SELECT identity_key FROM media_collections
     WHERE media_collections.id = media.collection_id) AS collection_identity_key,
-  season_number, episode_number, episode_title
+  (SELECT metadata_title FROM media_collections
+    WHERE media_collections.id = media.collection_id) AS collection_metadata_title,
+  (SELECT genres_json FROM media_collections
+    WHERE media_collections.id = media.collection_id) AS collection_genres_json,
+  season_number, episode_number, episode_title,
+  episode_metadata_title, episode_overview, episode_air_date, episode_still_path
 `
 
 /** One fail-closed expression shared by every collection query/projection. */
@@ -392,7 +402,26 @@ export class MediaRepository implements IMediaRepository {
       transaction()
     }
 
+    // Episode metadata is provider-owned and deliberately separate from the
+    // filename-derived episode title that is refreshed by every media scan.
+    const episodeColumns = this.db
+      .prepare('PRAGMA table_info(media)')
+      .all() as Array<{ name: string }>
+    const hasEpisodeColumn = (name: string) =>
+      episodeColumns.some((column) => column.name === name)
+    for (const [name, type] of [
+      ['episode_metadata_title', 'TEXT'],
+      ['episode_overview', 'TEXT'],
+      ['episode_air_date', 'TEXT'],
+      ['episode_still_path', 'TEXT'],
+    ] as const) {
+      if (!hasEpisodeColumn(name)) {
+        this.db.exec(`ALTER TABLE media ADD COLUMN ${name} ${type}`)
+      }
+    }
+
     this.migrateStationFacets()
+    this.migrateEpisodeMetadata()
 
     this.sanitizeAndGuardCollectionOverrides()
 
@@ -457,6 +486,37 @@ export class MediaRepository implements IMediaRepository {
       })
       transaction()
     }
+  }
+
+  /** Queue one direct TMDB refresh for shows matched before episode storage. */
+  private migrateEpisodeMetadata(): void {
+    if (!this.db) throw new Error('Repository not initialized')
+    const migration = this.db
+      .prepare('SELECT version FROM schema_migrations WHERE version = 3')
+      .get() as { version: number } | null
+    if (migration) return
+    this.db.transaction(() => {
+      this.db!.exec(`
+        UPDATE media_collections
+        SET metadata_status = 'pending',
+            metadata_error = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE library_kind = 'tv'
+          AND metadata_provider = 'tmdb'
+          AND metadata_external_id IS NOT NULL
+          AND trim(metadata_external_id) <> ''
+          AND metadata_status IN ('matched', 'manual')
+          AND EXISTS (
+            SELECT 1 FROM media
+            WHERE media.collection_id = media_collections.id
+              AND media.season_number IS NOT NULL
+              AND media.episode_number IS NOT NULL
+          )
+      `)
+      this.db!.prepare(
+        `INSERT INTO schema_migrations (version) VALUES (3)`
+      ).run()
+    })()
   }
 
   private sanitizeAndGuardCollectionOverrides(): void {
@@ -1062,6 +1122,54 @@ export class MediaRepository implements IMediaRepository {
     return result.changes > 0
   }
 
+  async updateCollectionEpisodeMetadata(
+    collectionId: number,
+    episodes: readonly EpisodeMetadataUpdate[]
+  ): Promise<number> {
+    if (!this.db) throw new Error('Repository not initialized')
+    if (!Number.isSafeInteger(collectionId) || collectionId <= 0) {
+      throw new Error('Invalid collection ID')
+    }
+    if (episodes.length > 10_000) throw new Error('Too many episode records')
+
+    const update = this.db.prepare(`
+      UPDATE media
+      SET episode_metadata_title = ?, episode_overview = ?,
+          episode_air_date = ?, episode_still_path = ?
+      WHERE collection_id = ? AND season_number = ? AND episode_number = ?
+    `)
+    return this.db.transaction(() => {
+      this.db!.prepare(`
+        UPDATE media
+        SET episode_metadata_title = NULL, episode_overview = NULL,
+            episode_air_date = NULL, episode_still_path = NULL
+        WHERE collection_id = ?
+      `).run(collectionId)
+      let changed = 0
+      for (const episode of episodes) {
+        if (
+          !Number.isSafeInteger(episode.seasonNumber) ||
+          episode.seasonNumber < 0 ||
+          !Number.isSafeInteger(episode.episodeNumber) ||
+          episode.episodeNumber <= 0 ||
+          !episode.title.trim()
+        ) {
+          continue
+        }
+        changed += update.run(
+          episode.title.trim(),
+          episode.overview?.trim() || null,
+          episode.airDate?.trim() || null,
+          episode.stillPath?.trim() || null,
+          collectionId,
+          episode.seasonNumber,
+          episode.episodeNumber
+        ).changes
+      }
+      return changed
+    })()
+  }
+
   async getCollectionsNeedingMetadata(limit = 25): Promise<MediaCollection[]> {
     if (!this.db) throw new Error('Repository not initialized')
     const boundedLimit = Math.max(1, Math.min(5000, Math.trunc(limit)))
@@ -1490,6 +1598,9 @@ export class MediaRepository implements IMediaRepository {
       libraryKind: this.normalizeLibraryKind(row.library_kind),
       collectionTitle:
         (row.collection_title as string) ?? (row.filename as string),
+      collectionMetadataTitle:
+        (row.collection_metadata_title as string | null) ?? null,
+      collectionGenres: this.parseStringArray(row.collection_genres_json),
       policyEnabled: Boolean(row.policy_enabled),
       playbackOverride:
         row.playback_override === null || row.playback_override === undefined
@@ -1507,6 +1618,11 @@ export class MediaRepository implements IMediaRepository {
       seasonNumber: (row.season_number as number | null) ?? null,
       episodeNumber: (row.episode_number as number | null) ?? null,
       episodeTitle: (row.episode_title as string | null) ?? null,
+      episodeMetadataTitle:
+        (row.episode_metadata_title as string | null) ?? null,
+      episodeOverview: (row.episode_overview as string | null) ?? null,
+      episodeAirDate: (row.episode_air_date as string | null) ?? null,
+      episodeStillPath: (row.episode_still_path as string | null) ?? null,
     }
   }
 

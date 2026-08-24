@@ -89,6 +89,8 @@ export interface CollectionEpisodeViewModel {
   readonly numberLabel: string
   readonly title: string
   readonly durationLabel: string
+  readonly overview?: string
+  readonly airDate?: string
   readonly technicalSummary?: string
 }
 
@@ -574,7 +576,11 @@ export function renderCollectionDetail(
                 .map(
                   (episode) => `<li>
                     <span class="collection-episode-number">${escapeHtml(episode.numberLabel)}</span>
-                    <strong>${escapeHtml(episode.title)}</strong>
+                    <div class="collection-episode-copy">
+                      <strong>${escapeHtml(episode.title)}</strong>
+                      ${episode.airDate ? `<small>${escapeHtml(episode.airDate)}</small>` : ''}
+                      ${episode.overview ? `<p>${escapeHtml(episode.overview)}</p>` : ''}
+                    </div>
                     <time>${escapeHtml(episode.durationLabel)}</time>
                     ${episode.technicalSummary ? `<details><summary>Technical details</summary><p>${escapeHtml(episode.technicalSummary)}</p></details>` : ''}
                   </li>`

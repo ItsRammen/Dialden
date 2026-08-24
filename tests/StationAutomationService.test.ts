@@ -178,6 +178,31 @@ describe('station automation', () => {
     expect(calls[0]).not.toHaveProperty('effectiveDecision')
   })
 
+  test('keeps animation out of the nature-documentary preset', async () => {
+    const records = [
+      collection(1, 'The Wild Thornberrys', {
+        genres: ['Animation', 'Comedy', 'Family'],
+        networks: ['Nickelodeon'],
+      }),
+      collection(2, 'Planet Earth III', {
+        genres: ['Documentary'],
+        networks: ['BBC One'],
+      }),
+    ]
+    const catalog = await loadStationAutomationCatalog({
+      async getCollections(options) {
+        const offset = options?.offset ?? 0
+        return records.slice(offset, offset + (options?.limit ?? 250))
+      },
+    })
+
+    expect(
+      selectStationCollections(catalog, {
+        preset: 'nature-documentaries',
+      }).map((item) => item.displayTitle)
+    ).toEqual(['Planet Earth III'])
+  })
+
   test('distinguishes an exact 5,000-collection catalog from an unsafe overflow', async () => {
     const repositoryWith = (total: number) => ({
       async getCollections(options: { offset?: number; limit?: number }) {

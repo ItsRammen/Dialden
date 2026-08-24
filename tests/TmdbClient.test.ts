@@ -53,12 +53,14 @@ describe('TMDB v3 HTTP client', () => {
 
     await client.getMovie(42, 'en-US')
     await client.getTV(43, 'en-US')
+    await client.getTVSeason(43, 3, 'en-US')
     await client.getMovieReleaseDates(42)
     await client.getTVContentRatings(43)
 
     expect(paths).toEqual([
       '/3/movie/42',
       '/3/tv/43',
+      '/3/tv/43/season/3',
       '/3/movie/42/release_dates',
       '/3/tv/43/content_ratings',
     ])

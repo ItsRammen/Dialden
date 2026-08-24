@@ -356,8 +356,15 @@ function collectionDetailModel(
               file.episodeNumber === null || file.episodeNumber === undefined
                 ? '—'
                 : String(file.episodeNumber).padStart(2, '0'),
-            title: file.episodeTitle || cleanFilename(file.filename),
+            title:
+              file.episodeMetadataTitle ||
+              file.episodeTitle ||
+              cleanFilename(file.filename),
             durationLabel: formatDuration(file.durationSeconds),
+            ...(file.episodeOverview
+              ? { overview: file.episodeOverview }
+              : {}),
+            ...(file.episodeAirDate ? { airDate: file.episodeAirDate } : {}),
             technicalSummary: [
               file.codec?.toUpperCase(),
               file.height ? `${file.height}p` : null,

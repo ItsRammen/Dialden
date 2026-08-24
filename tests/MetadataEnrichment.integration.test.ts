@@ -5,6 +5,7 @@ import type {
   MetadataProvider,
   MetadataSearchInput,
   ProviderTitleDetails,
+  ProviderEpisodeDetails,
 } from '../src/metadata/types'
 import { MetadataProviderError } from '../src/metadata/types'
 import {
@@ -39,6 +40,7 @@ interface ProviderScenario {
     language: string,
     candidate: MetadataCandidate
   ) => ProviderTitleDetails
+  readonly episodes?: readonly ProviderEpisodeDetails[]
 }
 
 function providerFor(scenario: ProviderScenario): MetadataProvider {
@@ -98,6 +100,9 @@ function providerFor(scenario: ProviderScenario): MetadataProvider {
     },
     async getTV(externalId: string, input) {
       return detailsFor(externalId, input.language)
+    },
+    async getTVSeason() {
+      return scenario.episodes ?? []
     },
     async getMovieCertification() {
       return rating()
@@ -235,6 +240,44 @@ describe('metadata enrichment and policy integration', () => {
       scheduleEligibleCount: 1,
     })
     expect(await repository.getAllVideos()).toHaveLength(1)
+  })
+
+  test('stores TMDB episode titles separately from filename-derived titles', async () => {
+    const collection = await addCollection('The Magic School Bus')
+    const service = new MetadataEnrichmentService(
+      repository,
+      providerFor({
+        candidates: [
+          {
+            provider: 'tmdb',
+            externalId: '123',
+            mediaType: 'tv',
+            title: 'The Magic School Bus',
+          },
+        ],
+        certification: 'TV-Y7',
+        episodes: [
+          {
+            seasonNumber: 1,
+            episodeNumber: 1,
+            title: 'Gets Lost in Space',
+            overview: 'The class explores the solar system.',
+            airDate: '1994-09-10',
+            stillPath: '/space.jpg',
+          },
+        ],
+      }),
+      runtimeConfig
+    )
+
+    await service.runPending()
+    const [episode] = await repository.getCollectionMedia(collection.id)
+    expect(episode).toMatchObject({
+      episodeMetadataTitle: 'Gets Lost in Space',
+      episodeOverview: 'The class explores the solar system.',
+      episodeAirDate: '1994-09-10',
+      episodeStillPath: '/space.jpg',
+    })
   })
 
   test('does not infer a connection from a configured key when no provider call ran', async () => {

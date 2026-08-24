@@ -285,6 +285,7 @@ function programModel(
   return {
     title: program.title,
     collectionTitle: program.collectionTitle,
+    episodeLabel: program.episodeLabel,
     timeRange: `${formatTime(program.scheduledStart, timezone)}–${formatTime(
       program.scheduledEnd,
       timezone

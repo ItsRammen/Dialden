@@ -11,6 +11,7 @@ import type {
   Compatibility,
   CollectionListOptions,
   CollectionMetadataUpdate,
+  EpisodeMetadataUpdate,
   CollectionUpsertInput,
   LibrarySummary,
   MediaCollection,
@@ -108,6 +109,11 @@ export interface IMediaRepository {
     id: number,
     metadata: CollectionMetadataUpdate
   ): Promise<boolean>
+
+  updateCollectionEpisodeMetadata(
+    id: number,
+    episodes: readonly EpisodeMetadataUpdate[]
+  ): Promise<number>
 
   getCollectionsNeedingMetadata(limit?: number): Promise<MediaCollection[]>
 

@@ -8,6 +8,7 @@ import {
 } from '../../config/metadata'
 import {
   MetadataProviderError,
+  type ProviderEpisodeDetails,
   type MetadataProvider,
 } from '../../metadata/types'
 import type { IMediaRepository } from '../../repositories/IMediaRepository'
@@ -648,6 +649,17 @@ export class MetadataEnrichmentService {
       error: null,
       matchedAt,
     })
+    if (collection.libraryKind === 'tv') {
+      try {
+        await this.hydrateEpisodeMetadata(collection.id, externalId)
+      } catch (error) {
+        // Show-level identity, ratings, and policy remain useful when one
+        // supplemental season request fails. A later refresh can retry it.
+        console.warn(
+          `Episode metadata refresh failed for collection ${collection.id}: ${this.safeErrorMessage(error)}`
+        )
+      }
+    }
     const evaluation = evaluatePolicy(this.profile, {
       matchStatus: status,
       certification,
@@ -658,6 +670,36 @@ export class MetadataEnrichmentService {
       evaluation.reason,
       this.profileId()
     )
+  }
+
+  private async hydrateEpisodeMetadata(
+    collectionId: number,
+    externalId: string
+  ): Promise<void> {
+    if (!this.provider.getTVSeason) return
+    const files = await this.repository.getCollectionMedia(collectionId)
+    const seasons = [
+      ...new Set(
+        files
+          .map((file) => file.seasonNumber)
+          .filter(
+            (season): season is number =>
+              season !== null &&
+              season !== undefined &&
+              Number.isSafeInteger(season) &&
+              season >= 0
+          )
+      ),
+    ].sort((left, right) => left - right)
+    const episodes: ProviderEpisodeDetails[] = []
+    for (const season of seasons) {
+      episodes.push(
+        ...(await this.provider.getTVSeason(externalId, season, {
+          language: this.config.language,
+        }))
+      )
+    }
+    await this.repository.updateCollectionEpisodeMetadata(collectionId, episodes)
   }
 
   private async recordError(

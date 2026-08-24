@@ -11,6 +11,7 @@ import {
   type TmdbNamedEntity,
   type TmdbTVContentRating,
   type TmdbTVDetails,
+  type TmdbTVEpisode,
   type TmdbTVSearchResult,
 } from '../../clients/TmdbClient'
 import {
@@ -22,6 +23,7 @@ import {
   type MetadataSearchInput,
   type ProviderRating,
   type ProviderTitleDetails,
+  type ProviderEpisodeDetails,
 } from '../../metadata/types'
 import { resolveCertification } from './RatingResolver'
 
@@ -114,6 +116,31 @@ export class TmdbMetadataProvider implements MetadataProvider {
     return this.execute(async (client) => {
       const id = parseExternalId(externalId)
       return mapTVDetails(await client.getTV(id, input.language, input.signal))
+    })
+  }
+
+  getTVSeason(
+    externalId: string,
+    seasonNumber: number,
+    input: Pick<MetadataSearchInput, 'language' | 'signal'>
+  ): Promise<readonly ProviderEpisodeDetails[]> {
+    return this.execute(async (client) => {
+      if (!Number.isSafeInteger(seasonNumber) || seasonNumber < 0) {
+        throw new MetadataProviderError('Invalid TV season number', {
+          provider: PROVIDER_ID,
+          code: 'invalid_external_id',
+        })
+      }
+      const response = await client.getTVSeason(
+        parseExternalId(externalId),
+        seasonNumber,
+        input.language,
+        input.signal
+      )
+      if (!Array.isArray(response.episodes)) throw invalidResponse()
+      return response.episodes
+        .map(mapTVEpisode)
+        .filter((episode): episode is ProviderEpisodeDetails => episode !== null)
     })
   }
 
@@ -281,6 +308,25 @@ function mapTVDetails(raw: TmdbTVDetails): ProviderTitleDetails {
   }
 }
 
+function mapTVEpisode(raw: unknown): ProviderEpisodeDetails | null {
+  if (!raw || typeof raw !== 'object') return null
+  const episode = raw as TmdbTVEpisode
+  const seasonNumber = nonNegativeInteger(episode.season_number)
+  const episodeNumber = positiveInteger(episode.episode_number)
+  const title = nonEmptyString(episode.name)
+  if (seasonNumber === null || episodeNumber === null || title === null) {
+    return null
+  }
+  return {
+    seasonNumber,
+    episodeNumber,
+    title,
+    ...optionalString('overview', episode.overview),
+    ...optionalString('airDate', episode.air_date),
+    ...optionalString('stillPath', episode.still_path),
+  }
+}
+
 function mapGenres(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   return value
@@ -326,6 +372,12 @@ function parseExternalId(value: string): number {
 
 function positiveInteger(value: unknown): number | null {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+    ? value
+    : null
+}
+
+function nonNegativeInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
     ? value
     : null
 }

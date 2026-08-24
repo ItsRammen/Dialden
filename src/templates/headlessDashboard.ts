@@ -180,7 +180,14 @@ function renderProgram(
     `
   }
 
-  const secondary = [program.collectionTitle, program.episodeLabel]
+  const secondary = [
+    program.collectionTitle?.localeCompare(program.title, undefined, {
+      sensitivity: 'base',
+    }) === 0
+      ? undefined
+      : program.collectionTitle,
+    program.episodeLabel,
+  ]
     .filter((value): value is string => Boolean(value))
     .map(escapeHtml)
     .join(' · ')

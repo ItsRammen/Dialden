@@ -58,6 +58,19 @@ export interface TmdbTVDetails extends TmdbTVSearchResult {
   readonly production_companies?: unknown
 }
 
+export interface TmdbTVEpisode {
+  readonly season_number?: unknown
+  readonly episode_number?: unknown
+  readonly name?: unknown
+  readonly overview?: unknown
+  readonly air_date?: unknown
+  readonly still_path?: unknown
+}
+
+export interface TmdbTVSeasonDetails {
+  readonly episodes?: unknown
+}
+
 export interface TmdbMovieReleaseDate {
   readonly certification?: unknown
   readonly type?: unknown
@@ -113,6 +126,12 @@ export interface ITmdbClient {
     language: string,
     signal?: AbortSignal
   ): Promise<TmdbTVDetails>
+  getTVSeason(
+    id: number,
+    seasonNumber: number,
+    language: string,
+    signal?: AbortSignal
+  ): Promise<TmdbTVSeasonDetails>
   getMovieReleaseDates(
     id: number,
     signal?: AbortSignal
@@ -241,6 +260,19 @@ export class TmdbClient implements ITmdbClient {
     signal?: AbortSignal
   ): Promise<TmdbTVDetails> {
     return this.request(`/tv/${id}`, { language }, signal)
+  }
+
+  getTVSeason(
+    id: number,
+    seasonNumber: number,
+    language: string,
+    signal?: AbortSignal
+  ): Promise<TmdbTVSeasonDetails> {
+    return this.request(
+      `/tv/${id}/season/${seasonNumber}`,
+      { language },
+      signal
+    )
   }
 
   getMovieReleaseDates(

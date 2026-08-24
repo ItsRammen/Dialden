@@ -66,6 +66,7 @@ export interface ScheduledProgram {
   readonly mediaId: number
   readonly title: string
   readonly collectionTitle: string
+  readonly episodeLabel?: string
   readonly scheduledStart: string
   readonly scheduledEnd: string
   readonly durationSeconds: number
@@ -620,7 +621,8 @@ export class ChannelService {
         channelId: channel.id,
         mediaId: selected.id,
         title: this.programTitle(selected),
-        collectionTitle: selected.collectionTitle ?? selected.filename,
+        collectionTitle: this.programCollectionTitle(selected),
+        ...this.programEpisodeLabel(selected),
         scheduledStart: scheduledStart.toISOString(),
         scheduledEnd: scheduledEnd.toISOString(),
         durationSeconds: selected.durationSeconds,
@@ -700,7 +702,8 @@ export class ChannelService {
           channelId: channel.id,
           mediaId: selected.id,
           title: this.programTitle(selected),
-          collectionTitle: selected.collectionTitle ?? selected.filename,
+          collectionTitle: this.programCollectionTitle(selected),
+          ...this.programEpisodeLabel(selected),
           scheduledStart: scheduledStart.toISOString(),
           scheduledEnd: scheduledEnd.toISOString(),
           durationSeconds: selected.durationSeconds,
@@ -752,7 +755,24 @@ export class ChannelService {
       ...(legacyAssignment?.groups ?? []),
     ]
     if (policyGroups.length > 0 || configuredGroups.length > 0) {
-      return new Set([...policyGroups, ...configuredGroups])
+      const groups = new Set([...policyGroups, ...configuredGroups])
+      const metadataGenres = new Set(
+        (item.collectionGenres ?? []).map((genre) =>
+          genre.trim().toLocaleLowerCase('en-US')
+        )
+      )
+      // A legacy title rule once put animated animal shows on the Nature
+      // station. Once TMDB has identified a title, reserve that group for
+      // documentaries and keep animation in its own programming category.
+      if (
+        groups.has('nature') &&
+        metadataGenres.size > 0 &&
+        !metadataGenres.has('documentary')
+      ) {
+        groups.delete('nature')
+        if (metadataGenres.has('animation')) groups.add('cartoons')
+      }
+      return groups
     }
     // Approval and programming-group membership are independent. A parent
     // override may make a collection eligible, but it must not silently assign
@@ -761,11 +781,38 @@ export class ChannelService {
   }
 
   private programTitle(item: MediaItem): string {
-    const filename = cleanFilename(item.filename)
-    const collection = item.collectionTitle ?? ''
-    return collection && !filename.toLowerCase().includes(collection.toLowerCase())
-      ? `${collection} — ${filename}`
-      : filename
+    const providerTitle = item.episodeMetadataTitle?.trim()
+    if (providerTitle) return providerTitle
+    const parsedTitle = item.episodeTitle
+      ?.replace(/[._]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (parsedTitle) return parsedTitle
+    return cleanFilename(item.filename).replace(/[._]+/g, ' ').trim()
+  }
+
+  private programCollectionTitle(item: MediaItem): string {
+    return (
+      item.collectionMetadataTitle?.trim() ||
+      item.collectionTitle?.trim() ||
+      cleanFilename(item.filename)
+    )
+  }
+
+  private programEpisodeLabel(
+    item: MediaItem
+  ): { episodeLabel: string } | Record<string, never> {
+    if (
+      item.seasonNumber === null ||
+      item.seasonNumber === undefined ||
+      item.episodeNumber === null ||
+      item.episodeNumber === undefined
+    ) {
+      return {}
+    }
+    return {
+      episodeLabel: `S${String(item.seasonNumber).padStart(2, '0')}E${String(item.episodeNumber).padStart(2, '0')}`,
+    }
   }
 
   private directPlayback(mediaId: number): DirectPlaybackDescriptor {

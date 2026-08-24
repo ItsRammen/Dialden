@@ -13,6 +13,7 @@ function stubClient(overrides: Partial<ITmdbClient> = {}): ITmdbClient {
     searchTV: async () => ({ page: 1, results: [] }),
     getMovie: async (id) => ({ id, title: 'Movie' }),
     getTV: async (id) => ({ id, name: 'TV Show' }),
+    getTVSeason: async () => ({ episodes: [] }),
     getMovieReleaseDates: async (id) => ({ id, results: [] }),
     getTVContentRatings: async (id) => ({ id, results: [] }),
     ...overrides,
@@ -117,6 +118,39 @@ describe('TMDB metadata provider adapter', () => {
       networks: ['ABC Kids'],
       studios: ['Ludo Studio'],
     })
+  })
+
+  test('maps TV season episodes into stored display metadata', async () => {
+    const provider = new TmdbMetadataProvider({
+      client: stubClient({
+        getTVSeason: async () => ({
+          episodes: [
+            {
+              season_number: 3,
+              episode_number: 5,
+              name: 'Gets a Bright Idea',
+              overview: 'The class learns about light.',
+              air_date: '1996-10-12',
+              still_path: '/bright-idea.jpg',
+            },
+            { season_number: 3, episode_number: 'bad', name: 'Invalid' },
+          ],
+        }),
+      }),
+    })
+
+    expect(
+      await provider.getTVSeason('123', 3, { language: 'en-US' })
+    ).toEqual([
+      {
+        seasonNumber: 3,
+        episodeNumber: 5,
+        title: 'Gets a Bright Idea',
+        overview: 'The class learns about light.',
+        airDate: '1996-10-12',
+        stillPath: '/bright-idea.jpg',
+      },
+    ])
   })
 
   test('maps movie production companies as studio facets', async () => {

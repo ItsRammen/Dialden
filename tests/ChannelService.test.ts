@@ -66,6 +66,81 @@ function video(id: number, collectionTitle: string, enabled = true): MediaItem {
 }
 
 describe('ChannelService', () => {
+  test('uses provider show and episode metadata for schedule labels', async () => {
+    const repository = mock<IMediaRepository>()
+    repository.getAll.mockResolvedValue([
+      {
+        ...video(1, 'The.Magic.School.Bus'),
+        collectionMetadataTitle: 'The Magic School Bus',
+        seasonNumber: 3,
+        episodeNumber: 5,
+        episodeTitle: 'Gets.a.Bright.Idea.480p.WEBRip',
+        episodeMetadataTitle: 'Gets a Bright Idea',
+      },
+    ])
+    const metadataPolicy: LibraryPolicyDocument = {
+      ...policy,
+      roots: {
+        tv: {
+          collections: [
+            { name: 'The.Magic.School.Bus', groups: ['learning'] },
+          ],
+        },
+      },
+    }
+    const service = new ChannelService(repository, metadataPolicy, {
+      now: () => new Date('2026-08-23T22:35:00.000Z'),
+    })
+
+    expect((await service.getNow('kids-club'))?.program).toMatchObject({
+      title: 'Gets a Bright Idea',
+      collectionTitle: 'The Magic School Bus',
+      episodeLabel: 'S03E05',
+    })
+  })
+
+  test('does not schedule TMDB animation in a legacy nature group', async () => {
+    const repository = mock<IMediaRepository>()
+    repository.getAll.mockResolvedValue([
+      {
+        ...video(1, 'The Wild Thornberrys'),
+        collectionGenres: ['Animation', 'Comedy', 'Family'],
+      },
+    ])
+    const naturePolicy: LibraryPolicyDocument = {
+      ...policy,
+      roots: {
+        tv: {
+          collections: [
+            { name: 'The Wild Thornberrys', groups: ['nature'] },
+          ],
+        },
+      },
+      channels: [
+        {
+          id: 'nature',
+          name: 'Nature',
+          enabled: true,
+          timezone: 'Asia/Taipei',
+          slots: [
+            {
+              days: ['mon'],
+              start: '06:30',
+              end: '07:00',
+              groups: ['nature'],
+            },
+          ],
+        },
+      ],
+    }
+
+    expect(
+      (await new ChannelService(repository, naturePolicy, {
+        now: () => new Date('2026-08-23T22:35:00.000Z'),
+      }).getNow('nature'))?.program
+    ).toBeNull()
+  })
+
   test('computes current/next in the configured timezone at exact boundaries', async () => {
     const repository = mock<IMediaRepository>()
     repository.getAll.mockResolvedValue([video(1, 'Bluey (2018)')])
