@@ -4,10 +4,14 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { IMediaRepository } from '../src/repositories/IMediaRepository'
-import type { LibraryPolicyDocument } from '../src/config/library'
+import {
+  channelLockedHandoffGroup,
+  type LibraryPolicyDocument,
+} from '../src/config/library'
 import type { MediaItem } from '../src/types'
 import { ChannelService } from '../src/services/ChannelService'
 import { ChannelConfigurationStore } from '../src/services/ChannelConfigurationStore'
+import type { StationAutomationCatalog } from '../src/services/StationAutomationService'
 
 const policy: LibraryPolicyDocument = {
   version: 1,
@@ -91,6 +95,40 @@ function episode(
     relativePath: `${collectionTitle}/Season 01/${collectionTitle} ${token}.mkv`,
     seasonNumber: 1,
     episodeNumber,
+  }
+}
+
+function copiedNetworkCollection(
+  id: number,
+  displayTitle: string,
+  identityKey: string,
+  firstAirYear: number
+): StationAutomationCatalog['collections'][number] {
+  return {
+    id,
+    rootId: 'tv',
+    identityKey,
+    collectionTitle: `${displayTitle} (${firstAirYear})`,
+    displayTitle,
+    libraryKind: 'tv',
+    genres: ['Animation', 'Comedy'],
+    networks: ['Cartoon Network'],
+    studios: ['Cartoon Network Studios'],
+    firstAirYear,
+    eligibleFiles: 24,
+  }
+}
+
+function stationCatalog(
+  collections: StationAutomationCatalog['collections']
+): StationAutomationCatalog {
+  return {
+    collections,
+    genres: [],
+    networks: [],
+    studios: [],
+    presets: [],
+    truncated: false,
   }
 }
 
@@ -1033,6 +1071,423 @@ describe('ChannelService', () => {
       expect(restored.administrationSnapshot().programmingGroups).toContain(
         generatedGroup as string
       )
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  test('persists and reopens an exact copied-network recipe with durable refs', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'toasttv-network-copy-'))
+    try {
+      const repository = mock<IMediaRepository>()
+      const store = new ChannelConfigurationStore(
+        join(directory, 'channels.json'),
+        policy.channels
+      )
+      const catalog = {
+        collections: [
+          {
+            id: 81,
+            rootId: 'tv',
+            identityKey: 'ed-edd-n-eddy-1999',
+            collectionTitle: 'Ed, Edd n Eddy (1999)',
+            displayTitle: 'Ed, Edd n Eddy',
+            libraryKind: 'tv' as const,
+            genres: ['Animation', 'Comedy'],
+            networks: ['Cartoon Network'],
+            studios: ['Cartoon Network Studios'],
+            firstAirYear: 1999,
+            eligibleFiles: 24,
+          },
+          {
+            id: 82,
+            rootId: 'tv',
+            identityKey: 'bluey-2018',
+            collectionTitle: 'Bluey (2018)',
+            displayTitle: 'Bluey',
+            libraryKind: 'tv' as const,
+            genres: ['Animation', 'Family'],
+            networks: ['ABC Kids'],
+            studios: ['Ludo Studio'],
+            firstAirYear: 2018,
+            eligibleFiles: 30,
+          },
+        ],
+        genres: [],
+        networks: [],
+        studios: [],
+        presets: [],
+        truncated: false,
+      }
+      const service = new ChannelService(repository, policy, undefined, store)
+      service.stationAutomationCatalog = async () => catalog
+
+      const result = await service.createAutomatedStation({
+        id: 'cn-copy',
+        name: 'Cartoon Network 1997–Current',
+        timezone: 'UTC',
+        preset: 'network-copy',
+        networkId: 'cartoon-network',
+        eraStartYear: 1997,
+        eraEndYear: 2026,
+        selectionMode: 'explicit',
+        collectionIds: [81],
+        airtime: 'all-day',
+        handoff: {
+          identity: 'adult-swim',
+          mode: 'locked-off-air',
+          start: '21:00',
+          end: '06:00',
+        },
+      })
+
+      expect(result.collections.map((collection) => collection.displayTitle)).toEqual([
+        'Ed, Edd n Eddy',
+      ])
+      expect(result.channel.automation).toEqual({
+        preset: 'network-copy',
+        airtime: 'all-day',
+        networkId: 'cartoon-network',
+        eraStartYear: 1997,
+        eraEndYear: 2026,
+        selectionMode: 'explicit',
+        handoff: {
+          identity: 'adult-swim',
+          mode: 'locked-off-air',
+          start: '21:00',
+          end: '06:00',
+        },
+        collectionRefs: [
+          {
+            rootId: 'tv',
+            libraryKind: 'tv',
+            identityKey: 'ed-edd-n-eddy-1999',
+          },
+        ],
+      })
+      expect(result.channel.slots).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            start: '00:00',
+            end: '06:00',
+            groups: [expect.stringContaining('-locked-after-hours')],
+            branding: { mode: 'custom', logoId: 'adult-swim' },
+          }),
+          expect.objectContaining({
+            start: '21:00',
+            end: '24:00',
+            groups: [expect.stringContaining('-locked-after-hours')],
+            branding: { mode: 'custom', logoId: 'adult-swim' },
+          }),
+        ])
+      )
+      expect(
+        store
+          .load()
+          .collectionGroups?.flatMap((assignment) => assignment.groups)
+          .some((group) => group.endsWith('-locked-after-hours'))
+      ).toBe(false)
+
+      const restored = new ChannelService(repository, policy, undefined, store)
+      restored.stationAutomationCatalog = async () => catalog
+      expect(await restored.stationAutomationDraft('cn-copy')).toMatchObject({
+        id: 'cn-copy',
+        preset: 'network-copy',
+        networkId: 'cartoon-network',
+        eraStartYear: 1997,
+        eraEndYear: 2026,
+        selectionMode: 'explicit',
+        collectionIds: [81],
+        handoff: {
+          identity: 'adult-swim',
+          mode: 'locked-off-air',
+          start: '21:00',
+          end: '06:00',
+        },
+      })
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  test('never schedules media assigned to the reserved locked handoff group', async () => {
+    const repository = mock<IMediaRepository>()
+    repository.getAll.mockResolvedValue([video(1, 'Bluey (2018)')])
+    const channelId = 'cn-reserved'
+    const lockedGroup = channelLockedHandoffGroup(channelId)
+    const everyDay = [
+      'sun',
+      'mon',
+      'tue',
+      'wed',
+      'thu',
+      'fri',
+      'sat',
+    ] as const
+    const lockedBranding = {
+      mode: 'custom' as const,
+      logoId: 'adult-swim',
+    }
+    const lockedPolicy: LibraryPolicyDocument = {
+      version: 1,
+      roots: {
+        tv: {
+          collections: [
+            { name: 'Bluey (2018)', groups: [lockedGroup] },
+          ],
+        },
+      },
+      channels: [
+        {
+          id: channelId,
+          name: 'Cartoon Network Reserved',
+          enabled: true,
+          timezone: 'UTC',
+          slots: [
+            {
+              days: everyDay,
+              start: '00:00',
+              end: '06:00',
+              groups: [lockedGroup],
+              branding: lockedBranding,
+            },
+            {
+              days: everyDay,
+              start: '06:00',
+              end: '21:00',
+              groups: ['daytime'],
+            },
+            {
+              days: everyDay,
+              start: '21:00',
+              end: '24:00',
+              groups: [lockedGroup],
+              branding: lockedBranding,
+            },
+          ],
+          automation: {
+            preset: 'network-copy',
+            airtime: 'all-day',
+            networkId: 'cartoon-network',
+            eraStartYear: 1997,
+            eraEndYear: 2026,
+            selectionMode: 'automatic',
+            handoff: {
+              identity: 'adult-swim',
+              mode: 'locked-off-air',
+              start: '21:00',
+              end: '06:00',
+            },
+          },
+        },
+      ],
+    }
+    const service = new ChannelService(repository, lockedPolicy, {
+      now: () => new Date('2026-08-23T02:00:00.000Z'),
+    })
+
+    expect((await service.getNow(channelId))?.program).toBeNull()
+  })
+
+  test('reconciles automatic copied networks after scans and stays idempotent', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'toasttv-auto-reconcile-'))
+    try {
+      const repository = mock<IMediaRepository>()
+      const store = new ChannelConfigurationStore(
+        join(directory, 'channels.json'),
+        policy.channels
+      )
+      const dexter = copiedNetworkCollection(
+        91,
+        "Dexter's Laboratory",
+        'dexters-laboratory-1996',
+        1996
+      )
+      const ed = copiedNetworkCollection(
+        92,
+        'Ed, Edd n Eddy',
+        'ed-edd-n-eddy-1999',
+        1999
+      )
+      let catalog = stationCatalog([dexter])
+      const service = new ChannelService(repository, policy, undefined, store)
+      service.stationAutomationCatalog = async () => catalog
+
+      const created = await service.createAutomatedStation({
+        id: 'cn-auto',
+        name: 'Cartoon Network Auto',
+        timezone: 'UTC',
+        preset: 'network-copy',
+        networkId: 'cartoon-network',
+        eraStartYear: 1997,
+        eraEndYear: 2026,
+        selectionMode: 'automatic',
+        airtime: 'all-day',
+      })
+      expect(created.channel.automation).not.toHaveProperty('collectionRefs')
+      expect(await service.reconcileAutomatedStations()).toEqual([])
+
+      const beforeOfflinePass = store.load().collectionGroups
+      catalog = stationCatalog([])
+      expect(await service.reconcileAutomatedStations()).toEqual([])
+      expect(store.load().collectionGroups).toEqual(beforeOfflinePass)
+
+      catalog = stationCatalog([dexter, ed])
+      expect(await service.reconcileAutomatedStations()).toEqual(['cn-auto'])
+      expect(
+        store
+          .load()
+          .collectionGroups?.map(
+            (assignment) => assignment.collectionIdentityKey
+          )
+      ).toEqual(
+        expect.arrayContaining([
+          'dexters-laboratory-1996',
+          'ed-edd-n-eddy-1999',
+        ])
+      )
+      expect(await service.reconcileAutomatedStations()).toEqual([])
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  test('removes still-available titles that become ineligible without deleting the channel', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'toasttv-auto-ineligible-'))
+    try {
+      const repository = mock<IMediaRepository>()
+      const store = new ChannelConfigurationStore(
+        join(directory, 'channels.json'),
+        policy.channels
+      )
+      const original = copiedNetworkCollection(
+        96,
+        'Network Original',
+        'network-original-2020',
+        2020
+      )
+      let catalog = stationCatalog([original])
+      const service = new ChannelService(repository, policy, undefined, store)
+      service.stationAutomationCatalog = async () => catalog
+      await service.createAutomatedStation({
+        id: 'cn-recheck',
+        name: 'Cartoon Network Recheck',
+        timezone: 'UTC',
+        preset: 'network-copy',
+        networkId: 'cartoon-network',
+        eraStartYear: 1997,
+        eraEndYear: 2026,
+        selectionMode: 'automatic',
+        airtime: 'all-day',
+      })
+      expect(
+        store.load().collectionGroups?.map(
+          (assignment) => assignment.collectionIdentityKey
+        )
+      ).toContain('network-original-2020')
+
+      catalog = stationCatalog([
+        { ...original, networks: ['ABC Kids'], studios: ['Ludo Studio'] },
+      ])
+      expect(await service.reconcileAutomatedStations()).toEqual([
+        'cn-recheck',
+      ])
+      expect(
+        store.load().collectionGroups?.map(
+          (assignment) => assignment.collectionIdentityKey
+        )
+      ).not.toContain('network-original-2020')
+      expect(
+        service
+          .administrationSnapshot()
+          .channels.some((channel) => channel.id === 'cn-recheck')
+      ).toBe(true)
+      expect(await service.reconcileAutomatedStations()).toEqual([])
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  test('preserves unavailable explicit refs and resolves them after a rescan', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'toasttv-ref-reconcile-'))
+    try {
+      const repository = mock<IMediaRepository>()
+      const store = new ChannelConfigurationStore(
+        join(directory, 'channels.json'),
+        policy.channels
+      )
+      const dexter = copiedNetworkCollection(
+        101,
+        "Dexter's Laboratory",
+        'dexters-laboratory-1996',
+        1996
+      )
+      const ed = copiedNetworkCollection(
+        102,
+        'Ed, Edd n Eddy',
+        'ed-edd-n-eddy-1999',
+        1999
+      )
+      let catalog = stationCatalog([dexter, ed])
+      const service = new ChannelService(repository, policy, undefined, store)
+      service.stationAutomationCatalog = async () => catalog
+      await service.createAutomatedStation({
+        id: 'cn-explicit',
+        name: 'Cartoon Network Picks',
+        timezone: 'UTC',
+        preset: 'network-copy',
+        networkId: 'cartoon-network',
+        eraStartYear: 1997,
+        eraEndYear: 2026,
+        selectionMode: 'explicit',
+        collectionIds: [101, 102],
+        airtime: 'all-day',
+      })
+
+      catalog = stationCatalog([dexter])
+      expect(await service.stationAutomationDraft('cn-explicit')).toMatchObject({
+        collectionIds: [101],
+        unavailableCollectionRefs: [
+          {
+            rootId: 'tv',
+            libraryKind: 'tv',
+            identityKey: 'ed-edd-n-eddy-1999',
+          },
+        ],
+      })
+      const updated = await service.updateAutomatedStation('cn-explicit', {
+        id: 'cn-explicit',
+        name: 'Cartoon Network Picks',
+        timezone: 'UTC',
+        preset: 'network-copy',
+        networkId: 'cartoon-network',
+        eraStartYear: 1997,
+        eraEndYear: 2026,
+        selectionMode: 'explicit',
+        collectionIds: [101],
+        airtime: 'all-day',
+      })
+      expect(updated?.channel.automation?.collectionRefs).toHaveLength(2)
+      expect(
+        store
+          .load()
+          .collectionGroups?.map(
+            (assignment) => assignment.collectionIdentityKey
+          )
+      ).toContain('ed-edd-n-eddy-1999')
+
+      const rescannedEd = { ...ed, id: 202 }
+      catalog = stationCatalog([dexter, rescannedEd])
+      expect(await service.reconcileAutomatedStations()).toEqual([
+        'cn-explicit',
+      ])
+      expect(await service.stationAutomationDraft('cn-explicit')).toMatchObject({
+        collectionIds: [101, 202],
+      })
+      expect(
+        (await service.stationAutomationDraft('cn-explicit'))
+          ?.unavailableCollectionRefs
+      ).toBeUndefined()
     } finally {
       rmSync(directory, { recursive: true, force: true })
     }

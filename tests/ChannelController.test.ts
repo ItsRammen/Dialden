@@ -172,6 +172,109 @@ describe('ChannelController', () => {
     )
   })
 
+  test('retains a copied network range and exclusive lineup in the JSON API', async () => {
+    const channels = mock<ChannelService>()
+    channels.previewAutomatedStationBuild.mockResolvedValue({
+      collections: [],
+      collectionCount: 0,
+      eligibleFiles: 0,
+    })
+    const app = new Hono().route('/', createChannelController({ channels }))
+
+    const response = await app.request(
+      '/api/admin/v1/channels/auto-build/preview',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          id: 'cartoon-network',
+          name: 'Cartoon Network',
+          timezone: 'UTC',
+          preset: 'network-copy',
+          networkId: 'cartoon-network',
+          eraStartYear: 1997,
+          eraEndYear: 2026,
+          selectionMode: 'explicit',
+          collectionIds: [12, 44],
+          airtime: 'all-day',
+          handoff: {
+            identity: 'adult-swim',
+            mode: 'locked-off-air',
+            start: '21:00',
+            end: '06:00',
+          },
+        }),
+      }
+    )
+
+    expect(response.status).toBe(200)
+    expect(channels.previewAutomatedStationBuild).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preset: 'network-copy',
+        networkId: 'cartoon-network',
+        eraStartYear: 1997,
+        eraEndYear: 2026,
+        selectionMode: 'explicit',
+        collectionIds: [12, 44],
+        handoff: {
+          identity: 'adult-swim',
+          mode: 'locked-off-air',
+          start: '21:00',
+          end: '06:00',
+        },
+      })
+    )
+
+    const reversed = await app.request(
+      '/api/admin/v1/channels/auto-build/preview',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          id: 'cartoon-network',
+          name: 'Cartoon Network',
+          timezone: 'UTC',
+          preset: 'network-copy',
+          networkId: 'cartoon-network',
+          eraStartYear: 2026,
+          eraEndYear: 1997,
+          collectionIds: [],
+        }),
+      }
+    )
+    expect(reversed.status).toBe(400)
+
+    for (const handoff of [
+      { start: '07:00', end: '06:59' },
+      { start: '23:59', end: '23:58' },
+    ]) {
+      const invalidHandoff = await app.request(
+        '/api/admin/v1/channels/auto-build/preview',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            id: 'cartoon-network',
+            name: 'Cartoon Network',
+            timezone: 'UTC',
+            preset: 'network-copy',
+            networkId: 'cartoon-network',
+            eraStartYear: 1997,
+            eraEndYear: 2026,
+            selectionMode: 'automatic',
+            airtime: 'all-day',
+            handoff: {
+              identity: 'adult-swim',
+              mode: 'locked-off-air',
+              ...handoff,
+            },
+          }),
+        }
+      )
+      expect(invalidHandoff.status).toBe(400)
+    }
+  })
+
   test('creates an all-day station directly from the browser builder', async () => {
     const channels = mock<ChannelService>()
     const app = new Hono().route('/', createChannelController({ channels }))
@@ -203,6 +306,45 @@ describe('ChannelController', () => {
         marathon: { enabled: true, frequency: 12, episodeCount: 4 },
       })
     )
+  })
+
+  test('keeps automatic copied-network form selection distinct from explicit empty', async () => {
+    const channels = mock<ChannelService>()
+    const app = new Hono().route('/', createChannelController({ channels }))
+    const response = await app.request('/channels/auto-build', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        action: 'create',
+        id: 'automatic-cn',
+        name: 'Automatic CN',
+        timezone: 'UTC',
+        preset: 'network-copy',
+        networkId: 'cartoon-network',
+        eraStartYear: '1997',
+        eraEndYear: '2026',
+        selectionMode: 'automatic',
+        airtime: 'all-day',
+        handoffEnabled: 'true',
+        handoffStart: '21:00',
+        handoffEnd: '06:00',
+      }),
+    })
+
+    expect(response.status).toBe(303)
+    const request = channels.createAutomatedStation.mock.calls[0]?.[0]
+    expect(request).toMatchObject({
+      preset: 'network-copy',
+      selectionMode: 'automatic',
+      networkId: 'cartoon-network',
+      handoff: {
+        identity: 'adult-swim',
+        mode: 'locked-off-air',
+        start: '21:00',
+        end: '06:00',
+      },
+    })
+    expect(request).not.toHaveProperty('collectionIds')
   })
 
   test('applies a confirmed Auto setup preset to an existing channel', async () => {

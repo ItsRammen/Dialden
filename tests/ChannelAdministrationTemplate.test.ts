@@ -191,7 +191,7 @@ describe('channel administration template', () => {
     expect(automatic).toContain('and marathon pattern')
   })
 
-  test('renders an honest auto-build preview with a direct all-day creation action', () => {
+  test('renders an explicit custom builder with an honest preview and direct creation action', () => {
     const markup = renderChannelAdministration(
       {
         channels: [],
@@ -256,18 +256,165 @@ describe('channel administration template', () => {
       }
     )
 
-    expect(markup).toContain('Personal library mix—not an official network feed')
+    expect(markup).toContain('What kind of channel are you building?')
+    expect(markup).toContain('Network channel')
+    expect(markup).toContain('Custom channel')
+    expect(markup).toContain('name="selectionMode" value="explicit"')
+    expect(markup).toContain('name="builderMode" value="custom" data-builder-mode checked')
+    expect(markup).toContain('Choose from every playable title')
     expect(markup).toContain('Ready to build: 1 collection · 12 schedulable files')
-    expect(markup).toContain('Create all-day station')
+    expect(markup).toContain('Create all-day channel')
     expect(markup).toContain('name="action" value="create"')
     expect(markup).toContain('Preview lineup')
-    expect(markup).toContain('name="networks" value="ABC Kids"')
-    expect(markup).toContain('Network and studio checkboxes show TMDB’s exact stored values')
+    expect(markup).toContain('name="collectionIds" value="8"')
+    expect(markup).toContain('Search catalog')
+    expect(markup).toContain('Select all')
+    expect(markup).toContain('Clear checks')
     expect(markup).toContain('auto-details-heading')
     expect(markup).toContain('auto-programming-heading')
     expect(markup).toContain('auto-schedule-heading')
     expect(markup).toContain('auto-review-heading')
-    expect(markup).toContain('Fine-tune the library mix')
+  })
+
+  test('keeps a legacy era-template Auto channel read-only until replacement is explicitly unlocked', () => {
+    const markup = renderChannelAdministration(
+      {
+        channels: [
+          {
+            id: 'legacy-cn',
+            name: 'Legacy Cartoon Network',
+            enabled: true,
+            timezone: 'UTC',
+            slots: [],
+            automation: {
+              preset: 'cartoon-network-1997-2004',
+              airtime: 'all-day',
+            },
+          },
+        ],
+        manuallyOffAir: [],
+        programmingGroups: [],
+        configurationError: null,
+      },
+      {
+        automationOpen: true,
+        automationTargetId: 'legacy-cn',
+        automationDraft: {
+          id: 'legacy-cn',
+          name: 'Legacy Cartoon Network',
+          timezone: 'UTC',
+          preset: 'cartoon-network-1997-2004',
+          airtime: 'all-day',
+          collectionIds: [8],
+        },
+        automation: {
+          collections: [
+            {
+              id: 8,
+              rootId: 'tv',
+              identityKey: 'dexters-laboratory',
+              collectionTitle: "Dexter's Laboratory",
+              displayTitle: "Dexter's Laboratory",
+              libraryKind: 'tv',
+              genres: ['Animation'],
+              networks: ['Cartoon Network'],
+              studios: [],
+              eligibleFiles: 10,
+            },
+          ],
+          genres: [],
+          networks: [],
+          studios: [],
+          presets: [],
+          eraTemplates: [
+            {
+              id: 'cartoon-network-1997-2004',
+              name: 'Cartoon Network · 1997–2004',
+              networkFamily: 'Cartoon Network',
+              description: 'Legacy recipe',
+              eraStartYear: 1997,
+              eraEndYear: 2004,
+              blocks: [],
+              matches: [],
+              missingSuggestions: [],
+              matchedShows: 1,
+              matchedMovies: 0,
+              movieCadence: 'none',
+              marathonCadence: 'none',
+            },
+          ],
+          truncated: false,
+        },
+      }
+    )
+
+    const guardStart = markup.indexOf('data-legacy-era-guard')
+    const fieldsStart = markup.indexOf(
+      '<fieldset id="legacy-replacement-editor"'
+    )
+    const fieldsEnd = markup.lastIndexOf('</fieldset>')
+    const replacementFields = markup.slice(fieldsStart, fieldsEnd)
+
+    expect(guardStart).toBeGreaterThan(-1)
+    expect(markup).toContain('Legacy Auto recipe preserved')
+    expect(markup).toContain('<code>Cartoon Network · 1997–2004</code>')
+    expect(markup).toContain(
+      'data-legacy-preset="cartoon-network-1997-2004"'
+    )
+    expect(markup).toContain(
+      'data-legacy-migration-confirm aria-controls="legacy-replacement-editor" aria-expanded="false"'
+    )
+    expect(markup).toContain(
+      '<fieldset id="legacy-replacement-editor" data-legacy-migration-fields disabled>'
+    )
+    expect(replacementFields).toContain(
+      'name="builderMode" value="custom" data-builder-mode checked'
+    )
+    expect(replacementFields).toContain(
+      'name="action" value="update">Apply lineup changes'
+    )
+    expect(guardStart).toBeLessThan(fieldsStart)
+  })
+
+  test('also protects a saved legacy era recipe when its reconstructed draft is unavailable', () => {
+    const markup = renderChannelAdministration(
+      {
+        channels: [
+          {
+            id: 'legacy-cn',
+            name: 'Legacy Cartoon Network',
+            enabled: true,
+            timezone: 'UTC',
+            slots: [],
+            automation: {
+              preset: 'cartoon-network-1997-2004',
+              airtime: 'all-day',
+            },
+          },
+        ],
+        manuallyOffAir: [],
+        programmingGroups: [],
+        configurationError: null,
+      },
+      {
+        automationOpen: true,
+        automationTargetId: 'legacy-cn',
+        automation: {
+          collections: [],
+          genres: [],
+          networks: [],
+          studios: [],
+          presets: [],
+          truncated: false,
+        },
+      }
+    )
+
+    expect(markup).toContain('Legacy Auto recipe preserved')
+    expect(markup).toContain(
+      'data-legacy-preset="cartoon-network-1997-2004"'
+    )
+    expect(markup).toContain('data-legacy-migration-fields disabled')
   })
 
   test('search exposes a specific collection beyond the bounded initial picker', () => {
@@ -316,9 +463,8 @@ describe('channel administration template', () => {
     expect(markup).toContain('value="Target"')
     expect(markup).toContain('name="collectionIds" value="300"')
     expect(markup).toContain('name="collectionIds" value="1"')
-    expect(markup).toContain('name="networks" value="Target Network"')
-    expect(markup).toContain('Showing 1 matching collection.')
-    expect(markup).toContain('while keeping your checked collections')
+    expect(markup).toContain('Showing 1 matching title.')
+    expect(markup).toContain('name="selectionMode" value="explicit"')
   })
 
   test('keeps creation out of the default page and opens it in a modal', () => {
@@ -352,7 +498,7 @@ describe('channel administration template', () => {
     expect(modalMarkup).toContain('data-channel-modal-panel')
     expect(modalMarkup).toContain('tabindex="-1"')
     expect(modalMarkup).toContain('class="channel-modal-backdrop" href="/channels" aria-hidden="true" tabindex="-1"')
-    expect(modalMarkup).toContain('Create an automatic station')
+    expect(modalMarkup).toContain('Create a channel')
     expect(modalMarkup).toContain('aria-label="Station setup sections"')
     expect(modalMarkup).toContain('<span aria-current="page">Auto setup</span>')
     expect(modalMarkup).toContain('href="/channels?new=manual#channel-editor"')
@@ -442,7 +588,7 @@ describe('channel administration template', () => {
       }
     )
 
-    expect(markup).toContain('Auto setup for Kids Club')
+    expect(markup).toContain('Edit lineup for Kids Club')
     expect(markup).toContain('name="targetChannelId" value="kids"')
     expect(markup).toContain('name="id" required maxlength="59"')
     expect(markup).toContain('readonly')
@@ -450,7 +596,7 @@ describe('channel administration template', () => {
     expect(markup).toContain('name="action" value="update"')
     expect(markup).toContain('Auto lineup')
     expect(markup).toContain('<span aria-current="page">Auto lineup</span>')
-    expect(markup).toContain('Fine-tune the library mix')
+    expect(markup).toContain('What kind of channel are you building?')
   })
 
   test('loads an existing generated lineup as editable checked collections', () => {
@@ -504,105 +650,365 @@ describe('channel administration template', () => {
     )
 
     expect(markup).toContain('Current lineup loaded:')
-    expect(markup).toContain('1 selected collection')
-    expect(markup).toContain('name="preset" value="custom" checked')
+    expect(markup).toContain('1 selected title')
+    expect(markup).toContain('name="preset" value="custom" data-builder-preset="custom" checked')
+    expect(markup).toContain('name="selectionMode" value="explicit"')
     expect(markup).toContain('name="collectionIds" value="4" checked')
   })
 
-  test('shows era dayparts, owned coverage, modern guests, and a media wishlist', () => {
-    const markup = renderChannelAdministration(
-      {
-        channels: [],
-        manuallyOffAir: [],
-        programmingGroups: [],
-        configurationError: null,
+  test('renders strict network-era choices, visual dayparts, and editable owned-title checks', () => {
+    const currentYear = new Date().getFullYear()
+    const catalog = {
+      collections: [
+        {
+          id: 1,
+          rootId: 'tv',
+          identityKey: 'dexters-laboratory',
+          collectionTitle: "Dexter's Laboratory",
+          displayTitle: "Dexter's Laboratory",
+          libraryKind: 'tv',
+          genres: ['Animation'],
+          networks: ['Cartoon Network'],
+          studios: [],
+          firstAirYear: 1996,
+          eligibleFiles: 12,
+        },
+        {
+          id: 2,
+          rootId: 'tv',
+          identityKey: 'samurai-jack',
+          collectionTitle: 'Samurai Jack',
+          displayTitle: 'Samurai Jack',
+          libraryKind: 'tv',
+          genres: ['Animation'],
+          networks: ['Cartoon Network'],
+          studios: [],
+          firstAirYear: 2001,
+          eligibleFiles: 8,
+        },
+        {
+          id: 3,
+          rootId: 'tv',
+          identityKey: 'bluey',
+          collectionTitle: 'Bluey',
+          displayTitle: 'Bluey',
+          libraryKind: 'tv',
+          genres: ['Family'],
+          networks: ['ABC Kids'],
+          studios: [],
+          firstAirYear: 2018,
+          eligibleFiles: 10,
+        },
+        {
+          id: 4,
+          rootId: 'tv',
+          identityKey: 'current-cn-show',
+          collectionTitle: 'Current CN Show',
+          displayTitle: 'Current CN Show',
+          libraryKind: 'tv',
+          genres: ['Animation'],
+          networks: ['Cartoon Network'],
+          studios: [],
+          firstAirYear: 2020,
+          eligibleFiles: 4,
+        },
+      ],
+      genres: [],
+      networks: [],
+      studios: [],
+      presets: [],
+      networkProfiles: [
+        {
+          id: 'cartoon-network',
+          name: 'Cartoon Network',
+          description: 'Comedy, action, and primetime from one documented network.',
+          audience: 'school-age',
+          availableStartYear: 1997,
+          availableEndYear: currentYear,
+          defaultStartYear: 1999,
+          defaultEndYear: 2004,
+          blocks: [
+            { id: 'morning', name: 'Morning', start: '06:00', end: '09:00' },
+            { id: 'primetime', name: 'Primetime', start: '19:00', end: '22:00' },
+          ],
+          matches: [
+            {
+              collectionId: 1,
+              title: "Dexter's Laboratory",
+              libraryKind: 'tv',
+              firstAirYear: 1996,
+              airStartYear: 1997,
+              airEndYear: 2003,
+              blockIds: ['morning'],
+              playbackOrder: 'random',
+              score: 100,
+              eligibilityReason: 'documented-network-lineup',
+            },
+            {
+              collectionId: 2,
+              title: 'Samurai Jack',
+              libraryKind: 'tv',
+              firstAirYear: 2001,
+              airStartYear: 2001,
+              airEndYear: 2008,
+              blockIds: ['primetime'],
+              playbackOrder: 'season-sequential',
+              score: 95,
+              eligibilityReason: 'curated-network-lineup',
+            },
+            {
+              collectionId: 4,
+              title: 'Current CN Show',
+              libraryKind: 'tv',
+              firstAirYear: 2020,
+              airStartYear: 2020,
+              airEndYear: currentYear,
+              blockIds: ['primetime'],
+              playbackOrder: 'random',
+              score: 90,
+              eligibilityReason: 'exact-network-metadata',
+            },
+          ],
+          missingSuggestions: [
+            {
+              title: 'Legacy Network Cartoon',
+              libraryKind: 'tv',
+              firstYear: 1980,
+              lastYear: 1982,
+              airStartYear: 1999,
+              airEndYear: 2002,
+              tags: ['comedy'],
+            },
+            {
+              title: 'Later Network Acquisition',
+              libraryKind: 'tv',
+              firstYear: 2001,
+              lastYear: 2004,
+              airStartYear: 2010,
+              airEndYear: 2012,
+              tags: ['action'],
+            },
+          ],
+          matchedShows: 3,
+          matchedMovies: 0,
+          movieCadence: 'weekly',
+          marathonCadence: 'monthly',
+        },
+      ],
+      familyMixSuggestions: [
+        { title: 'Bluey', firstYear: 2018, tags: ['family'], available: true },
+      ],
+      truncated: false,
+    } as const
+    const snapshot = {
+      channels: [
+        {
+          id: 'cn-mix',
+          name: 'Cartoon Mix',
+          enabled: true,
+          timezone: 'UTC',
+          slots: [],
+        },
+      ],
+      manuallyOffAir: [],
+      programmingGroups: [],
+      configurationError: null,
+    }
+    const markup = renderChannelAdministration(snapshot, {
+      automationOpen: true,
+      automationTargetId: 'cn-mix',
+      automationDraft: {
+        id: 'cn-mix',
+        name: 'Cartoon Mix',
+        timezone: 'UTC',
+        preset: 'network-copy',
+        networkId: 'cartoon-network',
+        eraStartYear: 1999,
+        eraEndYear: 2004,
+        collectionIds: [1],
+        unavailableCollectionRefs: [
+          {
+            rootId: 'tv',
+            libraryKind: 'tv',
+            identityKey: 'temporarily-offline-show',
+          },
+        ],
       },
+      automation: catalog,
+    })
+    const networkStart = markup.indexOf('data-network-panel="cartoon-network"')
+    const networkEnd = markup.indexOf('</fieldset>', networkStart)
+    const networkPanel = markup.slice(networkStart, networkEnd)
+    const samuraiTitle = networkPanel.indexOf('<strong>Samurai Jack</strong>')
+    const samuraiStart = networkPanel.lastIndexOf('<label', samuraiTitle)
+    const samuraiEnd = networkPanel.indexOf('</label>', samuraiTitle)
+    const samuraiRow = networkPanel.slice(samuraiStart, samuraiEnd)
+    const currentTitle = networkPanel.indexOf('<strong>Current CN Show</strong>')
+    const currentStart = networkPanel.lastIndexOf('<label', currentTitle)
+    const currentEnd = networkPanel.indexOf('</label>', currentTitle)
+    const currentRow = networkPanel.slice(currentStart, currentEnd)
+    const legacyTitle = networkPanel.indexOf('<strong>Legacy Network Cartoon</strong>')
+    const legacyStart = networkPanel.lastIndexOf('<article', legacyTitle)
+    const legacyEnd = networkPanel.indexOf('</article>', legacyTitle)
+    const legacySuggestion = networkPanel.slice(legacyStart, legacyEnd)
+    const laterTitle = networkPanel.indexOf('<strong>Later Network Acquisition</strong>')
+    const laterStart = networkPanel.lastIndexOf('<article', laterTitle)
+    const laterEnd = networkPanel.indexOf('</article>', laterTitle)
+    const laterSuggestion = networkPanel.slice(laterStart, laterEnd)
+
+    expect(markup).toContain('name="builderMode" value="network" data-builder-mode checked')
+    expect(markup).toContain('name="preset" value="network-copy" data-builder-preset="network" checked')
+    expect(markup).toContain('name="networkId"')
+    expect(markup).toContain('name="eraStartYear"')
+    expect(markup).toContain('name="eraEndYear"')
+    expect(markup).toContain(`${currentYear} (Current)`)
+    expect(markup).toContain(
+      'name="selectionMode" value="explicit" data-lineup-mode checked'
+    )
+    expect(markup).toContain('1 saved title currently unavailable')
+    expect(markup).toContain('<code>temporarily-offline-show</code>')
+    expect(markup).toContain(
+      'same network, era, and hand-picked mode'
+    )
+    expect(markup).toContain('Period-inspired personal channel—not an official feed.')
+    expect(markup).toContain('Cross-network and family-mix guest titles are not added.')
+    expect(markup).toContain('data-handoff-panel')
+    expect(markup).toContain('Cartoon Network sign-off')
+    expect(markup).toContain('Parent locked')
+    expect(markup).toContain('No adult programmes are selected or played')
+    expect(markup).toContain('name="handoffStart" value="21:00" min="17:00" max="23:59"')
+    expect(markup).toContain('name="handoffEnd" value="06:00" min="00:00" max="10:00"')
+    expect(networkPanel).toContain('Eligible titles you own')
+    expect(networkPanel).toContain('name="collectionIds" value="1" checked')
+    expect(samuraiRow).not.toContain('checked')
+    expect(networkPanel).toContain('data-air-start-year="2020"')
+    expect(networkPanel).toContain('data-air-end-year="' + currentYear + '"')
+    expect(currentRow).toContain('hidden')
+    expect(currentRow).toContain('disabled')
+    expect(networkPanel).toContain('Documented network lineup')
+    expect(networkPanel).toContain('Exact network metadata')
+    expect(networkPanel).toContain('Curated network lineup')
+    expect(networkPanel).not.toContain('Bluey')
+    expect(networkPanel).not.toContain('Modern family guests')
+    expect(networkPanel).toContain('Network acquisition suggestions')
+    expect(legacySuggestion).not.toContain('hidden')
+    expect(legacySuggestion).toContain('carried 1999–2002 · produced 1980–1982')
+    expect(laterSuggestion).toContain('hidden')
+    expect(networkPanel).toContain('ToastTV never downloads, streams, or links to media')
+    expect(networkPanel).toContain('Dayparts and week at a glance')
+    expect(networkPanel).toContain('role="table"')
+    expect(networkPanel).toContain('06:00–09:00')
+
+    const freshMarkup = renderChannelAdministration(
+      { ...snapshot, channels: [] },
       {
         automationOpen: true,
         automationDraft: {
-          id: 'cn-mix',
-          name: 'Cartoon Mix',
+          id: 'new-cn',
+          name: 'New CN',
           timezone: 'UTC',
-          preset: 'cartoon-network-1997-2004',
-          airtime: 'all-day',
+          preset: 'network-copy',
+          networkId: 'cartoon-network',
+          eraStartYear: 1999,
+          eraEndYear: 2004,
         },
-        automation: {
-          collections: [
-            {
-              id: 1,
-              rootId: 'tv',
-              identityKey: 'bluey',
-              collectionTitle: 'Bluey',
-              displayTitle: 'Bluey',
-              libraryKind: 'tv',
-              genres: ['Animation', 'Family'],
-              networks: ['ABC Kids'],
-              studios: ['Ludo Studio'],
-              firstAirYear: 2018,
-              eligibleFiles: 12,
-            },
-          ],
-          genres: [],
-          networks: [],
-          studios: [],
-          presets: [],
-          eraTemplates: [
-            {
-              id: 'cartoon-network-1997-2004',
-              name: 'Cartoon Network inspired · 1997–2004',
-              networkFamily: 'Cartoon Network',
-              description: 'Classic comedy, action, and primetime.',
-              eraStartYear: 1997,
-              eraEndYear: 2004,
-              blocks: [
-                { id: 'morning', name: 'Morning', start: '06:00', end: '09:00' },
-                { id: 'daytime', name: 'Daytime', start: '09:00', end: '15:30' },
-              ],
-              matches: [
-                {
-                  collectionId: 1,
-                  title: 'Bluey',
-                  libraryKind: 'tv',
-                  blockIds: ['morning', 'daytime'],
-                  playbackOrder: 'random',
-                  score: 50,
-                  relationship: 'family-guest',
-                },
-              ],
-              missingSuggestions: [
-                {
-                  title: "Dexter's Laboratory",
-                  libraryKind: 'tv',
-                  firstYear: 1996,
-                  tags: ['comedy'],
-                },
-              ],
-              matchedShows: 1,
-              matchedMovies: 0,
-              movieCadence: 'weekly',
-              marathonCadence: 'monthly',
-            },
-          ],
-          familyMixSuggestions: [
-            {
-              title: 'Bluey',
-              firstYear: 2018,
-              tags: ['family'],
-              available: true,
-            },
-          ],
-          truncated: false,
-        },
+        automation: catalog,
       }
     )
+    expect(freshMarkup).toContain('name="collectionIds" value="1" checked')
+    expect(freshMarkup).toContain('name="collectionIds" value="2" checked')
 
-    expect(markup).toContain('Build a network-era station')
-    expect(markup).toContain('Period-inspired, not a historical recording.')
-    expect(markup).toContain('name="preset" value="cartoon-network-1997-2004" checked')
-    expect(markup).toContain('06:00–09:00')
-    expect(markup).toContain('Modern family guests')
-    expect(markup).toContain('Bluey')
-    expect(markup).toContain("Dexter&#39;s Laboratory")
-    expect(markup).toContain('ToastTV never downloads or links to media')
+    const automaticMarkup = renderChannelAdministration(snapshot, {
+      automationOpen: true,
+      automationTargetId: 'cn-mix',
+      automationDraft: {
+        id: 'cn-mix',
+        name: 'Cartoon Mix',
+        timezone: 'UTC',
+        preset: 'network-copy',
+        networkId: 'cartoon-network',
+        eraStartYear: 1999,
+        eraEndYear: 2004,
+        selectionMode: 'automatic',
+        handoff: {
+          identity: 'adult-swim',
+          mode: 'locked-off-air',
+          start: '21:00',
+          end: '06:00',
+        },
+      },
+      automation: catalog,
+    })
+    const automaticModeStart = automaticMarkup.indexOf(
+      '<fieldset class="channel-lineup-mode">'
+    )
+    const automaticModeEnd = automaticMarkup.indexOf(
+      '</fieldset>',
+      automaticModeStart
+    )
+    const automaticMode = automaticMarkup.slice(
+      automaticModeStart,
+      automaticModeEnd
+    )
+    const automaticPanelStart = automaticMarkup.indexOf(
+      'data-network-panel="cartoon-network"'
+    )
+    const automaticPanelEnd = automaticMarkup.indexOf(
+      '</fieldset>',
+      automaticPanelStart
+    )
+    const automaticPanel = automaticMarkup.slice(
+      automaticPanelStart,
+      automaticPanelEnd
+    )
+    expect(automaticMode).toContain(
+      'name="selectionMode" value="automatic" data-lineup-mode checked'
+    )
+    expect(automaticMode).toContain('Follow eligible lineup automatically')
+    expect(automaticMode).toContain(
+      'recalculates this strict lineup during library refreshes'
+    )
+    expect(automaticMarkup).toContain('Automatic lineup loaded:')
+    expect(automaticPanel).toContain('data-selection-mode="automatic"')
+    expect(automaticPanel).toContain(
+      'name="collectionIds" value="1" checked disabled'
+    )
+    expect(automaticPanel).toContain('data-select-visible data-explicit-action hidden disabled')
+    expect(automaticMarkup).toContain(
+      'name="handoffEnabled" value="true" data-handoff-toggle checked'
+    )
+    expect(automaticMarkup).toContain(
+      'name="handoffStart" value="21:00"'
+    )
+    expect(automaticMarkup).toContain(
+      'name="handoffEnd" value="06:00"'
+    )
+
+    const emptyExplicitMarkup = renderChannelAdministration(snapshot, {
+      automationOpen: true,
+      automationTargetId: 'cn-mix',
+      automationDraft: {
+        id: 'cn-mix',
+        name: 'Cartoon Mix',
+        timezone: 'UTC',
+        preset: 'network-copy',
+        networkId: 'cartoon-network',
+        eraStartYear: 1999,
+        eraEndYear: 2004,
+        selectionMode: 'explicit',
+        collectionIds: [],
+      },
+      automation: catalog,
+      error: 'Choose at least one show for this copied network',
+    })
+    expect(emptyExplicitMarkup).toContain(
+      'role="alert">Choose at least one show for this copied network'
+    )
+    expect(emptyExplicitMarkup).toContain(
+      'Choose at least one title. An empty hand-picked lineup cannot be saved.'
+    )
+    expect(emptyExplicitMarkup).not.toContain(
+      'name="collectionIds" value="1" checked'
+    )
   })
 })

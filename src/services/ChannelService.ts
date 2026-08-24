@@ -1,13 +1,21 @@
 import type { IMediaRepository } from '../repositories/IMediaRepository'
 import type { MediaItem } from '../types'
 import type {
+  ChannelAutomationCollectionRef,
+  ChannelAutomationHandoffPolicy,
+  ChannelAutomationPolicy,
   ChannelMarathonPolicy,
   ChannelScheduleSlot,
   LibraryChannelPolicy,
   LibraryPolicyDocument,
   ScheduleDay,
 } from '../config/library'
-import { validateLibraryChannels } from '../config/library'
+import {
+  automationLockedHandoffGroup,
+  channelAutomationGroup,
+  isChannelLockedHandoffGroup,
+  validateLibraryChannels,
+} from '../config/library'
 import {
   parseEpisodeDisplayTitle,
   parseEpisodeRange,
@@ -58,6 +66,14 @@ export interface StationBuildRequest extends StationSelectionRequest {
   readonly timezone: string
   readonly airtime?: StationAirtimeId
   readonly marathon?: ChannelMarathonPolicy
+  /** Optional CN sign-off window. This changes identity and goes off-air; it never selects adult media. */
+  readonly handoff?: ChannelAutomationHandoffPolicy
+  /**
+   * Saved explicit selections that are temporarily absent from the playable
+   * catalog. This is output-only draft context: update requests cannot use it
+   * to add arbitrary collection references.
+   */
+  readonly unavailableCollectionRefs?: readonly ChannelAutomationCollectionRef[]
 }
 
 export interface StationBuildPreview {
@@ -162,6 +178,7 @@ export class ChannelService {
   >()
   private manuallyOffAir = new Set<string>()
   private configurationError: string | null = null
+  private automatedReconciliation: Promise<readonly string[]> | null = null
 
   constructor(
     private readonly repository: IMediaRepository,
@@ -267,20 +284,52 @@ export class ChannelService {
     const assignments = this.configuredCollectionGroups().filter((assignment) =>
       assignment.groups.includes(group)
     )
-    if (assignments.length === 0) return undefined
+    if (
+      assignments.length === 0 &&
+      channel.automation?.preset !== 'network-copy'
+    ) {
+      return undefined
+    }
 
     const catalog = await this.stationAutomationCatalog()
-    const collectionIds = catalog.collections
+    const collectionRefs = channel.automation?.collectionRefs
+    const eligibleNetworkCollections =
+      channel.automation?.preset === 'network-copy'
+        ? selectStationCollections(catalog, {
+            preset: 'network-copy',
+            networkId: channel.automation.networkId,
+            eraStartYear: channel.automation.eraStartYear,
+            eraEndYear: channel.automation.eraEndYear,
+            selectionMode: 'automatic',
+          })
+        : catalog.collections
+    const collectionIds = eligibleNetworkCollections
       .filter((collection) =>
-        assignments.some(
-          (assignment) =>
-            assignment.collectionId === collection.id ||
-            (assignment.rootId === collection.rootId &&
-              assignment.libraryKind === collection.libraryKind &&
-              assignment.collectionIdentityKey === collection.identityKey)
-        )
+        collectionRefs
+          ? collectionRefs.some(
+              (reference) =>
+                reference.rootId === collection.rootId &&
+                reference.libraryKind === collection.libraryKind &&
+                reference.identityKey === collection.identityKey
+            )
+          : assignments.some(
+              (assignment) =>
+                assignment.collectionId === collection.id ||
+                (assignment.rootId === collection.rootId &&
+                  assignment.libraryKind === collection.libraryKind &&
+                  assignment.collectionIdentityKey === collection.identityKey)
+            )
       )
       .map((collection) => collection.id)
+    const availableReferenceKeys = new Set(
+      catalog.collections.map((collection) =>
+        this.automationReferenceKey(collection)
+      )
+    )
+    const unavailableCollectionRefs = (collectionRefs ?? []).filter(
+      (reference) =>
+        !availableReferenceKeys.has(this.automationReferenceKey(reference))
+    )
     const airtime = STATION_AIRTIME_OPTIONS.map((option) => option.id).find(
       (candidate) =>
         JSON.stringify(channel.slots) ===
@@ -294,48 +343,58 @@ export class ChannelService {
         channel.automation && isStationPresetId(channel.automation.preset)
           ? channel.automation.preset
           : 'custom',
-      collectionIds,
+      ...(channel.automation?.preset === 'network-copy'
+        ? {
+            networkId: channel.automation.networkId,
+            eraStartYear: channel.automation.eraStartYear,
+            eraEndYear: channel.automation.eraEndYear,
+            selectionMode: channel.automation.selectionMode,
+            ...(channel.automation.selectionMode === 'explicit'
+              ? {
+                  collectionIds,
+                  ...(unavailableCollectionRefs.length > 0
+                    ? { unavailableCollectionRefs }
+                    : {}),
+                }
+              : {}),
+          }
+        : { collectionIds }),
       ...(channel.automation
         ? { airtime: channel.automation.airtime }
         : airtime
           ? { airtime }
           : {}),
       ...(channel.marathon ? { marathon: channel.marathon } : {}),
+      ...(channel.automation?.handoff
+        ? { handoff: channel.automation.handoff }
+        : {}),
     }
   }
 
   async previewAutomatedStation(
     request: StationSelectionRequest
   ): Promise<StationBuildPreview> {
-    const catalog = await this.stationAutomationCatalog()
-    const collections = selectStationCollections(catalog, request)
-    return {
-      collections,
-      collectionCount: collections.length,
-      eligibleFiles: collections.reduce(
-        (total, collection) => total + collection.eligibleFiles,
-        0
-      ),
-    }
+    return (await this.automationSelection(request)).preview
   }
 
   async previewAutomatedStationBuild(
     request: StationBuildRequest
   ): Promise<StationBuildPreview> {
-    this.automatedStationChannel(request)
-    return this.previewAutomatedStation(request)
+    const preview = await this.previewAutomatedStation(request)
+    this.automatedStationChannel(request, preview.collections)
+    return preview
   }
 
   async createAutomatedStation(
     request: StationBuildRequest
   ): Promise<StationBuildResult> {
-    const channel = this.automatedStationChannel(request)
     const preview = await this.previewAutomatedStation(request)
     if (preview.collectionCount === 0 || preview.eligibleFiles === 0) {
       throw new Error(
         'No schedulable media matched. Approve a collection, finish metadata and media probing, then preview again.'
       )
     }
+    const channel = this.automatedStationChannel(request, preview.collections)
     const channels = validateLibraryChannels([...this.channels, channel])
     this.persistAndApply(
       channels,
@@ -349,8 +408,9 @@ export class ChannelService {
     channelId: string,
     request: StationBuildRequest
   ): Promise<StationBuildPreview> {
-    this.automatedStationUpdateChannel(channelId, request)
-    return this.previewAutomatedStation(request)
+    const preview = await this.previewAutomatedStation(request)
+    this.automatedStationUpdateChannel(channelId, request, preview.collections)
+    return preview
   }
 
   async updateAutomatedStation(
@@ -359,22 +419,63 @@ export class ChannelService {
   ): Promise<StationBuildResult | null> {
     const index = this.channels.findIndex((channel) => channel.id === channelId)
     if (index < 0) return null
-    const channel = this.automatedStationUpdateChannel(channelId, request)
-    const preview = await this.previewAutomatedStation(request)
+    const { catalog, preview } = await this.automationSelection(request)
     if (preview.collectionCount === 0 || preview.eligibleFiles === 0) {
       throw new Error(
         'No schedulable media matched. Approve a collection, finish metadata and media probing, then preview again.'
       )
     }
+    const preservedCollectionRefs = this.preservedUnavailableCollectionRefs(
+      this.channels[index] as LibraryChannelPolicy,
+      request,
+      catalog
+    )
+    const channel = this.automatedStationUpdateChannel(
+      channelId,
+      request,
+      preview.collections,
+      preservedCollectionRefs
+    )
     const next = [...this.channels]
     next[index] = channel
     const validated = validateLibraryChannels(next)
+    const generatedGroups = this.automatedCollectionGroups(
+      channelId,
+      preview,
+      request
+    )
     this.persistAndApply(
       validated,
       this.manuallyOffAir,
-      this.automatedCollectionGroups(channelId, preview, request)
+      preservedCollectionRefs.length > 0
+        ? this.withUnavailableGeneratedAssignments(
+            this.generatedGroup(channelId),
+            catalog,
+            generatedGroups
+          )
+        : generatedGroups
     )
     return { channel: validated[index] as LibraryChannelPolicy, ...preview }
+  }
+
+  /**
+   * Re-materialize generated collection groups after an authoritative library
+   * scan. Automatic copied networks pick up every newly eligible title;
+   * explicit copies resolve only their durable saved references. Missing
+   * collections are retained so a temporarily offline root cannot erase a
+   * user's lineup. Concurrent scan callbacks share one reconciliation pass.
+   */
+  async reconcileAutomatedStations(): Promise<readonly string[]> {
+    if (this.automatedReconciliation) return this.automatedReconciliation
+    const active = this.reconcileAutomatedStationsOnce()
+    this.automatedReconciliation = active
+    try {
+      return await active
+    } finally {
+      if (this.automatedReconciliation === active) {
+        this.automatedReconciliation = null
+      }
+    }
   }
 
   create(channel: LibraryChannelPolicy): LibraryChannelPolicy {
@@ -577,8 +678,204 @@ export class ChannelService {
     )
   }
 
+  private async automationSelection(
+    request: StationSelectionRequest
+  ): Promise<{
+    catalog: StationAutomationCatalog
+    preview: StationBuildPreview
+  }> {
+    const catalog = await this.stationAutomationCatalog()
+    const collections = selectStationCollections(catalog, request)
+    return {
+      catalog,
+      preview: {
+        collections,
+        collectionCount: collections.length,
+        eligibleFiles: collections.reduce(
+          (total, collection) => total + collection.eligibleFiles,
+          0
+        ),
+      },
+    }
+  }
+
+  private preservedUnavailableCollectionRefs(
+    channel: LibraryChannelPolicy,
+    request: StationBuildRequest,
+    catalog: StationAutomationCatalog
+  ): readonly ChannelAutomationCollectionRef[] {
+    const current = channel.automation
+    const requestedMode =
+      request.selectionMode ??
+      (request.collectionIds === undefined ? 'automatic' : 'explicit')
+    if (
+      current?.preset !== 'network-copy' ||
+      current.selectionMode !== 'explicit' ||
+      requestedMode !== 'explicit' ||
+      current.networkId !== request.networkId ||
+      current.eraStartYear !== request.eraStartYear ||
+      current.eraEndYear !== request.eraEndYear
+    ) {
+      return []
+    }
+    const available = new Set(
+      catalog.collections.map((collection) =>
+        this.automationReferenceKey(collection)
+      )
+    )
+    return (current.collectionRefs ?? []).filter(
+      (reference) => !available.has(this.automationReferenceKey(reference))
+    )
+  }
+
+  private async reconcileAutomatedStationsOnce(): Promise<readonly string[]> {
+    const catalog = await this.stationAutomationCatalog()
+    if (catalog.truncated) {
+      console.warn(
+        'Skipped automated channel reconciliation because the playable catalog exceeds 5,000 collections'
+      )
+      return []
+    }
+    const changed: string[] = []
+    for (const channel of this.channels) {
+      const automation = channel.automation
+      if (
+        automation?.preset !== 'network-copy' ||
+        !automation.networkId ||
+        automation.eraStartYear === undefined ||
+        automation.eraEndYear === undefined ||
+        !automation.selectionMode
+      ) {
+        continue
+      }
+      try {
+        const automaticRequest: StationBuildRequest = {
+          id: channel.id,
+          name: channel.name,
+          timezone: channel.timezone,
+          preset: 'network-copy',
+          networkId: automation.networkId,
+          eraStartYear: automation.eraStartYear,
+          eraEndYear: automation.eraEndYear,
+          selectionMode: 'automatic',
+          airtime: automation.airtime,
+          ...(automation.handoff ? { handoff: automation.handoff } : {}),
+          ...(channel.marathon ? { marathon: channel.marathon } : {}),
+        }
+        const eligible = selectStationCollections(catalog, automaticRequest)
+        const selected =
+          automation.selectionMode === 'automatic'
+            ? eligible
+            : eligible.filter((collection) =>
+                (automation.collectionRefs ?? []).some(
+                  (reference) =>
+                    this.automationReferenceKey(reference) ===
+                    this.automationReferenceKey(collection)
+                )
+              )
+        const preview: StationBuildPreview = {
+          collections: selected,
+          collectionCount: selected.length,
+          eligibleFiles: selected.reduce(
+            (total, collection) => total + collection.eligibleFiles,
+            0
+          ),
+        }
+        const group = this.generatedGroup(channel.id)
+        const generated = this.automatedCollectionGroups(
+          channel.id,
+          preview,
+          automaticRequest
+        )
+        const nextGroups = this.canonicalCollectionGroups(
+          this.withUnavailableGeneratedAssignments(group, catalog, generated)
+        )
+        const currentGroups = this.canonicalCollectionGroups(
+          this.configuredCollectionGroups()
+        )
+        if (JSON.stringify(nextGroups) === JSON.stringify(currentGroups)) {
+          continue
+        }
+        this.persistAndApply(this.channels, this.manuallyOffAir, nextGroups)
+        changed.push(channel.id)
+      } catch (error) {
+        console.error(
+          `Automated channel ${channel.id} was not reconciled: ${safeMessage(error)}`
+        )
+      }
+    }
+    return changed
+  }
+
+  private withUnavailableGeneratedAssignments(
+    group: string,
+    catalog: StationAutomationCatalog,
+    generated: readonly CollectionProgrammingGroups[]
+  ): CollectionProgrammingGroups[] {
+    const byKey = new Map(
+      generated.map((assignment) => [
+        this.configuredCollectionKey(assignment),
+        assignment,
+      ])
+    )
+    const isGeneratedGroup = (value: string) =>
+      value === group || value.startsWith(`${group}-`)
+    for (const assignment of this.configuredCollectionGroups()) {
+      const generatedGroups = assignment.groups.filter(isGeneratedGroup)
+      if (generatedGroups.length === 0) continue
+      const stillAvailable = catalog.collections.some(
+        (collection) =>
+          assignment.collectionId === collection.id ||
+          (assignment.collectionIdentityKey !== undefined &&
+            assignment.libraryKind === collection.libraryKind &&
+            assignment.rootId === collection.rootId &&
+            assignment.collectionIdentityKey === collection.identityKey) ||
+          (assignment.collectionIdentityKey === undefined &&
+            assignment.rootId === collection.rootId &&
+            assignment.collectionTitle === collection.collectionTitle)
+      )
+      if (stillAvailable) continue
+      const key = this.configuredCollectionKey(assignment)
+      const current = byKey.get(key)
+      byKey.set(key, {
+        ...assignment,
+        groups: [
+          ...new Set([...(current?.groups ?? []), ...generatedGroups]),
+        ],
+      })
+    }
+    return [...byKey.values()]
+  }
+
+  private canonicalCollectionGroups(
+    assignments: readonly CollectionProgrammingGroups[]
+  ): CollectionProgrammingGroups[] {
+    return assignments
+      .map((assignment) => ({
+        ...assignment,
+        groups: [...new Set(assignment.groups)].sort((left, right) =>
+          this.compareText(left, right)
+        ),
+      }))
+      .sort((left, right) =>
+        this.compareText(
+          this.configuredCollectionKey(left),
+          this.configuredCollectionKey(right)
+        )
+      )
+  }
+
+  private automationReferenceKey(
+    value:
+      | Pick<StationCollectionOption, 'rootId' | 'libraryKind' | 'identityKey'>
+      | ChannelAutomationCollectionRef
+  ): string {
+    return `${value.rootId.toLocaleLowerCase('en-US')}\u0000${value.libraryKind}\u0000${value.identityKey.toLocaleLowerCase('en-US')}`
+  }
+
   private automatedStationChannel(
-    request: StationBuildRequest
+    request: StationBuildRequest,
+    selectedCollections: readonly StationCollectionOption[]
   ): LibraryChannelPolicy {
     if (this.channels.some((channel) => channel.id === request.id)) {
       throw new Error(`Channel ${request.id} already exists`)
@@ -599,15 +896,8 @@ export class ChannelService {
         name: request.name,
         enabled: true,
         timezone: request.timezone,
-        slots: stationScheduleSlots(
-          request.airtime ?? 'all-day',
-          group,
-          request.preset
-        ),
-        automation: {
-          preset: request.preset,
-          airtime: request.airtime ?? 'all-day',
-        },
+        slots: this.automatedScheduleSlots(request, group),
+        automation: this.stationAutomationPolicy(request, selectedCollections),
         ...(request.marathon ? { marathon: request.marathon } : {}),
       },
     ])[0] as LibraryChannelPolicy
@@ -615,7 +905,9 @@ export class ChannelService {
 
   private automatedStationUpdateChannel(
     channelId: string,
-    request: StationBuildRequest
+    request: StationBuildRequest,
+    selectedCollections: readonly StationCollectionOption[],
+    preservedCollectionRefs: readonly ChannelAutomationCollectionRef[] = []
   ): LibraryChannelPolicy {
     const current = this.channels.find((channel) => channel.id === channelId)
     if (!current) throw new Error('Channel not found')
@@ -636,18 +928,71 @@ export class ChannelService {
         ...current,
         name: request.name,
         timezone: request.timezone,
-        slots: stationScheduleSlots(
-          request.airtime ?? 'all-day',
-          group,
-          request.preset
+        slots: this.automatedScheduleSlots(request, group),
+        automation: this.stationAutomationPolicy(
+          request,
+          selectedCollections,
+          preservedCollectionRefs
         ),
-        automation: {
-          preset: request.preset,
-          airtime: request.airtime ?? 'all-day',
-        },
         ...(request.marathon ? { marathon: request.marathon } : {}),
       },
     ])[0] as LibraryChannelPolicy
+  }
+
+  private stationAutomationPolicy(
+    request: StationBuildRequest,
+    selectedCollections: readonly StationCollectionOption[],
+    preservedCollectionRefs: readonly ChannelAutomationCollectionRef[] = []
+  ): ChannelAutomationPolicy {
+    const airtime = request.airtime ?? 'all-day'
+    if (request.preset !== 'network-copy') {
+      if (request.handoff) {
+        throw new Error('After-hours handoff requires a Cartoon Network copy')
+      }
+      return { preset: request.preset, airtime }
+    }
+    if (
+      !request.networkId ||
+      request.eraStartYear === undefined ||
+      request.eraEndYear === undefined
+    ) {
+      throw new Error('A copied network requires a network and year range')
+    }
+    const selectionMode =
+      request.selectionMode ??
+      (request.collectionIds === undefined ? 'automatic' : 'explicit')
+    const collectionRefs = new Map<string, ChannelAutomationCollectionRef>()
+    for (const collection of selectedCollections) {
+      if (
+        collection.libraryKind !== 'tv' &&
+        collection.libraryKind !== 'movie'
+      ) {
+        throw new Error(
+          'A copied network can store only TV show and explicitly affiliated movie selections'
+        )
+      }
+      const reference: ChannelAutomationCollectionRef = {
+        rootId: collection.rootId,
+        libraryKind: collection.libraryKind,
+        identityKey: collection.identityKey,
+      }
+      collectionRefs.set(this.automationReferenceKey(reference), reference)
+    }
+    for (const reference of preservedCollectionRefs) {
+      collectionRefs.set(this.automationReferenceKey(reference), reference)
+    }
+    return {
+      preset: request.preset,
+      airtime,
+      networkId: request.networkId,
+      eraStartYear: request.eraStartYear,
+      eraEndYear: request.eraEndYear,
+      selectionMode,
+      ...(request.handoff ? { handoff: request.handoff } : {}),
+      ...(selectionMode === 'explicit'
+        ? { collectionRefs: [...collectionRefs.values()] }
+        : {}),
+    }
   }
 
   private automatedCollectionGroups(
@@ -659,15 +1004,19 @@ export class ChannelService {
     const plannedGroups = new Map(
       preview.collections.map((collection) => [
         collection.id,
-        stationCollectionProgrammingGroups(request.preset, collection, group),
+        stationCollectionProgrammingGroups(
+          request.preset,
+          collection,
+          group,
+          request
+        ),
       ])
     )
+    const lockedHandoffGroup = this.lockedHandoffGroup(group)
     const scheduledGroups = new Set(
-      stationScheduleSlots(
-        request.airtime ?? 'all-day',
-        group,
-        request.preset
-      ).flatMap((slot) => slot.groups)
+      this.automatedScheduleSlots(request, group)
+        .flatMap((slot) => slot.groups)
+        .filter((scheduledGroup) => scheduledGroup !== lockedHandoffGroup)
     )
     const assignedGroups = new Set([...plannedGroups.values()].flat())
     const missingGroups = [...scheduledGroups].filter(
@@ -720,6 +1069,29 @@ export class ChannelService {
       })
     }
     return [...byKey.values()]
+  }
+
+  private automatedScheduleSlots(
+    request: StationBuildRequest,
+    group: string
+  ): ChannelScheduleSlot[] {
+    const slots = stationScheduleSlots(
+      request.airtime ?? 'all-day',
+      group,
+      request.preset,
+      request
+    )
+    return request.handoff
+      ? applyLockedAfterHoursHandoff(
+          slots,
+          this.lockedHandoffGroup(group),
+          request.handoff
+        )
+      : slots
+  }
+
+  private lockedHandoffGroup(group: string): string {
+    return automationLockedHandoffGroup(group)
   }
 
   private persistAndApply(
@@ -1005,7 +1377,11 @@ export class ChannelService {
       ...(legacyAssignment?.groups ?? []),
     ]
     if (policyGroups.length > 0 || configuredGroups.length > 0) {
-      const groups = new Set([...policyGroups, ...configuredGroups])
+      const groups = new Set(
+        [...policyGroups, ...configuredGroups].filter(
+          (group) => !isChannelLockedHandoffGroup(group)
+        )
+      )
       const metadataGenres = new Set(
         (item.collectionGenres ?? []).map((genre) =>
           genre.trim().toLocaleLowerCase('en-US')
@@ -1564,7 +1940,7 @@ export class ChannelService {
   }
 
   private generatedGroup(channelId: string): string {
-    return `toasttv-auto-${this.hash(channelId).toString(16).padStart(8, '0')}`
+    return channelAutomationGroup(channelId)
   }
 
   private timeToMinutes(value: string): number {
@@ -1575,6 +1951,91 @@ export class ChannelService {
   private pad(value: number): string {
     return value.toString().padStart(2, '0')
   }
+}
+
+function applyLockedAfterHoursHandoff(
+  slots: readonly ChannelScheduleSlot[],
+  lockedGroup: string,
+  handoff: ChannelAutomationHandoffPolicy
+): ChannelScheduleSlot[] {
+  const signOff = handoffTimeMinutes(handoff.start)
+  const signOn = handoffTimeMinutes(handoff.end)
+  if (signOff <= signOn) {
+    throw new Error(
+      'After-hours handoff must start in the evening and return the next morning'
+    )
+  }
+  const daytime = slots.flatMap((slot) => {
+    const start = Math.max(handoffTimeMinutes(slot.start, true), signOn)
+    const end = Math.min(handoffTimeMinutes(slot.end, true), signOff)
+    return end <= start
+      ? []
+      : [
+          {
+            ...slot,
+            start: handoffTime(start),
+            end: handoffTime(end),
+          },
+        ]
+  })
+  const everyDay: readonly ScheduleDay[] = [
+    'sun',
+    'mon',
+    'tue',
+    'wed',
+    'thu',
+    'fri',
+    'sat',
+  ]
+  const branding = {
+    mode: 'custom' as const,
+    logoId: handoff.identity,
+  }
+  const locked: ChannelScheduleSlot[] = [
+    ...(signOn > 0
+      ? [
+          {
+            days: everyDay,
+            start: '00:00',
+            end: handoffTime(signOn),
+            groups: [lockedGroup],
+            branding,
+          },
+        ]
+      : []),
+    {
+      days: everyDay,
+      start: handoffTime(signOff),
+      end: '24:00',
+      groups: [lockedGroup],
+      branding,
+    },
+  ]
+  return [...daytime, ...locked].sort(
+    (left, right) =>
+      handoffTimeMinutes(left.start, true) -
+      handoffTimeMinutes(right.start, true)
+  )
+}
+
+function handoffTimeMinutes(value: string, allowEndOfDay = false): number {
+  const match = /^(\d{2}):(\d{2})$/.exec(value)
+  if (!match) throw new Error(`Invalid schedule time: ${value}`)
+  const hour = Number(match[1])
+  const minute = Number(match[2])
+  if (
+    minute > 59 ||
+    hour > 24 ||
+    (hour === 24 && (!allowEndOfDay || minute !== 0))
+  ) {
+    throw new Error(`Invalid schedule time: ${value}`)
+  }
+  return hour * 60 + minute
+}
+
+function handoffTime(minutes: number): string {
+  if (minutes === 24 * 60) return '24:00'
+  return `${Math.floor(minutes / 60).toString().padStart(2, '0')}:${(minutes % 60).toString().padStart(2, '0')}`
 }
 
 function safeMessage(error: unknown): string {

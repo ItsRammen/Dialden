@@ -59,6 +59,60 @@ export interface ChannelMarathonPolicy {
   readonly episodeCount: number
 }
 
+export type ChannelAutomationNetworkId =
+  | 'cartoon-network'
+  | 'nickelodeon'
+  | 'nick-jr'
+  | 'disney-channel'
+  | 'disney-junior'
+  | 'toon-disney'
+  | 'jetix'
+  | 'toonami'
+  | 'abc3-abc-me'
+  | 'abc-family-au'
+  | 'abc-kids-au'
+  | 'cbbc'
+  | 'cbeebies'
+  | 'pbs-kids'
+
+export interface ChannelAutomationHandoffPolicy {
+  /** The after-hours identity is deliberately locked until profile/PIN support exists. */
+  readonly identity: 'adult-swim'
+  readonly mode: 'locked-off-air'
+  /** Local station time when the daytime network signs off. */
+  readonly start: string
+  /** Local station time when the daytime network returns. */
+  readonly end: string
+}
+
+/** Deterministic namespace owned by one generated channel. */
+export function channelAutomationGroup(channelId: string): string {
+  let hash = 0x811c9dc5
+  for (let index = 0; index < channelId.length; index++) {
+    hash ^= channelId.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return `toasttv-auto-${(hash >>> 0).toString(16).padStart(8, '0')}`
+}
+
+export function automationLockedHandoffGroup(group: string): string {
+  return `${group}-locked-after-hours`
+}
+
+export function channelLockedHandoffGroup(channelId: string): string {
+  return automationLockedHandoffGroup(channelAutomationGroup(channelId))
+}
+
+export function isChannelLockedHandoffGroup(group: string): boolean {
+  return /^toasttv-auto-[0-9a-f]{8}-locked-after-hours$/.test(group)
+}
+
+export interface ChannelAutomationCollectionRef {
+  readonly rootId: string
+  readonly libraryKind: Extract<LibraryKind, 'tv' | 'movie'>
+  readonly identityKey: string
+}
+
 export interface ChannelAutomationPolicy {
   /** Preset/template identifier used to reconstruct the modal Auto editor. */
   readonly preset: string
@@ -67,6 +121,14 @@ export interface ChannelAutomationPolicy {
     | 'school-day'
     | 'evening'
     | 'weekend-mornings'
+  readonly networkId?: ChannelAutomationNetworkId
+  readonly eraStartYear?: number
+  readonly eraEndYear?: number
+  readonly selectionMode?: 'automatic' | 'explicit'
+  /** Durable identities survive rescans that assign new numeric collection IDs. */
+  readonly collectionRefs?: readonly ChannelAutomationCollectionRef[]
+  /** Optional time-shared identity. It never grants adult-content eligibility. */
+  readonly handoff?: ChannelAutomationHandoffPolicy
 }
 
 export interface LibraryChannelPolicy {
@@ -382,6 +444,12 @@ export function validateLibraryChannels(input: unknown): LibraryChannelPolicy[] 
       }
     }
 
+    const automation =
+      value.automation === undefined
+        ? undefined
+        : validateChannelAutomation(value.automation, id)
+    validateLockedHandoffSchedule(slots, id, automation?.handoff)
+
     return {
       id,
       name,
@@ -394,9 +462,7 @@ export function validateLibraryChannels(input: unknown): LibraryChannelPolicy[] 
       ...(value.marathon === undefined
         ? {}
         : { marathon: validateChannelMarathon(value.marathon, id) }),
-      ...(value.automation === undefined
-        ? {}
-        : { automation: validateChannelAutomation(value.automation, id) }),
+      ...(automation === undefined ? {} : { automation }),
     }
   })
 }
@@ -419,10 +485,270 @@ function validateChannelAutomation(
   ) {
     throw new Error(`Channel ${channelId} automation airtime is invalid`)
   }
+  const networkId =
+    typeof value.networkId === 'string' ? value.networkId.trim() : ''
+  const networkIds = new Set<ChannelAutomationNetworkId>([
+    'cartoon-network',
+    'nickelodeon',
+    'nick-jr',
+    'disney-channel',
+    'disney-junior',
+    'toon-disney',
+    'jetix',
+    'toonami',
+    'abc3-abc-me',
+    'abc-family-au',
+    'abc-kids-au',
+    'cbbc',
+    'cbeebies',
+    'pbs-kids',
+  ])
+  const eraStartYear = value.eraStartYear
+  const eraEndYear = value.eraEndYear
+  const selectionMode = value.selectionMode
+  const hasNetworkFields =
+    networkId !== '' ||
+    eraStartYear !== undefined ||
+    eraEndYear !== undefined ||
+    selectionMode !== undefined ||
+    value.collectionRefs !== undefined ||
+    value.handoff !== undefined
+  if (preset === 'network-copy') {
+    if (!networkIds.has(networkId as ChannelAutomationNetworkId)) {
+      throw new Error(`Channel ${channelId} automation network is invalid`)
+    }
+    if (
+      !Number.isInteger(eraStartYear) ||
+      !Number.isInteger(eraEndYear) ||
+      (eraStartYear as number) < 1900 ||
+      (eraEndYear as number) > 2100 ||
+      (eraStartYear as number) > (eraEndYear as number)
+    ) {
+      throw new Error(`Channel ${channelId} automation era range is invalid`)
+    }
+    const networkYearBounds: Readonly<
+      Record<ChannelAutomationNetworkId, readonly [number, number]>
+    > = {
+      'cartoon-network': [1992, 2026],
+      nickelodeon: [1979, 2026],
+      'nick-jr': [1988, 2026],
+      'disney-channel': [1983, 2026],
+      'disney-junior': [1997, 2026],
+      'toon-disney': [1998, 2009],
+      jetix: [2004, 2009],
+      toonami: [1997, 2008],
+      'abc3-abc-me': [2009, 2024],
+      'abc-family-au': [2024, 2026],
+      'abc-kids-au': [2009, 2026],
+      cbbc: [2002, 2026],
+      cbeebies: [2002, 2026],
+      'pbs-kids': [1994, 2026],
+    }
+    const [minimumYear, maximumYear] =
+      networkYearBounds[networkId as ChannelAutomationNetworkId]
+    if (
+      (eraStartYear as number) < minimumYear ||
+      (eraEndYear as number) > maximumYear
+    ) {
+      throw new Error(
+        `Channel ${channelId} automation era is outside the selected network's available years`
+      )
+    }
+    if (!['automatic', 'explicit'].includes(String(selectionMode))) {
+      throw new Error(`Channel ${channelId} automation selection mode is invalid`)
+    }
+  } else if (hasNetworkFields) {
+    throw new Error(
+      `Channel ${channelId} network-copy settings require the network-copy preset`
+    )
+  }
+  const collectionRefs =
+    value.collectionRefs === undefined
+      ? undefined
+      : validateAutomationCollectionRefs(value.collectionRefs, channelId)
+  if (
+    preset === 'network-copy' &&
+    selectionMode === 'explicit' &&
+    (!collectionRefs || collectionRefs.length === 0)
+  ) {
+    throw new Error(
+      `Channel ${channelId} explicit network selection requires collection references`
+    )
+  }
+  if (preset === 'network-copy' && selectionMode === 'automatic' && collectionRefs) {
+    throw new Error(
+      `Channel ${channelId} automatic network selection cannot store collection references`
+    )
+  }
+  const handoff =
+    value.handoff === undefined
+      ? undefined
+      : validateAutomationHandoff(value.handoff, channelId)
+  if (
+    handoff &&
+    (preset !== 'network-copy' ||
+      networkId !== 'cartoon-network' ||
+      airtime !== 'all-day')
+  ) {
+    throw new Error(
+      `Channel ${channelId} after-hours handoff requires an all-day Cartoon Network copy`
+    )
+  }
   return {
     preset,
     airtime: airtime as ChannelAutomationPolicy['airtime'],
+    ...(preset === 'network-copy'
+      ? {
+          networkId: networkId as ChannelAutomationNetworkId,
+          eraStartYear: eraStartYear as number,
+          eraEndYear: eraEndYear as number,
+          selectionMode: selectionMode as 'automatic' | 'explicit',
+          ...(collectionRefs ? { collectionRefs } : {}),
+          ...(handoff ? { handoff } : {}),
+        }
+      : {}),
   }
+}
+
+function validateAutomationHandoff(
+  input: unknown,
+  channelId: string
+): ChannelAutomationHandoffPolicy {
+  if (!input || typeof input !== 'object') {
+    throw new Error(`Channel ${channelId} after-hours handoff must be an object`)
+  }
+  const value = input as Record<string, unknown>
+  if (value.identity !== 'adult-swim' || value.mode !== 'locked-off-air') {
+    throw new Error(`Channel ${channelId} after-hours handoff is invalid`)
+  }
+  if (typeof value.start !== 'string' || typeof value.end !== 'string') {
+    throw new Error(`Channel ${channelId} after-hours handoff needs sign-off and return times`)
+  }
+  let startMinutes: number
+  let endMinutes: number
+  try {
+    startMinutes = parseScheduleTime(value.start)
+    endMinutes = parseScheduleTime(value.end)
+  } catch {
+    throw new Error(`Channel ${channelId} after-hours handoff has an invalid time`)
+  }
+  if (
+    startMinutes < 17 * 60 ||
+    endMinutes > 10 * 60 ||
+    startMinutes <= endMinutes
+  ) {
+    throw new Error(
+      `Channel ${channelId} after-hours handoff must start between 17:00 and 23:59 and return between 00:00 and 10:00`
+    )
+  }
+  return {
+    identity: 'adult-swim',
+    mode: 'locked-off-air',
+    start: value.start,
+    end: value.end,
+  }
+}
+
+function validateLockedHandoffSchedule(
+  slots: readonly ChannelScheduleSlot[],
+  channelId: string,
+  handoff: ChannelAutomationHandoffPolicy | undefined
+): void {
+  const reservedSlots = slots.filter((slot) =>
+    slot.groups.some(isChannelLockedHandoffGroup)
+  )
+  if (!handoff) {
+    if (reservedSlots.length > 0) {
+      throw new Error(
+        `Channel ${channelId} uses the reserved after-hours group without a handoff`
+      )
+    }
+    return
+  }
+
+  const lockedGroup = channelLockedHandoffGroup(channelId)
+  const signOn = parseScheduleTime(handoff.end)
+  const expectedRanges = [
+    ...(signOn > 0 ? [{ start: '00:00', end: handoff.end }] : []),
+    { start: handoff.start, end: '24:00' },
+  ]
+  const everyDay: readonly ScheduleDay[] = [
+    'sun',
+    'mon',
+    'tue',
+    'wed',
+    'thu',
+    'fri',
+    'sat',
+  ]
+  const matchesLockedRange = (
+    slot: ChannelScheduleSlot,
+    range: { readonly start: string; readonly end: string }
+  ): boolean =>
+    slot.start === range.start &&
+    slot.end === range.end &&
+    slot.groups.length === 1 &&
+    slot.groups[0] === lockedGroup &&
+    slot.days.length === everyDay.length &&
+    everyDay.every((day) => slot.days.includes(day)) &&
+    slot.branding?.mode === 'custom' &&
+    slot.branding.logoId === handoff.identity
+
+  if (
+    reservedSlots.length !== expectedRanges.length ||
+    !expectedRanges.every((range) =>
+      reservedSlots.some((slot) => matchesLockedRange(slot, range))
+    )
+  ) {
+    throw new Error(
+      `Channel ${channelId} after-hours handoff schedule must keep every overnight minute locked off-air`
+    )
+  }
+}
+
+function validateAutomationCollectionRefs(
+  input: unknown,
+  channelId: string
+): ChannelAutomationCollectionRef[] {
+  if (!Array.isArray(input) || input.length > 5_000) {
+    throw new Error(`Channel ${channelId} automation collection references are invalid`)
+  }
+  const seen = new Set<string>()
+  return input.map((raw, index) => {
+    if (!raw || typeof raw !== 'object') {
+      throw new Error(
+        `Channel ${channelId} automation collection reference ${index} is invalid`
+      )
+    }
+    const value = raw as Record<string, unknown>
+    const rootId = typeof value.rootId === 'string' ? value.rootId.trim() : ''
+    const libraryKind = value.libraryKind
+    const identityKey =
+      typeof value.identityKey === 'string' ? value.identityKey.trim() : ''
+    if (
+      !/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(rootId) ||
+      !['tv', 'movie'].includes(String(libraryKind)) ||
+      !identityKey ||
+      identityKey.length > 500 ||
+      /[\r\n\0]/.test(identityKey)
+    ) {
+      throw new Error(
+        `Channel ${channelId} automation collection reference ${index} is invalid`
+      )
+    }
+    const key = `${rootId}\0${String(libraryKind)}\0${identityKey}`
+    if (seen.has(key)) {
+      throw new Error(
+        `Channel ${channelId} automation collection references contain a duplicate`
+      )
+    }
+    seen.add(key)
+    return {
+      rootId,
+      libraryKind: libraryKind as Extract<LibraryKind, 'tv' | 'movie'>,
+      identityKey,
+    }
+  })
 }
 
 function validateChannelMarathon(

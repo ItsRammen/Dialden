@@ -77,6 +77,24 @@ export function applyClientApiCors(app: Hono): void {
   )
 }
 
+export async function restartChangedChannelWorkers(
+  changedChannelIds: readonly string[],
+  workers: Pick<ContinuousChannelWorkerManager, 'listStates' | 'restart'>
+): Promise<void> {
+  const changed = new Set(changedChannelIds)
+  await Promise.all(
+    workers
+      .listStates()
+      .filter((state) => changed.has(state.channelId))
+      .map((state) =>
+        workers.restart(
+          state.channelId,
+          'Automated channel lineup changed after a library scan'
+        )
+      )
+  )
+}
+
 export async function createServer(
   daemon: ToastTVDaemon,
   runtime: RuntimeConfig = loadRuntimeConfig()
@@ -145,8 +163,29 @@ export async function createServer(
       // and make subsequent LG tunes appear to loop. QSV can sustain the two
       // adjacent hot channels; software mode starts only the requested channel.
       maximumWarmChannels: transcodingStatus.hardwareAcceleration ? 2 : 0,
+      warmLeaseTtlMs: 60_000,
     }
   )
+  const reconcileGeneratedStations = async (): Promise<void> => {
+    try {
+      const changedChannelIds =
+        await channelService.reconcileAutomatedStations()
+      if (changedChannelIds.length === 0) return
+      await daemon.getEngine().refreshCache(true)
+      await playbackService.reconcilePrequeue()
+      await restartChangedChannelWorkers(changedChannelIds, channelWorkers)
+    } catch (error) {
+      // A failed catalog read must never make an otherwise healthy scan or
+      // server startup fail. The next scan will retry the same reconciliation.
+      console.error('Automated channel reconciliation failed', error)
+    }
+  }
+  indexer.onScanComplete(reconcileGeneratedStations)
+  // The initial background scan starts before the web server is constructed.
+  // Reconcile immediately when it completed before this listener was attached.
+  if (indexer.getScanState().status === 'completed') {
+    await reconcileGeneratedStations()
+  }
   const headlessDashboardService = new HeadlessDashboardService(
     daemon.getRepository(),
     channelService,

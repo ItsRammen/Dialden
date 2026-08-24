@@ -2,7 +2,10 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { LibraryChannelPolicy } from '../src/config/library'
+import {
+  channelLockedHandoffGroup,
+  type LibraryChannelPolicy,
+} from '../src/config/library'
 import { ChannelConfigurationStore } from '../src/services/ChannelConfigurationStore'
 
 const channel: LibraryChannelPolicy = {
@@ -269,6 +272,286 @@ describe('ChannelConfigurationStore', () => {
           manuallyOffAir: [],
         })
       ).toThrow('automation airtime')
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  test('persists a strict network range and durable explicit collection lineup', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'toasttv-network-copy-'))
+    try {
+      const store = new ChannelConfigurationStore(join(directory, 'channels.json'))
+      const networkCopy = {
+        ...channel,
+        automation: {
+          preset: 'network-copy',
+          airtime: 'all-day' as const,
+          networkId: 'cartoon-network' as const,
+          eraStartYear: 1997,
+          eraEndYear: 2026,
+          selectionMode: 'explicit' as const,
+          collectionRefs: [
+            {
+              rootId: 'tv',
+              libraryKind: 'tv' as const,
+              identityKey: 'tv:cartoon-network:dexters-laboratory',
+            },
+          ],
+        },
+      }
+      store.save({ channels: [networkCopy], manuallyOffAir: [] })
+      expect(store.load().channels[0]?.automation).toEqual(
+        networkCopy.automation
+      )
+
+      const handoff = {
+        identity: 'adult-swim' as const,
+        mode: 'locked-off-air' as const,
+        start: '21:00',
+        end: '06:00',
+      }
+      expect(() =>
+        store.save({
+          channels: [
+            {
+              ...networkCopy,
+              automation: { ...networkCopy.automation, handoff },
+            },
+          ],
+          manuallyOffAir: [],
+        })
+      ).toThrow('every overnight minute locked off-air')
+
+      const everyDay = [
+        'sun',
+        'mon',
+        'tue',
+        'wed',
+        'thu',
+        'fri',
+        'sat',
+      ] as const
+      const lockedGroup = channelLockedHandoffGroup(networkCopy.id)
+      const withLockedHandoff = {
+        ...networkCopy,
+        slots: [
+          {
+            days: everyDay,
+            start: '00:00',
+            end: '06:00',
+            groups: [lockedGroup],
+            branding: { mode: 'custom' as const, logoId: 'adult-swim' },
+          },
+          {
+            days: everyDay,
+            start: '06:00',
+            end: '21:00',
+            groups: ['comfort'],
+          },
+          {
+            days: everyDay,
+            start: '21:00',
+            end: '24:00',
+            groups: [lockedGroup],
+            branding: { mode: 'custom' as const, logoId: 'adult-swim' },
+          },
+        ],
+        automation: {
+          ...networkCopy.automation,
+          handoff,
+        },
+      }
+      store.save({ channels: [withLockedHandoff], manuallyOffAir: [] })
+      expect(store.load().channels[0]?.automation?.handoff).toEqual(
+        withLockedHandoff.automation.handoff
+      )
+      expect(() =>
+        store.save({
+          channels: [
+            {
+              ...withLockedHandoff,
+              automation: {
+                ...withLockedHandoff.automation,
+                handoff: {
+                  ...withLockedHandoff.automation.handoff,
+                  start: '06:00',
+                  end: '21:00',
+                },
+              },
+            },
+          ],
+          manuallyOffAir: [],
+        })
+      ).toThrow('must start between 17:00')
+      expect(() =>
+        store.save({
+          channels: [
+            {
+              ...withLockedHandoff,
+              automation: {
+                ...withLockedHandoff.automation,
+                handoff: {
+                  ...withLockedHandoff.automation.handoff,
+                  start: '07:00',
+                  end: '06:59',
+                },
+              },
+            },
+          ],
+          manuallyOffAir: [],
+        })
+      ).toThrow('must start between 17:00')
+
+      expect(() =>
+        store.save({
+          channels: [
+            {
+              ...networkCopy,
+              automation: {
+                ...networkCopy.automation,
+                networkId: 'abc-kids' as 'cartoon-network',
+              },
+            },
+          ],
+          manuallyOffAir: [],
+        })
+      ).toThrow('automation network is invalid')
+      expect(() =>
+        store.save({
+          channels: [
+            {
+              ...networkCopy,
+              automation: {
+                ...networkCopy.automation,
+                eraStartYear: 2027,
+              },
+            },
+          ],
+          manuallyOffAir: [],
+        })
+      ).toThrow('automation era range is invalid')
+      expect(() =>
+        store.save({
+          channels: [
+            {
+              ...networkCopy,
+              automation: {
+                ...networkCopy.automation,
+                eraEndYear: 2027,
+              },
+            },
+          ],
+          manuallyOffAir: [],
+        })
+      ).toThrow("outside the selected network's available years")
+      expect(() =>
+        store.save({
+          channels: [
+            {
+              ...networkCopy,
+              automation: {
+                ...networkCopy.automation,
+                collectionRefs: [],
+              },
+            },
+          ],
+          manuallyOffAir: [],
+        })
+      ).toThrow('explicit network selection requires collection references')
+      expect(() =>
+        store.save({
+          channels: [
+            {
+              ...networkCopy,
+              automation: {
+                ...networkCopy.automation,
+                collectionRefs: [
+                  {
+                    rootId: 'tv',
+                    libraryKind: 'other' as 'tv',
+                    identityKey: 'bonus-feature',
+                  },
+                ],
+              },
+            },
+          ],
+          manuallyOffAir: [],
+        })
+      ).toThrow('automation collection reference 0 is invalid')
+      expect(() =>
+        store.save({
+          channels: [
+            {
+              ...networkCopy,
+              automation: {
+                ...networkCopy.automation,
+                networkId: 'toonami' as 'cartoon-network',
+                eraStartYear: 1997,
+                eraEndYear: 2026,
+              },
+            },
+          ],
+          manuallyOffAir: [],
+        })
+      ).toThrow("outside the selected network's available years")
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  test('reserves locked handoff groups from persisted media assignments', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'toasttv-locked-group-'))
+    try {
+      const store = new ChannelConfigurationStore(join(directory, 'channels.json'))
+      expect(() =>
+        store.save({
+          channels: [channel],
+          manuallyOffAir: [],
+          collectionGroups: [
+            {
+              rootId: 'tv',
+              collectionTitle: 'Bluey (2018)',
+              groups: [channelLockedHandoffGroup('cn-copy')],
+            },
+          ],
+        })
+      ).toThrow('cannot assign the reserved after-hours group')
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  test('persists the expanded child-channel profiles at their documented boundaries', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'toasttv-expanded-networks-'))
+    try {
+      const store = new ChannelConfigurationStore(join(directory, 'channels.json'))
+      const profiles = [
+        ['abc3-abc-me', 2009, 2024],
+        ['abc-family-au', 2024, 2026],
+        ['abc-kids-au', 2009, 2026],
+        ['cbbc', 2002, 2026],
+        ['cbeebies', 2002, 2026],
+        ['pbs-kids', 1994, 2026],
+      ] as const
+      for (const [networkId, eraStartYear, eraEndYear] of profiles) {
+        store.save({
+          channels: [
+            {
+              ...channel,
+              automation: {
+                preset: 'network-copy',
+                airtime: 'all-day',
+                networkId,
+                eraStartYear,
+                eraEndYear,
+                selectionMode: 'automatic',
+              },
+            },
+          ],
+          manuallyOffAir: [],
+        })
+        expect(store.load().channels[0]?.automation?.networkId).toBe(networkId)
+      }
     } finally {
       rmSync(directory, { recursive: true, force: true })
     }

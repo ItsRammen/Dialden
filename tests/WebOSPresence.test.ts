@@ -149,4 +149,28 @@ describe('LG webOS presence telemetry', () => {
     expect(script).toContain('scheduleAdjacentWarm()')
     expect(script).toContain('{ clientId: state.clientId, channelIds: [] }')
   })
+
+  test('auto-starts the last channel and prepares zaps before replacing video', () => {
+    const script = readFileSync(
+      join(import.meta.dir, '..', 'clients', 'webos', 'app.js'),
+      'utf8'
+    )
+    const markup = readFileSync(
+      join(import.meta.dir, '..', 'clients', 'webos', 'index.html'),
+      'utf8'
+    )
+
+    expect(script).toContain("'/api/client/v1/channels/startup'")
+    expect(script).toContain("'/api/client/v1/channels/' + encodeURIComponent(channel.id) + '/prepare'")
+    expect(script).toContain('var ZAP_DEBOUNCE_MS = 200')
+    expect(script).toContain('function commitPreparedChannel(')
+    expect(script.indexOf('function prepareChannel(')).toBeLessThan(
+      script.indexOf('function commitPreparedChannel(')
+    )
+    expect(script).toContain('writeStorage(STORAGE_CHANNEL, currentChannel().id)')
+    expect(script).toContain("console.log('[ToastTV Tune]")
+    expect(script).toContain('function nextAvailableChannelIndex(')
+    expect(markup).toContain('id="bootScreen"')
+    expect(markup).toContain('id="channelOsd"')
+  })
 })

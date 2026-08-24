@@ -11,6 +11,9 @@ interface ChannelStreamControllerDeps {
 }
 
 export const CLIENT_CHANNEL_WARM_ROUTE = '/api/client/v1/channels/warm'
+export const CLIENT_CHANNEL_STARTUP_ROUTE = '/api/client/v1/channels/startup'
+export const CLIENT_CHANNEL_PREPARE_ROUTE =
+  '/api/client/v1/channels/:id/prepare'
 
 const SEGMENT_NAME = /^segment-\d{13}\.ts$/
 
@@ -23,7 +26,7 @@ export function createChannelStreamController({
   const controller = new Hono()
 
   controller.use(
-    CLIENT_CHANNEL_WARM_ROUTE,
+    '/api/client/v1/channels/*',
     cors({
       origin: '*',
       allowMethods: ['POST', 'OPTIONS'],
@@ -31,6 +34,91 @@ export function createChannelStreamController({
       maxAge: 300,
     })
   )
+
+  controller.post(CLIENT_CHANNEL_STARTUP_ROUTE, async (c) => {
+    c.header('Cache-Control', 'no-store')
+    const parsed = await parseClientRequest(c)
+    if ('response' in parsed) return parsed.response
+    const request = parsed.input as {
+      clientId?: unknown
+      lastChannelId?: unknown
+      warmAdjacent?: unknown
+    }
+    if (
+      typeof request.clientId !== 'string' ||
+      (request.lastChannelId !== undefined &&
+        request.lastChannelId !== null &&
+        typeof request.lastChannelId !== 'string')
+    ) {
+      return c.json({ error: 'Startup requires a clientId' }, 400)
+    }
+    const available = availableChannels(channels)
+    if (available.length === 0) {
+      return c.json({ error: 'No channels are currently on air' }, 404)
+    }
+    const selected =
+      available.find((channel) => channel.id === request.lastChannelId) ??
+      available[0]!
+    const fellBack =
+      typeof request.lastChannelId === 'string' &&
+      request.lastChannelId !== selected.id
+    try {
+      const state = await workers.touch(selected.id, request.clientId)
+      let warmed: string[] = []
+      if (request.warmAdjacent !== false && available.length > 1) {
+        const selectedIndex = available.findIndex(
+          (channel) => channel.id === selected.id
+        )
+        const adjacent = adjacentChannelIds(available, selectedIndex)
+        warmed = (await workers.warm(adjacent, request.clientId)).map(
+          (worker) => worker.channelId
+        )
+      }
+      return c.json({
+        channel: selected,
+        status: state.status === 'error' ? 'unavailable' : 'ready',
+        streamUrl: `/api/v1/channels/${encodeURIComponent(selected.id)}/live/index.m3u8`,
+        warmed,
+        serverTimeMs: Date.now(),
+        fallbackReason: fellBack
+          ? 'The last channel is no longer available; the first on-air channel was selected.'
+          : null,
+      })
+    } catch (error) {
+      return c.json(
+        { error: error instanceof Error ? error.message : 'Channel could not be started' },
+        503
+      )
+    }
+  })
+
+  controller.post(CLIENT_CHANNEL_PREPARE_ROUTE, async (c) => {
+    c.header('Cache-Control', 'no-store')
+    const parsed = await parseClientRequest(c)
+    if ('response' in parsed) return parsed.response
+    const request = parsed.input as { clientId?: unknown }
+    const channelId = c.req.param('id')
+    if (typeof request.clientId !== 'string') {
+      return c.json({ error: 'Prepare requires a clientId' }, 400)
+    }
+    if (!hasChannel(channels, channelId)) {
+      return c.json({ error: 'Channel not found' }, 404)
+    }
+    try {
+      const state = await workers.touch(channelId, request.clientId)
+      return c.json({
+        channelId,
+        status: state.status === 'error' ? 'unavailable' : 'ready',
+        streamUrl: `/api/v1/channels/${encodeURIComponent(channelId)}/live/index.m3u8`,
+        serverTimeMs: Date.now(),
+      })
+    } catch (error) {
+      return c.json(
+        { error: error instanceof Error ? error.message : 'Channel could not be prepared' },
+        503
+      )
+    }
+  })
 
   controller.post(CLIENT_CHANNEL_WARM_ROUTE, async (c) => {
     c.header('Cache-Control', 'no-store')
@@ -141,6 +229,37 @@ export function createChannelStreamController({
   )
 
   return controller
+}
+
+async function parseClientRequest(c: any): Promise<
+  | { input: unknown }
+  | { response: Response }
+> {
+  try {
+    return { input: await c.req.json() }
+  } catch {
+    return {
+      response: c.json({ error: 'Request must be valid JSON' }, 400),
+    }
+  }
+}
+
+function availableChannels(channels: Pick<ChannelService, 'list'>) {
+  return channels
+    .list()
+    .channels.filter((channel) => channel.enabled && channel.onAir)
+}
+
+function adjacentChannelIds(
+  channels: ReturnType<typeof availableChannels>,
+  selectedIndex: number
+): string[] {
+  const ids: string[] = []
+  const previous = channels[(selectedIndex - 1 + channels.length) % channels.length]
+  const next = channels[(selectedIndex + 1) % channels.length]
+  if (previous) ids.push(previous.id)
+  if (next && !ids.includes(next.id)) ids.push(next.id)
+  return ids.slice(0, 2)
 }
 
 function hasChannel(

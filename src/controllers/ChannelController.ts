@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import {
   validateLibraryChannels,
+  type ChannelAutomationHandoffPolicy,
   type ChannelMarathonPolicy,
   type ChannelScheduleSlot,
   type LibraryChannelPolicy,
@@ -15,6 +16,10 @@ import {
   type StationAirtimeId,
   type StationPresetId,
 } from '../services/StationAutomationService'
+import {
+  isStationNetworkId,
+  type StationNetworkId,
+} from '../services/EraStationTemplateService'
 import { renderChannelAdministration } from '../templates/channelAdministration'
 
 interface ChannelControllerDeps {
@@ -498,27 +503,49 @@ async function readJsonStationRequest(
     name: candidate.name,
     timezone: candidate.timezone,
     preset: candidate.preset,
+    networkId: candidate.networkId,
+    eraStartYear: candidate.eraStartYear,
+    eraEndYear: candidate.eraEndYear,
+    selectionMode: candidate.selectionMode,
     airtime: candidate.airtime,
     collectionIds: candidate.collectionIds,
     genres: candidate.genres,
     networks: candidate.networks,
     studios: candidate.studios,
     marathon: candidate.marathon,
+    handoff: candidate.handoff,
   })
 }
 
 function readFormStationRequest(data: FormData): StationBuildRequest {
+  const selectionMode = data.get('selectionMode')
   return normalizeStationRequest({
     id: data.get('id'),
     name: data.get('name'),
     timezone: data.get('timezone'),
     preset: data.get('preset'),
+    networkId: data.get('networkId'),
+    eraStartYear: data.get('eraStartYear'),
+    eraEndYear: data.get('eraEndYear'),
+    selectionMode,
     airtime: data.get('airtime'),
-    collectionIds: data.getAll('collectionIds'),
+    collectionIds:
+      textValue(selectionMode) === 'automatic'
+        ? undefined
+        : data.getAll('collectionIds'),
     genres: data.getAll('genres'),
     networks: data.getAll('networks'),
     studios: data.getAll('studios'),
     marathon: readFormMarathon(data),
+    handoff:
+      textValue(data.get('handoffEnabled')) === 'true'
+        ? {
+            identity: 'adult-swim',
+            mode: 'locked-off-air',
+            start: data.get('handoffStart'),
+            end: data.get('handoffEnd'),
+          }
+        : undefined,
   })
 }
 
@@ -527,32 +554,148 @@ function normalizeStationRequest(value: {
   name: unknown
   timezone: unknown
   preset: unknown
+  networkId?: unknown
+  eraStartYear?: unknown
+  eraEndYear?: unknown
+  selectionMode?: unknown
   airtime?: unknown
   collectionIds?: unknown
   genres?: unknown
   networks?: unknown
   studios?: unknown
   marathon?: unknown
+  handoff?: unknown
 }): StationBuildRequest {
   const preset = textValue(value.preset)
   if (!isStationPreset(preset)) throw new Error('Choose a valid station preset')
   const airtime = textValue(value.airtime) || 'all-day'
   if (!isStationAirtime(airtime)) throw new Error('Choose a valid airtime')
+  const networkId = optionalStationNetwork(value.networkId)
+  const eraStartYear = optionalEraYear(value.eraStartYear, 'start')
+  const eraEndYear = optionalEraYear(value.eraEndYear, 'end')
+  const selectionMode = optionalSelectionMode(value.selectionMode)
+  if (preset === 'network-copy') {
+    if (!networkId) throw new Error('Choose a network to copy')
+    if (eraStartYear === undefined || eraEndYear === undefined) {
+      throw new Error('Choose the first and last year for the copied network')
+    }
+    if (eraStartYear > eraEndYear) {
+      throw new Error('The first network year cannot be after the last year')
+    }
+  }
+  const collectionIds =
+    value.collectionIds === undefined
+      ? undefined
+      : readArray(value.collectionIds, 'collection IDs').map(parseCollectionId)
   const marathon = normalizeMarathon(value.marathon)
+  const handoff = normalizeHandoff(value.handoff)
+  if (
+    handoff &&
+    (preset !== 'network-copy' ||
+      networkId !== 'cartoon-network' ||
+      airtime !== 'all-day')
+  ) {
+    throw new Error(
+      'The after-hours handoff is available only for an all-day Cartoon Network copy'
+    )
+  }
   return {
     id: textValue(value.id),
     name: textValue(value.name),
     timezone: textValue(value.timezone),
     preset,
+    ...(networkId ? { networkId } : {}),
+    ...(eraStartYear === undefined ? {} : { eraStartYear }),
+    ...(eraEndYear === undefined ? {} : { eraEndYear }),
+    ...(selectionMode ? { selectionMode } : {}),
     airtime,
-    collectionIds: readArray(value.collectionIds, 'collection IDs').map(
-      parseCollectionId
-    ),
+    ...(collectionIds === undefined ? {} : { collectionIds }),
     genres: readArray(value.genres, 'genres').map(textValue),
     networks: readArray(value.networks, 'networks').map(textValue),
     studios: readArray(value.studios, 'studios').map(textValue),
     ...(marathon ? { marathon } : {}),
+    ...(handoff ? { handoff } : {}),
   }
+}
+
+function normalizeHandoff(
+  input: unknown
+): ChannelAutomationHandoffPolicy | undefined {
+  if (input === undefined || input === null || input === '') return undefined
+  if (!input || typeof input !== 'object') {
+    throw new Error('After-hours handoff settings are invalid')
+  }
+  const value = input as Record<string, unknown>
+  if (value.identity !== 'adult-swim' || value.mode !== 'locked-off-air') {
+    throw new Error('Choose a valid after-hours handoff')
+  }
+  const start = textValue(value.start)
+  const end = textValue(value.end)
+  const minutes = (candidate: string): number => {
+    const match = /^(\d{2}):(\d{2})$/.exec(candidate)
+    if (!match) return -1
+    const hour = Number(match[1])
+    const minute = Number(match[2])
+    return hour <= 23 && minute <= 59 ? hour * 60 + minute : -1
+  }
+  const startMinutes = minutes(start)
+  const endMinutes = minutes(end)
+  if (
+    startMinutes < 17 * 60 ||
+    endMinutes < 0 ||
+    endMinutes > 10 * 60 ||
+    startMinutes <= endMinutes
+  ) {
+    throw new Error(
+      'After-hours handoff must start between 17:00 and 23:59 and return between 00:00 and 10:00'
+    )
+  }
+  return {
+    identity: 'adult-swim',
+    mode: 'locked-off-air',
+    start,
+    end,
+  }
+}
+
+function optionalSelectionMode(
+  value: unknown
+): 'automatic' | 'explicit' | undefined {
+  const candidate = textValue(value)
+  if (!candidate) return undefined
+  if (candidate !== 'automatic' && candidate !== 'explicit') {
+    throw new Error('Choose a valid lineup selection mode')
+  }
+  return candidate
+}
+
+function optionalStationNetwork(value: unknown): StationNetworkId | undefined {
+  const candidate = textValue(value)
+  if (!candidate) return undefined
+  if (!isStationNetworkId(candidate)) throw new Error('Choose a valid network')
+  return candidate
+}
+
+function optionalEraYear(
+  value: unknown,
+  boundary: 'start' | 'end'
+): number | undefined {
+  if (typeof value === 'number') {
+    if (Number.isSafeInteger(value) && value >= 1900 && value <= 2100) {
+      return value
+    }
+    throw new Error(`Choose a valid ${boundary} year`)
+  }
+  const candidate = textValue(value)
+  if (!candidate) return undefined
+  if (!/^\d{4}$/.test(candidate)) {
+    throw new Error(`Choose a valid ${boundary} year`)
+  }
+  const year = Number(candidate)
+  if (!Number.isSafeInteger(year) || year < 1900 || year > 2100) {
+    throw new Error(`Choose a valid ${boundary} year`)
+  }
+  return year
 }
 
 function parseCollectionId(value: unknown): number {

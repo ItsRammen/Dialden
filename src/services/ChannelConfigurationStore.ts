@@ -8,6 +8,7 @@ import {
 } from 'node:fs'
 import { dirname } from 'node:path'
 import {
+  isChannelLockedHandoffGroup,
   validateLibraryChannels,
   type LibraryChannelPolicy,
 } from '../config/library'
@@ -193,6 +194,11 @@ export function validateCollectionGroups(
           const group = typeof rawGroup === 'string' ? rawGroup.trim() : ''
           if (!group || group.length > 64 || /[|,\r\n]/.test(group)) {
             throw new Error(`Collection group ${index} contains an invalid group`)
+          }
+          if (isChannelLockedHandoffGroup(group)) {
+            throw new Error(
+              `Collection group ${index} cannot assign the reserved after-hours group`
+            )
           }
           return group
         })

@@ -11,6 +11,13 @@
     <div class="ambient ambient--two"></div>
 
     <main id="app" aria-live="polite">
+      <section id="bootScreen" class="screen boot-screen" aria-hidden="true">
+        <img src="assets/logo.png" alt="" class="boot-screen__logo">
+        <h1>ToastTV</h1>
+        <p id="bootMessage">Starting television…</p>
+        <button id="bootSettingsButton" type="button" class="button button--quiet hidden" data-focusable>Server settings</button>
+      </section>
+
       <section id="setupScreen" class="screen setup-screen" aria-hidden="true">
         <div class="setup-card">
           <div class="brand brand--large">
@@ -84,6 +91,14 @@
           </div>
         </div>
         <div class="player-vignette"></div>
+
+        <div id="channelOsd" class="channel-osd" aria-hidden="true">
+          <span id="channelOsdNumber" class="channel-osd__number">101</span>
+          <div>
+            <p id="channelOsdName" class="channel-osd__name">ToastTV</p>
+            <p id="channelOsdProgram" class="channel-osd__program">Tuning…</p>
+          </div>
+        </div>
 
         <header id="playerHeader" class="player-header player-chrome">
           <div class="live-badge"><span></span> LIVE</div>

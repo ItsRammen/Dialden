@@ -2,16 +2,24 @@ import type { IMediaRepository } from '../repositories/IMediaRepository'
 import type { LibraryKind, MediaCollection } from '../types'
 import type { ChannelScheduleSlot } from '../config/library'
 import {
+  analyzeNetworkCopyProfile,
   analyzeEraStationTemplate,
   ERA_STATION_TEMPLATES,
-  ERA_STATION_FAMILY_MIX_GUESTS,
+  getNetworkCopyProfile,
+  getNetworkCopyScheduleTemplate,
   getEraStationTemplate,
+  isStationNetworkId,
+  NETWORK_COPY_PROFILES,
   type EraPlaybackOrder,
   type EraStationTemplateId,
+  type StationNetworkId,
 } from './EraStationTemplateService'
+
+export type { StationNetworkId } from './EraStationTemplateService'
 
 export type StationPresetId =
   | EraStationTemplateId
+  | 'network-copy'
   | 'all-approved-tv'
   | 'family-animation'
   | 'nature-documentaries'
@@ -97,6 +105,44 @@ export interface StationEraTemplateMatchSummary {
   readonly relationship: 'historical' | 'family-guest'
 }
 
+export interface StationNetworkProfileSummary {
+  readonly id: StationNetworkId
+  readonly name: string
+  readonly description: string
+  readonly audience: 'preschool' | 'school-age' | 'after-hours'
+  readonly availableStartYear: number
+  readonly availableEndYear: number
+  readonly defaultStartYear: number
+  readonly defaultEndYear: number
+  readonly blocks: StationEraTemplateSummary['blocks']
+  readonly matches: readonly StationNetworkProfileMatchSummary[]
+  readonly missingSuggestions: readonly (StationEraTemplateSuggestionSummary & {
+    readonly lastYear?: number
+    readonly airStartYear: number
+    readonly airEndYear: number
+  })[]
+  readonly matchedShows: number
+  readonly matchedMovies: number
+  readonly movieCadence: string
+  readonly marathonCadence: string
+}
+
+export interface StationNetworkProfileMatchSummary {
+  readonly collectionId: number
+  readonly title: string
+  readonly libraryKind: LibraryKind
+  readonly firstAirYear?: number | null
+  readonly airStartYear: number
+  readonly airEndYear: number
+  readonly blockIds: readonly string[]
+  readonly playbackOrder: EraPlaybackOrder
+  readonly score: number
+  readonly eligibilityReason:
+    | 'curated-network-lineup'
+    | 'documented-network-lineup'
+    | 'exact-network-metadata'
+}
+
 export interface StationEraTemplateSummary {
   readonly id: EraStationTemplateId
   readonly name: string
@@ -126,6 +172,9 @@ export interface StationAutomationCatalog {
   readonly presets: readonly StationPresetSummary[]
   /** Period-inspired recipes and their coverage in the current library. */
   readonly eraTemplates?: readonly StationEraTemplateSummary[]
+  /** Strict station identities used by the network-copy builder. */
+  readonly networkProfiles?: readonly StationNetworkProfileSummary[]
+  /** @deprecated General-family ideas are never merged into network copies. */
   readonly familyMixSuggestions?: readonly {
     readonly title: string
     readonly firstYear: number
@@ -137,6 +186,10 @@ export interface StationAutomationCatalog {
 
 export interface StationSelectionRequest {
   readonly preset: StationPresetId
+  readonly networkId?: StationNetworkId
+  readonly eraStartYear?: number
+  readonly eraEndYear?: number
+  readonly selectionMode?: 'automatic' | 'explicit'
   readonly collectionIds?: readonly number[]
   readonly genres?: readonly string[]
   readonly networks?: readonly string[]
@@ -179,11 +232,26 @@ export function stationAirtimeSlots(
 export function stationScheduleSlots(
   airtime: StationAirtimeId,
   group: string,
-  preset: StationPresetId
+  preset: StationPresetId,
+  network?: Pick<
+    StationSelectionRequest,
+    'networkId' | 'eraStartYear' | 'eraEndYear'
+  >
 ): ChannelScheduleSlot[] {
-  if (airtime !== 'all-day' || !isEraStationTemplateId(preset)) {
+  if (airtime !== 'all-day') {
     return stationAirtimeSlots(airtime, group)
   }
+  const template =
+    preset === 'network-copy'
+      ? getNetworkCopyScheduleTemplate(
+          requireStationNetwork(network?.networkId),
+          network?.eraStartYear,
+          network?.eraEndYear
+        )
+      : isEraStationTemplateId(preset)
+        ? getEraStationTemplate(preset)
+        : null
+  if (!template) return stationAirtimeSlots(airtime, group)
   const everyDay = [
     'sun',
     'mon',
@@ -193,12 +261,14 @@ export function stationScheduleSlots(
     'fri',
     'sat',
   ] as const
-  return getEraStationTemplate(preset).blocks.map((block) => ({
-    days: everyDay,
-    start: block.start,
-    end: block.end,
-    groups: [stationTemplateBlockGroup(group, block.id)],
-  }))
+  return template.blocks
+    .filter(isPlayableTemplateBlock)
+    .map((block) => ({
+      days: everyDay,
+      start: block.start,
+      end: block.end,
+      groups: [stationTemplateBlockGroup(group, block.id)],
+    }))
 }
 
 /**
@@ -210,18 +280,50 @@ export function stationScheduleSlots(
 export function stationCollectionProgrammingGroups(
   preset: StationPresetId,
   collection: StationCollectionOption,
-  group: string
+  group: string,
+  network?: Pick<
+    StationSelectionRequest,
+    'networkId' | 'eraStartYear' | 'eraEndYear'
+  >
 ): string[] {
-  if (!isEraStationTemplateId(preset)) return [group]
-  const template = getEraStationTemplate(preset)
-  const match = analyzeEraStationTemplate(template, [collection]).matches[0]
-  let blockIds = match?.blockIds ?? []
+  if (preset !== 'network-copy' && !isEraStationTemplateId(preset)) return [group]
+  const networkId =
+    preset === 'network-copy'
+      ? requireStationNetwork(network?.networkId)
+      : undefined
+  const template =
+    preset === 'network-copy'
+      ? getNetworkCopyScheduleTemplate(
+          networkId!,
+          network?.eraStartYear,
+          network?.eraEndYear
+        )
+      : getEraStationTemplate(preset)
+  const match =
+    preset === 'network-copy'
+      ? analyzeNetworkCopyProfile(networkId!, [collection], {
+          startYear: network?.eraStartYear,
+          endYear: network?.eraEndYear,
+        }).matches[0]
+      : analyzeEraStationTemplate(template, [collection]).matches[0]
+  if (preset === 'network-copy' && !match) {
+    throw new Error(
+      'A network-copy collection must belong to the selected network and year range'
+    )
+  }
+  const playableBlocks = template.blocks.filter(isPlayableTemplateBlock)
+  const playableBlockIds = new Set(playableBlocks.map((block) => block.id))
+  let blockIds = (match?.blockIds ?? []).filter((blockId) =>
+    playableBlockIds.has(blockId)
+  )
   if (blockIds.length === 0 && collection.libraryKind === 'movie') {
-    blockIds = template.moviePolicy.preferredBlockIds
+    blockIds = template.moviePolicy.preferredBlockIds.filter((blockId) =>
+      playableBlockIds.has(blockId)
+    )
   }
   if (blockIds.length === 0) {
     const genres = new Set(collection.genres.map(normalize))
-    const ranked = template.blocks
+    const ranked = playableBlocks
       .map((block) => ({
         id: block.id,
         score: block.tags.filter((tag) => genres.has(normalize(tag))).length,
@@ -230,13 +332,13 @@ export function stationCollectionProgrammingGroups(
     const bestScore = ranked[0]?.score ?? 0
     blockIds = bestScore > 0
       ? ranked.filter((item) => item.score === bestScore).map((item) => item.id)
-      : template.blocks
+      : playableBlocks
           .filter((block) => ['daytime', 'afternoon', 'primetime'].includes(block.id))
           .slice(0, 2)
           .map((block) => block.id)
   }
-  if (blockIds.length === 0 && template.blocks[0]) {
-    blockIds = [template.blocks[0].id]
+  if (blockIds.length === 0 && playableBlocks[0]) {
+    blockIds = [playableBlocks[0].id]
   }
   return [
     group,
@@ -255,6 +357,12 @@ export function stationTemplateBlockGroup(
   return value
 }
 
+function isPlayableTemplateBlock(block: {
+  readonly tags: readonly string[]
+}): boolean {
+  return !block.tags.some((tag) => normalizeTitle(tag) === 'off air')
+}
+
 const PAGE_SIZE = 250
 const MAX_COLLECTIONS = 5_000
 
@@ -264,7 +372,6 @@ const NICK_NETWORKS = new Set([
   'nicktoons',
 ])
 const NICK_JR_NETWORKS = new Set(['nick jr', 'nick jr.'])
-const NICK_STUDIO_TERMS = ['nickelodeon']
 const NATURE_DOCUMENTARY_NETWORK_TERMS = [
   'bbc',
   'discovery',
@@ -284,25 +391,6 @@ const NATURE_DOCUMENTARY_TITLE_TERMS = [
   'prehistoric planet',
   'wildlife',
 ]
-const NICK_TITLES = new Set(
-  [
-    'aaahh real monsters',
-    'avatar the last airbender',
-    'catdog',
-    'danny phantom',
-    'hey arnold',
-    'invader zim',
-    'rockos modern life',
-    'rocket power',
-    'rugrats',
-    'spongebob squarepants',
-    'teenage mutant ninja turtles',
-    'the fairly oddparents',
-    'the legend of korra',
-    'the loud house',
-    'the wild thornberrys',
-  ].map(normalizeTitle)
-)
 const NICK_JR_TITLES = new Set(
   [
     'blaze and the monster machines',
@@ -395,9 +483,7 @@ export async function loadStationAutomationCatalog(
           blockIds: match.blockIds,
           playbackOrder: match.playbackOrder,
           score: match.score,
-          relationship: match.reasons.includes('family-guest')
-            ? 'family-guest' as const
-            : 'historical' as const,
+          relationship: 'historical' as const,
         })),
         missingSuggestions: analysis.missingSuggestions.map(
           ({ title, libraryKind, firstYear, tags }) => ({
@@ -413,17 +499,61 @@ export async function loadStationAutomationCatalog(
         marathonCadence: template.marathonDefaults.cadence,
       }
     }),
-    familyMixSuggestions: ERA_STATION_FAMILY_MIX_GUESTS.map((suggestion) => {
-      const aliases = new Set(
-        [suggestion.title, ...(suggestion.aliases ?? [])].map(normalizeTitle)
-      )
+    networkProfiles: NETWORK_COPY_PROFILES.map((profile) => {
+      const analysis = analyzeNetworkCopyProfile(profile, playable, {
+        startYear: profile.availableStartYear,
+        endYear: profile.availableEndYear,
+      })
       return {
-        title: suggestion.title,
-        firstYear: suggestion.firstYear,
-        tags: suggestion.tags,
-        available: playable.some((collection) =>
-          aliases.has(normalizeTitle(collection.displayTitle))
+        id: profile.id,
+        name: profile.name,
+        description: profile.description,
+        audience: profile.audience,
+        availableStartYear: profile.availableStartYear,
+        availableEndYear: profile.availableEndYear,
+        defaultStartYear: profile.defaultStartYear,
+        defaultEndYear: profile.defaultEndYear,
+        blocks: profile.blocks.map(({ id, name, start, end }) => ({
+          id,
+          name,
+          start,
+          end,
+        })),
+        matches: analysis.matches.map((match) => ({
+          collectionId: match.collection.id,
+          title: match.collection.displayTitle,
+          libraryKind: match.collection.libraryKind,
+          firstAirYear: match.collection.firstAirYear,
+          airStartYear: match.airStartYear!,
+          airEndYear: match.airEndYear!,
+          blockIds: match.blockIds,
+          playbackOrder: match.playbackOrder,
+          score: match.score,
+          eligibilityReason: match.eligibilityReason!,
+        })),
+        missingSuggestions: analysis.missingSuggestions.map(
+          ({
+            title,
+            libraryKind,
+            firstYear,
+            lastYear,
+            airStartYear,
+            airEndYear,
+            tags,
+          }) => ({
+            title,
+            libraryKind,
+            firstYear,
+            ...(lastYear === undefined ? {} : { lastYear }),
+            airStartYear: airStartYear ?? firstYear,
+            airEndYear: airEndYear ?? airStartYear ?? firstYear,
+            tags,
+          })
         ),
+        matchedShows: analysis.matchedShows,
+        matchedMovies: analysis.matchedMovies,
+        movieCadence: profile.moviePolicy.cadence,
+        marathonCadence: profile.marathonDefaults.cadence,
       }
     }),
   }
@@ -437,6 +567,45 @@ export function selectStationCollections(
     throw new Error(
       'Station automation is disabled because the playable catalog exceeds 5,000 collections'
     )
+  }
+  if (request.preset === 'network-copy') {
+    const networkId = requireStationNetwork(request.networkId)
+    const profile = getNetworkCopyProfile(networkId)
+    if (request.eraStartYear === undefined || request.eraEndYear === undefined) {
+      throw new Error('Choose the first and last year for the copied network')
+    }
+    const startYear = request.eraStartYear
+    const endYear = request.eraEndYear
+    const eligible = analyzeNetworkCopyProfile(profile, catalog.collections, {
+      startYear,
+      endYear,
+    }).matches.map((match) => match.collection)
+    const explicit =
+      request.selectionMode === 'explicit' || request.collectionIds !== undefined
+    if (
+      request.selectionMode === 'automatic' &&
+      request.collectionIds !== undefined
+    ) {
+      throw new Error(
+        'Automatic network selection cannot include explicit collection IDs'
+      )
+    }
+    if (request.selectionMode === 'explicit' && request.collectionIds === undefined) {
+      throw new Error('Explicit network selection requires collection IDs')
+    }
+    if (!explicit) return eligible
+    const ids = boundedIds(request.collectionIds ?? [])
+    if (ids.size === 0) {
+      throw new Error('Choose at least one show for this copied network')
+    }
+    const eligibleIds = new Set(eligible.map((collection) => collection.id))
+    const invalidIds = [...ids].filter((id) => !eligibleIds.has(id))
+    if (invalidIds.length > 0) {
+      throw new Error(
+        'Selected collections must belong to the chosen network and year range'
+      )
+    }
+    return eligible.filter((collection) => ids.has(collection.id))
   }
   const preset = presetDefinitions.find((item) => item.id === request.preset)
   const eraTemplate = isEraStationTemplateId(request.preset)
@@ -462,6 +631,19 @@ export function selectStationCollections(
     ids.size > 0 || genres.size > 0 || networks.size > 0 || studios.size > 0
   if (request.preset === 'custom' && !hasCustomCriteria) {
     throw new Error('Choose at least one collection, genre, network, or studio')
+  }
+
+  if (eraTemplate) {
+    const strictMatches = catalog.collections.filter((collection) =>
+      eraMatches?.has(collection.id)
+    )
+    if (request.collectionIds === undefined) return strictMatches
+    const eligibleIds = new Set(strictMatches.map((collection) => collection.id))
+    const invalidIds = [...ids].filter((id) => !eligibleIds.has(id))
+    if (invalidIds.length > 0) {
+      throw new Error('Selected collections must belong to the chosen network preset')
+    }
+    return strictMatches.filter((collection) => ids.has(collection.id))
   }
 
   return catalog.collections.filter((collection) => {
@@ -543,14 +725,7 @@ function matchesNickelodeonStyle(collection: StationCollectionOption): boolean {
   ) {
     return true
   }
-  if (
-    collection.studios.some((studio) =>
-      NICK_STUDIO_TERMS.some((term) => normalize(studio).includes(term))
-    )
-  ) {
-    return true
-  }
-  return NICK_TITLES.has(normalizeTitle(collection.displayTitle))
+  return false
 }
 
 function matchesNickJrStyle(collection: StationCollectionOption): boolean {
@@ -611,9 +786,19 @@ export function isEraStationTemplateId(
 export function isStationPresetId(value: string): value is StationPresetId {
   return (
     value === 'custom' ||
+    value === 'network-copy' ||
     presetDefinitions.some((preset) => preset.id === value) ||
     isEraStationTemplateId(value)
   )
+}
+
+export function requireStationNetwork(
+  value: StationNetworkId | undefined
+): StationNetworkId {
+  if (!value || !isStationNetworkId(value)) {
+    throw new Error('Choose a valid network for a network-copy station')
+  }
+  return value
 }
 
 function facets(
@@ -640,7 +825,9 @@ function facets(
 }
 
 function boundedIds(values: readonly number[]): Set<number> {
-  if (values.length > 1_000) throw new Error('Too many collections selected')
+  if (values.length > MAX_COLLECTIONS) {
+    throw new Error('Too many collections selected')
+  }
   const ids = new Set<number>()
   for (const value of values) {
     if (!Number.isSafeInteger(value) || value <= 0) {

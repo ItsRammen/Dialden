@@ -127,6 +127,71 @@ describe('ChannelStreamController', () => {
     expect(touches).toEqual([])
   })
 
+  test('starts the last valid channel and warms the adjacent window', async () => {
+    const response = await app().request('/api/client/v1/channels/startup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        clientId: 'living-room-tv',
+        lastChannelId: 'cartoons',
+        warmAdjacent: true,
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as {
+      channel: { id: string }
+      status: string
+      streamUrl: string
+    }
+    expect(body.channel.id).toBe('cartoons')
+    expect(body.status).toBe('ready')
+    expect(body.streamUrl).toBe(
+      '/api/v1/channels/cartoons/live/index.m3u8'
+    )
+    expect(touches).toEqual([
+      { channelId: 'cartoons', clientId: 'living-room-tv' },
+    ])
+    expect(warms).toEqual([
+      { channelIds: ['kids'], clientId: 'living-room-tv' },
+    ])
+  })
+
+  test('falls back from a missing or off-air last channel', async () => {
+    const response = await app().request('/api/client/v1/channels/startup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'tv', lastChannelId: 'offline' }),
+    })
+
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as {
+      channel: { id: string }
+      fallbackReason: string | null
+    }
+    expect(body.channel.id).toBe('kids')
+    expect(body.fallbackReason).toContain('last channel is no longer available')
+    expect(touches).toEqual([{ channelId: 'kids', clientId: 'tv' }])
+  })
+
+  test('prepares a destination before the client swaps its video source', async () => {
+    const response = await app().request(
+      '/api/client/v1/channels/cartoons/prepare',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId: 'tv' }),
+      }
+    )
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      channelId: 'cartoons',
+      status: 'ready',
+    })
+    expect(touches).toEqual([{ channelId: 'cartoons', clientId: 'tv' }])
+  })
+
   test('rejects oversized adjacent-channel warm requests', async () => {
     const response = await app().request('/api/client/v1/channels/warm', {
       method: 'POST',
@@ -141,7 +206,7 @@ describe('ChannelStreamController', () => {
     expect(warms).toEqual([])
   })
 
-  test('allows only the dedicated credentialless warm mutation across origins', async () => {
+  test('allows only the dedicated credentialless client channel mutations across origins', async () => {
     const guarded = new Hono()
     guarded.use('*', mutationOriginGuard)
     guarded.route('/', app())

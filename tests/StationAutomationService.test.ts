@@ -273,7 +273,7 @@ describe('station automation', () => {
     ).toEqual(['Planet Earth III'])
   })
 
-  test('builds era dayparts while allowing modern family guest programming', async () => {
+  test('builds strict network dayparts without cross-network family guests', async () => {
     const records = [
       collection(1, "Dexter's Laboratory", {
         metadataYear: 1996,
@@ -293,45 +293,237 @@ describe('station automation', () => {
       },
     })
 
-    const era = catalog.eraTemplates?.find(
-      (template) => template.id === 'cartoon-network-1997-2004'
+    const network = catalog.networkProfiles?.find(
+      (profile) => profile.id === 'cartoon-network'
     )
-    expect(era).toMatchObject({ matchedShows: 2, matchedMovies: 0 })
-    expect(era?.matches).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          title: 'Bluey',
-          relationship: 'family-guest',
-        }),
-      ])
-    )
+    expect(network).toMatchObject({ matchedShows: 1, matchedMovies: 0 })
+    expect(network?.matches.map((match) => match.title)).toEqual([
+      "Dexter's Laboratory",
+    ])
+    expect(() =>
+      selectStationCollections(catalog, {
+        preset: 'network-copy',
+        networkId: 'cartoon-network',
+        selectionMode: 'automatic',
+      })
+    ).toThrow('Choose the first and last year')
     expect(
       selectStationCollections(catalog, {
-        preset: 'cartoon-network-1997-2004',
+        preset: 'network-copy',
+        networkId: 'cartoon-network',
+        eraStartYear: 1997,
+        eraEndYear: 2026,
+        selectionMode: 'explicit',
+        collectionIds: [1],
       }).map((item) => item.displayTitle)
-    ).toEqual(['Bluey', "Dexter's Laboratory"])
+    ).toEqual(["Dexter's Laboratory"])
+    expect(() =>
+      selectStationCollections(catalog, {
+        preset: 'network-copy',
+        networkId: 'cartoon-network',
+        eraStartYear: 1997,
+        eraEndYear: 2026,
+        selectionMode: 'explicit',
+        collectionIds: [2],
+      })
+    ).toThrow('must belong to the chosen network')
+    expect(() =>
+      selectStationCollections(catalog, {
+        preset: 'network-copy',
+        networkId: 'cartoon-network',
+        eraStartYear: 1997,
+        eraEndYear: 2026,
+        selectionMode: 'automatic',
+        collectionIds: [1],
+      })
+    ).toThrow('Automatic network selection cannot include explicit')
+    expect(() =>
+      selectStationCollections(catalog, {
+        preset: 'network-copy',
+        networkId: 'cartoon-network',
+        eraStartYear: 1997,
+        eraEndYear: 2026,
+        selectionMode: 'explicit',
+        collectionIds: [],
+      })
+    ).toThrow('Choose at least one show')
 
     const group = 'toasttv-auto-12345678'
     const slots = stationScheduleSlots(
       'all-day',
       group,
-      'cartoon-network-1997-2004'
+      'network-copy',
+      {
+        networkId: 'cartoon-network',
+        eraStartYear: 1997,
+        eraEndYear: 2026,
+      }
     )
     expect(slots.length).toBeGreaterThan(3)
     expect(slots[0]?.groups[0]).toStartWith(`${group}-`)
     expect(
       stationCollectionProgrammingGroups(
-        'cartoon-network-1997-2004',
-        catalog.collections.find((item) => item.displayTitle === 'Bluey')!,
-        group
+        'network-copy',
+        catalog.collections.find(
+          (item) => item.displayTitle === "Dexter's Laboratory"
+        )!,
+        group,
+        {
+          networkId: 'cartoon-network',
+          eraStartYear: 1997,
+          eraEndYear: 2026,
+        }
       )
     ).toEqual(
       expect.arrayContaining([
         group,
-        `${group}-morning`,
         `${group}-daytime`,
+        `${group}-primetime`,
       ])
     )
+  })
+
+  test('publishes audience labels and strict Australian, BBC, and PBS catalogs', async () => {
+    const records = [
+      collection(1, 'Bluey', {
+        metadataYear: 2018,
+        networks: ['ABC Kids'],
+      }),
+      collection(2, 'Little Lunch', {
+        metadataYear: 2015,
+        networks: ['ABC3'],
+      }),
+      collection(3, 'Hardball', {
+        metadataYear: 2019,
+        networks: ['ABC ME'],
+      }),
+      collection(4, 'Hard Quiz Kids', {
+        metadataYear: 2024,
+        networks: ['ABC iview'],
+      }),
+      collection(5, 'Horrible Histories', {
+        metadataYear: 2009,
+        networks: ['CBBC'],
+      }),
+      collection(6, 'Hey Duggee', {
+        metadataYear: 2014,
+        networks: ['CBeebies'],
+      }),
+      collection(7, 'Wild Kratts', {
+        metadataYear: 2011,
+        networks: ['PBS KIDS'],
+      }),
+    ]
+    const catalog = await loadStationAutomationCatalog({
+      async getCollections(options) {
+        const offset = options?.offset ?? 0
+        return records.slice(offset, offset + (options?.limit ?? 250))
+      },
+    })
+
+    const profiles = new Map(
+      catalog.networkProfiles?.map((profile) => [profile.id, profile])
+    )
+    expect(profiles.get('abc3-abc-me')).toMatchObject({
+      audience: 'school-age',
+      availableEndYear: 2024,
+      matchedShows: 2,
+    })
+    expect(
+      profiles.get('abc3-abc-me')?.matches.map((match) => match.title)
+    ).toEqual(['Hardball', 'Little Lunch'])
+    expect(profiles.get('abc-family-au')).toMatchObject({
+      audience: 'school-age',
+      matchedShows: 3,
+    })
+    expect(profiles.get('abc-kids-au')).toMatchObject({
+      audience: 'preschool',
+      matchedShows: 2,
+    })
+    expect(
+      profiles.get('abc-kids-au')?.matches.map((match) => match.title)
+    ).toEqual(['Bluey', 'Hey Duggee'])
+    expect(profiles.get('cbbc')).toMatchObject({
+      audience: 'school-age',
+      matchedShows: 1,
+    })
+    expect(profiles.get('cbeebies')).toMatchObject({
+      audience: 'preschool',
+      matchedShows: 2,
+    })
+    expect(profiles.get('pbs-kids')).toMatchObject({
+      audience: 'school-age',
+      matchedShows: 1,
+    })
+    expect(
+      catalog.networkProfiles?.some(
+        (profile) => String(profile.id) === 'adult-swim'
+      )
+    ).toBe(false)
+    expect(() =>
+      selectStationCollections(catalog, {
+        preset: 'network-copy',
+        networkId: 'abc3-abc-me',
+        eraStartYear: 2009,
+        eraEndYear: 2024,
+        selectionMode: 'explicit',
+        collectionIds: [1],
+      })
+    ).toThrow('must belong to the chosen network')
+  })
+
+  test('keeps Off air dayparts visible without creating playable slots', async () => {
+    const records = [
+      collection(1, 'Little Lunch', {
+        metadataYear: 2015,
+        networks: ['ABC3'],
+      }),
+    ]
+    const catalog = await loadStationAutomationCatalog({
+      async getCollections(options) {
+        const offset = options?.offset ?? 0
+        return records.slice(offset, offset + (options?.limit ?? 250))
+      },
+    })
+    const profile = catalog.networkProfiles?.find(
+      (candidate) => candidate.id === 'abc3-abc-me'
+    )
+
+    expect(profile?.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'closed-overnight',
+          name: 'Off air overnight',
+        }),
+        expect.objectContaining({ id: 'closed-late', name: 'Off air late' }),
+      ])
+    )
+
+    const group = 'toasttv-auto-offair01'
+    const slots = stationScheduleSlots('all-day', group, 'network-copy', {
+      networkId: 'abc3-abc-me',
+      eraStartYear: 2009,
+      eraEndYear: 2016,
+    })
+    expect(slots[0]).toMatchObject({ start: '06:00' })
+    expect(slots.at(-1)).toMatchObject({ end: '21:00' })
+    expect(
+      slots.some((slot) =>
+        slot.groups.some((slotGroup) => slotGroup.includes('closed-'))
+      )
+    ).toBe(false)
+    expect(
+      stationCollectionProgrammingGroups(
+        'network-copy',
+        catalog.collections[0]!,
+        group,
+        {
+          networkId: 'abc3-abc-me',
+          eraStartYear: 2009,
+          eraEndYear: 2016,
+        }
+      ).some((collectionGroup) => collectionGroup.includes('closed-'))
+    ).toBe(false)
   })
 
   test('distinguishes an exact 5,000-collection catalog from an unsafe overflow', async () => {
@@ -499,7 +691,7 @@ describe('station automation', () => {
     }
   })
 
-  test('materializes era dayparts and restores the selected Auto recipe', async () => {
+  test('materializes a strict network copy and restores its exact lineup', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'toasttv-era-station-'))
     try {
       const bluey = collection(1, 'Bluey', {
@@ -538,16 +730,32 @@ describe('station automation', () => {
       )
 
       const result = await service.createAutomatedStation({
-        id: 'cn-family-mix',
-        name: 'Cartoon Family Mix',
+        id: 'cn-copy',
+        name: 'Cartoon Network Copy',
         timezone: 'UTC',
-        preset: 'cartoon-network-1997-2004',
+        preset: 'network-copy',
+        networkId: 'cartoon-network',
+        eraStartYear: 1997,
+        eraEndYear: 2026,
+        selectionMode: 'explicit',
+        collectionIds: [2],
         airtime: 'all-day',
       })
 
-      expect(result.channel.automation).toEqual({
-        preset: 'cartoon-network-1997-2004',
+      expect(result.channel.automation).toMatchObject({
+        preset: 'network-copy',
         airtime: 'all-day',
+        networkId: 'cartoon-network',
+        eraStartYear: 1997,
+        eraEndYear: 2026,
+        selectionMode: 'explicit',
+        collectionRefs: [
+          {
+            rootId: 'tv',
+            libraryKind: 'tv',
+            identityKey: "dexter's laboratory",
+          },
+        ],
       })
       expect(result.channel.slots.length).toBeGreaterThan(3)
       expect(result.channel.slots.map((slot) => slot.groups[0])).toEqual(
@@ -558,31 +766,47 @@ describe('station automation', () => {
         ])
       )
       expect(
-        (await service.getGuide('cn-family-mix', 1))?.programs.every(
-          (program) => program.collectionTitle === 'Bluey'
+        (await service.getGuide('cn-copy', 1))?.programs.every(
+          (program) => program.collectionTitle === "Dexter's Laboratory"
         )
       ).toBe(true)
 
+      const rescannedDexter = { ...dexter, id: 22 }
+      const rescannedRepository = {
+        async getCollections() {
+          return [bluey, rescannedDexter]
+        },
+        async getAll() {
+          return [
+            video('Bluey'),
+            { ...video("Dexter's Laboratory", 502), collectionId: 22 },
+          ]
+        },
+      } as unknown as IMediaRepository
       const restored = new ChannelService(
-        repository,
+        rescannedRepository,
         policy,
         { now: () => new Date('2026-08-24T07:05:00.000Z') },
         store
       )
-      expect(await restored.stationAutomationDraft('cn-family-mix')).toMatchObject({
-        id: 'cn-family-mix',
-        preset: 'cartoon-network-1997-2004',
+      expect(await restored.stationAutomationDraft('cn-copy')).toMatchObject({
+        id: 'cn-copy',
+        preset: 'network-copy',
         airtime: 'all-day',
-        collectionIds: expect.arrayContaining([1, 2]),
+        networkId: 'cartoon-network',
+        eraStartYear: 1997,
+        eraEndYear: 2026,
+        selectionMode: 'explicit',
+        collectionIds: [22],
       })
       const lateNight = new ChannelService(
-        repository,
+        rescannedRepository,
         policy,
         { now: () => new Date('2026-08-24T23:05:00.000Z') },
         store
       )
       expect(
-        (await lateNight.getGuide('cn-family-mix', 1))?.programs.length
+        (await lateNight.getGuide('cn-copy', 1))?.programs.length
       ).toBeGreaterThan(0)
     } finally {
       rmSync(directory, { recursive: true, force: true })

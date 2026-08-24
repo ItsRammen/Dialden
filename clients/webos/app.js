@@ -15,6 +15,8 @@
   var GUIDE_RENDER_LIMIT = 250;
   var LIVE_STREAM_RETRY_DELAYS = [750, 1500, 3000, 5000, 8000];
   var TUNING_STABLE_MS = 850;
+  var ZAP_DEBOUNCE_MS = 200;
+  var CHANNEL_OSD_MS = 2800;
   var LIVE_EDGE_TOLERANCE_SECONDS = 3;
   var RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 15000, 30000];
 
@@ -27,6 +29,7 @@
     clientName: 'LG webOS TV',
     channels: [],
     channelIndex: 0,
+    requestedChannelIndex: null,
     currentNow: null,
     programId: null,
     activeSource: null,
@@ -46,7 +49,8 @@
     requestSerial: 0,
     connectSerial: 0,
     guideSerial: 0,
-    channelRefreshSerial: 0
+    channelRefreshSerial: 0,
+    tuneMetrics: null
   };
 
   var elements = {};
@@ -62,6 +66,9 @@
   var channelRefreshTimer = null;
   var adjacentWarmTimer = null;
   var sourceRefreshTimer = null;
+  var zapTimer = null;
+  var channelOsdTimer = null;
+  var startupReconnectTimer = null;
 
   document.addEventListener('DOMContentLoaded', boot, false);
 
@@ -70,7 +77,7 @@
     bindEvents();
     state.clientId = getOrCreateClientId();
     state.clientName = getClientName();
-    safeReplaceHistory({ view: 'setup' });
+    safeReplaceHistory({ view: 'boot' });
     tickClock();
     window.setInterval(tickClock, 1000);
 
@@ -80,18 +87,19 @@
     }
     var savedServer = readStorage(STORAGE_SERVER);
     elements.serverInput.value = previewServer || savedServer || DEFAULT_SERVER;
-    activateView('setup');
+    activateView('boot');
 
     if (previewServer || savedServer) {
       connectToServer(previewServer || savedServer, false, true);
     } else {
+      activateView('setup');
       window.setTimeout(focusFirst, 60);
     }
   }
 
   function cacheElements() {
     var ids = [
-      'setupScreen', 'channelsScreen', 'playerScreen', 'serverInput',
+      'bootScreen', 'bootMessage', 'bootSettingsButton', 'setupScreen', 'channelsScreen', 'playerScreen', 'serverInput',
       'connectButton', 'cancelSetupButton', 'setupMessage', 'settingsButton',
       'retryChannelsButton', 'channelGrid', 'emptyChannels', 'homeClock',
       'serverLabel', 'video', 'playerBackdrop', 'playerHeader', 'playerChannelName',
@@ -101,7 +109,8 @@
       'retryPlaybackButton', 'errorBackButton', 'guideOverlay', 'guideChannelName',
       'guideList', 'guideMessage', 'closeGuideButton', 'nowOverlay',
       'nowChannelName', 'nowTitle', 'nowTime', 'nowTimelineFill', 'nowNextTitle',
-      'closeNowButton', 'tuningPanel', 'toast'
+      'closeNowButton', 'tuningPanel', 'channelOsd', 'channelOsdNumber',
+      'channelOsdName', 'channelOsdProgram', 'toast'
     ];
     var index;
     for (index = 0; index < ids.length; index += 1) {
@@ -110,6 +119,7 @@
   }
 
   function bindEvents() {
+    elements.bootSettingsButton.addEventListener('click', function () { activateView('setup'); }, false);
     elements.connectButton.addEventListener('click', function () {
       connectToServer(elements.serverInput.value, true, false);
     }, false);
@@ -151,7 +161,7 @@
     document.addEventListener('visibilitychange', function () {
       if (!document.hidden) {
         refreshChannelList();
-        if (state.view === 'player') syncNow(false);
+        if (state.view === 'player') prepareCurrentChannel();
       }
     }, false);
   }
@@ -223,9 +233,14 @@
       if (attemptId !== state.connectSerial) return;
       elements.connectButton.disabled = false;
       if (error) {
-        activateView('setup');
-        setSetupMessage('Could not reach ToastTV. Check the address and make sure the server is running.');
-        focusNode(elements.connectButton);
+        if (automatic) {
+          showBootMessage('Server unavailable — reconnecting…', true);
+          scheduleStartupReconnect(normalized);
+        } else {
+          activateView('setup');
+          setSetupMessage('Could not reach ToastTV. Check the address and make sure the server is running.');
+          focusNode(elements.connectButton);
+        }
         return;
       }
       if (!isChannelList(data)) {
@@ -255,12 +270,77 @@
         state.setupFromChannels = false;
         activateView('channels');
         goBack();
+      } else if (state.channels.length) {
+        startTelevision();
       } else {
         safeReplaceHistory({ view: 'channels' });
         activateView('channels');
       }
       hydrateChannelCards();
     });
+  }
+
+  function startTelevision() {
+    var generation = ++state.tuneGeneration;
+    var requestedAt = Date.now();
+    var savedChannelId = readStorage(STORAGE_CHANNEL);
+    showBootMessage('Tuning your last channel…', false);
+    postJson(
+      state.serverUrl + '/api/client/v1/channels/startup',
+      { clientId: state.clientId, lastChannelId: savedChannelId, warmAdjacent: true },
+      18000,
+      function (error, data) {
+        if (generation !== state.tuneGeneration) return;
+        if (error || !data || !data.channel || data.status !== 'ready') {
+          showBootMessage('Server unavailable — reconnecting…', true);
+          scheduleStartupReconnect(state.serverUrl);
+          return;
+        }
+        var index = findChannelIndex(data.channel.id);
+        if (index < 0) index = firstAvailableChannelIndex();
+        if (index < 0) {
+          safeReplaceHistory({ view: 'channels' });
+          activateView('channels');
+          return;
+        }
+        state.tuneMetrics = { requestedAt: requestedAt, preparedAt: Date.now(), firstFrameAt: 0, channelId: state.channels[index].id };
+        showChannelOsd(index, 'Tuning…');
+        safeReplaceHistory({ view: 'player' });
+        commitPreparedChannel(index, generation, false);
+      }
+    );
+  }
+
+  function scheduleStartupReconnect(serverUrl) {
+    if (startupReconnectTimer) return;
+    var index = Math.min(state.reconnectAttempt, RECONNECT_DELAYS.length - 1);
+    var delay = RECONNECT_DELAYS[index];
+    state.reconnectAttempt += 1;
+    startupReconnectTimer = window.setTimeout(function () {
+      startupReconnectTimer = null;
+      connectToServer(serverUrl, false, true);
+    }, delay);
+  }
+
+  function showBootMessage(message, showSettings) {
+    activateView('boot');
+    elements.bootMessage.textContent = message;
+    elements.bootSettingsButton.classList.toggle('hidden', !showSettings);
+  }
+
+  function prepareCurrentChannel() {
+    var channel = currentChannel();
+    if (!channel || !state.serverUrl) return;
+    postJson(
+      state.serverUrl + '/api/client/v1/channels/' + encodeURIComponent(channel.id) + '/prepare',
+      { clientId: state.clientId },
+      15000,
+      function (error) {
+        if (error || state.view !== 'player' || !currentChannel() || currentChannel().id !== channel.id) return;
+        syncNow(true);
+        scheduleAdjacentWarm();
+      }
+    );
   }
 
   function normalizeServerUrl(value) {
@@ -408,7 +488,7 @@
 
     var number = document.createElement('span');
     number.className = 'channel-card__number';
-    number.textContent = String(index + 1).length < 2 ? '0' + String(index + 1) : String(index + 1);
+    number.textContent = channelNumber(index);
     var live = document.createElement('span');
     live.className = 'channel-card__live';
     live.textContent = channel.onAir === false ? 'OFF AIR' : 'CHANNEL';
@@ -474,10 +554,47 @@
 
   function tuneChannel(index, pushHistory) {
     if (!state.channels.length) return;
-    state.channelIndex = ((index % state.channels.length) + state.channels.length) % state.channels.length;
-    var channel = currentChannel();
+    var targetIndex = normalizeChannelIndex(index);
+    var channel = state.channels[targetIndex];
     if (!channel) return;
     state.tuneGeneration += 1;
+    var generation = state.tuneGeneration;
+    state.requestedChannelIndex = targetIndex;
+    state.tuneMetrics = { requestedAt: Date.now(), preparedAt: 0, firstFrameAt: 0, channelId: channel.id };
+    showChannelOsd(targetIndex, 'Tuning…');
+    if (zapTimer) window.clearTimeout(zapTimer);
+    zapTimer = window.setTimeout(function () {
+      zapTimer = null;
+      prepareChannel(targetIndex, generation, pushHistory);
+    }, ZAP_DEBOUNCE_MS);
+  }
+
+  function prepareChannel(index, generation, pushHistory) {
+    var channel = state.channels[index];
+    if (!channel || generation !== state.tuneGeneration) return;
+    postJson(
+      state.serverUrl + '/api/client/v1/channels/' + encodeURIComponent(channel.id) + '/prepare',
+      { clientId: state.clientId },
+      15000,
+      function (error, data) {
+        if (generation !== state.tuneGeneration) return;
+        if (error || !data || data.status !== 'ready') {
+          state.requestedChannelIndex = null;
+          showChannelOsd(index, 'Signal unavailable');
+          return;
+        }
+        if (state.tuneMetrics) state.tuneMetrics.preparedAt = Date.now();
+        commitPreparedChannel(index, generation, pushHistory);
+      }
+    );
+  }
+
+  function commitPreparedChannel(index, generation, pushHistory) {
+    if (generation !== state.tuneGeneration) return;
+    state.channelIndex = index;
+    state.requestedChannelIndex = null;
+    var channel = currentChannel();
+    if (!channel) return;
     state.requestSerial += 1;
     state.guideSerial += 1;
     closeOverlays();
@@ -485,7 +602,6 @@
     clearReconnectTimer();
     clearSourceRefreshTimer();
     clearTuningTimer();
-    writeStorage(STORAGE_CHANNEL, channel.id);
     state.sourceRetryUsed = false;
     state.localPaused = false;
     state.awaitingGesture = false;
@@ -506,15 +622,14 @@
     if (pushHistory) safePushHistory({ view: 'player' });
     activateView('player');
     showChrome();
-    warmChannelIds([channel.id]);
     syncNow(true);
     startPlayerTimers();
   }
 
   function switchChannel(delta) {
     if (!state.channels.length) return;
-    tuneChannel(state.channelIndex + delta, false);
-    showToast(currentChannel().name);
+    var base = state.requestedChannelIndex === null ? state.channelIndex : state.requestedChannelIndex;
+    tuneChannel(nextAvailableChannelIndex(base, delta), false);
   }
 
   function startChannelRefresh() {
@@ -652,6 +767,7 @@
       state.currentNow = data;
       queuePresenceHeartbeat();
       renderProgramInfo();
+      updateChannelOsdProgram(data.program ? data.program.title : 'Off air');
       scheduleBoundary();
 
       if (!data.program) {
@@ -789,6 +905,12 @@
       state.hlsSeekPending = false;
       elements.video.muted = false;
       elements.playerScreen.classList.add('has-video');
+      writeStorage(STORAGE_CHANNEL, currentChannel().id);
+      if (state.tuneMetrics && state.tuneMetrics.channelId === currentChannel().id) {
+        state.tuneMetrics.firstFrameAt = Date.now();
+        logTuneMetrics(state.tuneMetrics);
+        state.tuneMetrics = null;
+      }
       setPlayerStatus('Playing live');
       scheduleChromeHide();
       queuePresenceHeartbeat();
@@ -1102,9 +1224,11 @@
     var priorView = state.view;
     if (priorView === 'setup' && view !== 'setup') cancelConnectionAttempt();
     state.view = view;
+    elements.bootScreen.classList.toggle('is-active', view === 'boot');
     elements.setupScreen.classList.toggle('is-active', view === 'setup');
     elements.channelsScreen.classList.toggle('is-active', view === 'channels');
     elements.playerScreen.classList.toggle('is-active', view === 'player');
+    elements.bootScreen.setAttribute('aria-hidden', view === 'boot' ? 'false' : 'true');
     elements.setupScreen.setAttribute('aria-hidden', view === 'setup' ? 'false' : 'true');
     elements.channelsScreen.setAttribute('aria-hidden', view === 'channels' ? 'false' : 'true');
     elements.playerScreen.setAttribute('aria-hidden', view === 'player' ? 'false' : 'true');
@@ -1531,13 +1655,77 @@
     toastTimer = window.setTimeout(function () { elements.toast.classList.remove('is-visible'); }, 2600);
   }
 
+  function showChannelOsd(index, program) {
+    if (!elements.channelOsd || !state.channels.length) return;
+    var normalized = normalizeChannelIndex(index);
+    var channel = state.channels[normalized];
+    if (!channel) return;
+    if (channelOsdTimer) window.clearTimeout(channelOsdTimer);
+    elements.channelOsdNumber.textContent = channelNumber(normalized);
+    elements.channelOsdName.textContent = channel.name;
+    elements.channelOsdProgram.textContent = program || 'Tuning…';
+    elements.channelOsd.classList.add('is-visible');
+    elements.channelOsd.setAttribute('aria-hidden', 'false');
+    channelOsdTimer = window.setTimeout(function () {
+      elements.channelOsd.classList.remove('is-visible');
+      elements.channelOsd.setAttribute('aria-hidden', 'true');
+    }, CHANNEL_OSD_MS);
+  }
+
+  function updateChannelOsdProgram(program) {
+    if (elements.channelOsd && elements.channelOsd.classList.contains('is-visible')) {
+      elements.channelOsdProgram.textContent = program || 'Live';
+    }
+  }
+
+  function logTuneMetrics(metrics) {
+    var prepareMs = metrics.preparedAt ? metrics.preparedAt - metrics.requestedAt : 0;
+    var firstFrameMs = metrics.firstFrameAt - metrics.requestedAt;
+    try {
+      console.log('[ToastTV Tune] channel=' + metrics.channelId + ' prepareMs=' + prepareMs + ' firstFrameMs=' + firstFrameMs);
+    } catch (ignore) {}
+  }
+
+  function normalizeChannelIndex(index) {
+    return ((index % state.channels.length) + state.channels.length) % state.channels.length;
+  }
+
+  function channelNumber(index) { return String(101 + index); }
+
+  function findChannelIndex(channelId) {
+    var index;
+    for (index = 0; index < state.channels.length; index += 1) {
+      if (state.channels[index].id === channelId) return index;
+    }
+    return -1;
+  }
+
+  function firstAvailableChannelIndex() {
+    var index;
+    for (index = 0; index < state.channels.length; index += 1) {
+      if (state.channels[index].enabled !== false && state.channels[index].onAir !== false) return index;
+    }
+    return -1;
+  }
+
+  function nextAvailableChannelIndex(base, delta) {
+    var direction = delta < 0 ? -1 : 1;
+    var candidate = base;
+    var checked;
+    for (checked = 0; checked < state.channels.length; checked += 1) {
+      candidate = normalizeChannelIndex(candidate + direction);
+      if (state.channels[candidate].enabled !== false && state.channels[candidate].onAir !== false) return candidate;
+    }
+    return normalizeChannelIndex(base);
+  }
+
   function restoreChannelIndex() {
     var id = readStorage(STORAGE_CHANNEL);
     var index;
     for (index = 0; index < state.channels.length; index += 1) {
-      if (state.channels[index].id === id) { state.channelIndex = index; return; }
+      if (state.channels[index].id === id && state.channels[index].enabled !== false && state.channels[index].onAir !== false) { state.channelIndex = index; return; }
     }
-    state.channelIndex = 0;
+    state.channelIndex = Math.max(0, firstAvailableChannelIndex());
   }
 
   function currentChannel() { return state.channels[state.channelIndex] || null; }

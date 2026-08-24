@@ -9,10 +9,11 @@ import type {
 } from '../config/library'
 import type {
   StationAutomationCatalog,
-  StationEraTemplateSummary,
-  StationFacet,
 } from '../services/StationAutomationService'
-import { STATION_AIRTIME_OPTIONS } from '../services/StationAutomationService'
+import {
+  isEraStationTemplateId,
+  STATION_AIRTIME_OPTIONS,
+} from '../services/StationAutomationService'
 import { renderLayout } from './layout'
 import { escapeHtml } from './utils'
 
@@ -97,10 +98,11 @@ export function renderChannelAdministration(
               options.automation,
               options.automationDraft,
               options.automationPreview,
-              options.automationSearch,
-              automationTarget,
-              options.automationTargetId
-              )
+               options.automationSearch,
+               automationTarget,
+               options.automationTargetId,
+               options.error
+               )
             )
           : ''
       }
@@ -399,25 +401,69 @@ function brandingPosition(
   return `<option value="${value}" ${selected === value ? 'selected' : ''}>${label}</option>`
 }
 
+type NetworkProfile = NonNullable<
+  StationAutomationCatalog['networkProfiles']
+>[number]
+
+type UnavailableCollectionRef = NonNullable<
+  StationBuildRequest['unavailableCollectionRefs']
+>[number]
+
 function renderAutomationBuilder(
   catalog: StationAutomationCatalog,
   draft?: StationBuildRequest,
   preview?: StationBuildPreview,
   catalogSearch = '',
   target?: LibraryChannelPolicy,
-  requestedTargetId?: string
+  requestedTargetId?: string,
+  error?: string
 ): string {
   if (requestedTargetId && !target) {
     return `<section class="channel-auto" id="auto-builder"><h2>Channel not found</h2><p>The selected channel no longer exists.</p></section>`
   }
-  const selectedPreset = draft?.preset ?? 'all-approved-tv'
-  const selectedAirtime = draft?.airtime ?? 'all-day'
+
+  const profiles = (catalog.networkProfiles ?? []).filter(
+    (profile) => profile.audience !== 'after-hours'
+  )
+  const requestedProfile = profiles.find(
+    (profile) => profile.id === draft?.networkId
+  )
+  const selectedProfile = requestedProfile ?? profiles[0]
+  const networkMode =
+    profiles.length > 0 &&
+    (draft
+      ? draft.preset === 'network-copy' || draft.networkId !== undefined
+      : true)
   const selectedIds = new Set(draft?.collectionIds ?? [])
-  const selectedGenres = normalizedSet(draft?.genres ?? [])
-  const selectedNetworks = normalizedSet(draft?.networks ?? [])
-  const selectedStudios = normalizedSet(draft?.studios ?? [])
+  const hasExplicitSelection = draft?.collectionIds !== undefined
+  const selectedLineupMode =
+    draft?.selectionMode === 'automatic' ? 'automatic' : 'explicit'
+  const unavailableCollectionRefs = draft?.unavailableCollectionRefs ?? []
+  const selectedAirtime = draft?.airtime ?? 'all-day'
+  const savedPreset = draft?.preset ?? target?.automation?.preset
+  const legacyEraPreset =
+    savedPreset && isEraStationTemplateId(savedPreset) ? savedPreset : undefined
+  const legacyEraName =
+    catalog.eraTemplates?.find((template) => template.id === legacyEraPreset)
+      ?.name ?? legacyEraPreset
   const timezone =
-    draft?.timezone ?? target?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone
+    draft?.timezone ??
+    target?.timezone ??
+    Intl.DateTimeFormat().resolvedOptions().timeZone
+  const selectedStartYear = selectedProfile
+    ? clampYear(
+        draft?.eraStartYear ?? selectedProfile.defaultStartYear,
+        selectedProfile.availableStartYear,
+        selectedProfile.availableEndYear
+      )
+    : new Date().getFullYear()
+  const selectedEndYear = selectedProfile
+    ? clampYear(
+        draft?.eraEndYear ?? selectedProfile.defaultEndYear,
+        selectedStartYear,
+        selectedProfile.availableEndYear
+      )
+    : new Date().getFullYear()
   const normalizedSearch = normalize(catalogSearch)
   const matchingCollections = normalizedSearch
     ? catalog.collections.filter((collection) =>
@@ -431,44 +477,38 @@ function renderAutomationBuilder(
   const visibleCollections = catalog.collections.filter((collection) =>
     visibleCollectionIds.has(collection.id)
   )
-  const matchingGenres = filterFacets(catalog.genres, normalizedSearch)
-  const matchingNetworks = filterFacets(catalog.networks, normalizedSearch)
-  const matchingStudios = filterFacets(catalog.studios, normalizedSearch)
 
-  return `<section class="channel-auto" id="auto-builder">
+  return `<section class="channel-auto" id="auto-builder" data-auto-builder>
     <header class="channel-auto-header">
       <div>
-        <p class="channel-admin-eyebrow">Catalog automation</p>
-        <h2>${target ? `Auto setup for ${escapeHtml(target.name)}` : 'Create an automatic station'}</h2>
-        <p>${target ? draft ? 'Change this station’s playable shows, preset, metadata facets, and airtime. Its current generated lineup is selected below.' : 'Choose this station’s playable shows, preset, metadata facets, and airtime.' : 'Choose playable shows directly or build a mix from TMDB genres, original networks, and production studios.'}</p>
+        <p class="channel-admin-eyebrow">Channel builder</p>
+        <h2>${target ? `Edit lineup for ${escapeHtml(target.name)}` : 'Create a channel'}</h2>
+        <p>${target ? 'Choose a network-era lineup or a custom collection. Your existing content choices are loaded and can be changed.' : 'Start with one focused network and era, or build a custom channel from any playable titles you own.'}</p>
       </div>
-      <span class="channel-auto-count">${countLabel(catalog.collections.length, 'playable collection')}</span>
+      <span class="channel-auto-count">${countLabel(catalog.collections.length, 'playable title')}</span>
     </header>
     ${renderBuilderNavigation(target, 'auto')}
-    <p class="channel-auto-disclaimer"><strong>Personal library mix—not an official network feed.</strong> Brand-style presets use your own parent-allowed files and metadata. They do not reproduce, impersonate, or claim affiliation with a broadcaster or its historic schedule.</p>
+    ${error ? `<p class="channel-admin-alert channel-admin-alert-error channel-builder-error" role="alert">${escapeHtml(error)}</p>` : ''}
     ${
       catalog.truncated
         ? `<div class="channel-auto-empty">
             <strong>The playable catalog is too large for safe automation.</strong>
-            <p>ToastTV found more than 5,000 playable collections. Reduce or block unused collections before building a station.</p>
+            <p>ToastTV found more than 5,000 playable collections. Reduce or block unused collections before building a channel.</p>
           </div>`
-        : catalog.collections.length === 0
-        ? `<div class="channel-auto-empty">
-            <strong>Nothing can be scheduled yet.</strong>
-            <p>A collection needs at least one parent-allowed file on an available root with a successful media probe. Finish the library scan/metadata review, approve a collection or file, and return here.</p>
-            <a href="/library/review">Open Needs review</a>
-          </div>`
-        : `<form method="post" action="/channels/auto-build" class="channel-auto-form">
+          : `<form method="post" action="/channels/auto-build" class="channel-auto-form">
             ${target ? `<input type="hidden" name="targetChannelId" value="${escapeHtml(target.id)}">` : ''}
+            ${renderLegacyEraMigrationGuard(legacyEraPreset, legacyEraName)}
+            <fieldset id="legacy-replacement-editor" data-legacy-migration-fields ${legacyEraPreset ? 'disabled' : ''}>
+              <legend class="channel-visually-hidden">Replacement channel builder</legend>
             <section class="channel-builder-step" aria-labelledby="auto-details-heading">
-              ${renderStepHeading(1, 'Station details', 'Choose the stable station identity and local broadcast timezone.', 'auto-details-heading')}
+              ${renderStepHeading(1, 'Channel details', 'Choose the stable channel identity and local broadcast timezone.', 'auto-details-heading')}
               <div class="channel-admin-fields">
-                <label>Station ID
-                  <input type="text" name="id" required maxlength="59" pattern="[A-Za-z0-9][A-Za-z0-9_-]*" value="${escapeHtml(draft?.id ?? target?.id ?? '')}" ${target ? 'readonly' : ''} placeholder="saturday-cartoons">
-                  <small>Used by TV clients. The generated group uses the same stable ID.</small>
+                <label>Channel ID
+                  <input type="text" name="id" required maxlength="59" pattern="[A-Za-z0-9][A-Za-z0-9_-]*" value="${escapeHtml(draft?.id ?? target?.id ?? '')}" ${target ? 'readonly' : ''} placeholder="cartoon-network-2000s">
+                  <small>Used by TV clients and cannot be changed after creation.</small>
                 </label>
                 <label>Display name
-                  <input type="text" name="name" required maxlength="100" value="${escapeHtml(draft?.name ?? target?.name ?? '')}" placeholder="Saturday Cartoons">
+                  <input type="text" name="name" required maxlength="100" value="${escapeHtml(draft?.name ?? target?.name ?? '')}" placeholder="Cartoon Network 2000s">
                 </label>
                 <label>Timezone
                   <input type="text" name="timezone" required maxlength="100" value="${escapeHtml(timezone)}" placeholder="America/New_York">
@@ -477,69 +517,46 @@ function renderAutomationBuilder(
             </section>
 
             <section class="channel-builder-step" aria-labelledby="auto-programming-heading">
-              ${renderStepHeading(2, 'Choose programming', 'Start with a preset, then optionally fine-tune it with metadata or individual titles.', 'auto-programming-heading')}
-              <fieldset class="channel-auto-presets">
-                <legend>Start with a preset</legend>
-                ${target && draft?.preset === 'custom' ? `<p class="channel-admin-help"><strong>Current lineup loaded:</strong> ${countLabel(selectedIds.size, 'selected collection')}. Change the checks below, choose metadata facets, or switch to another preset.</p>` : ''}
-                <div class="channel-auto-preset-grid">
-                  ${catalog.presets
-                    .map(
-                      (preset) => `<label class="channel-auto-preset">
-                        <input type="radio" name="preset" value="${escapeHtml(preset.id)}" ${selectedPreset === preset.id ? 'checked' : ''}>
-                        <span><strong>${escapeHtml(preset.name)}</strong><small>${escapeHtml(preset.description)}</small><em>${countLabel(preset.matchedCollections, 'matching collection')}${preset.unofficial ? ' · unofficial style mix' : ''}</em></span>
-                      </label>`
-                    )
-                    .join('')}
-                  <label class="channel-auto-preset">
-                    <input type="radio" name="preset" value="custom" ${selectedPreset === 'custom' ? 'checked' : ''}>
-                    <span><strong>Custom mix</strong><small>Use only the facets and individual collections selected below.</small><em>You control every selector</em></span>
+              ${renderStepHeading(2, 'Choose channel type and content', 'Network channels stay within one network and era. Custom channels use only the titles you check.', 'auto-programming-heading')}
+              <fieldset class="channel-builder-mode">
+                <legend>What kind of channel are you building?</legend>
+                <div class="channel-builder-mode-grid">
+                  <label>
+                    <input type="radio" name="builderMode" value="network" data-builder-mode ${networkMode ? 'checked' : ''} ${profiles.length === 0 ? 'disabled' : ''}>
+                    <span><strong>Network channel</strong><small>Pick one network and an era. Only strictly eligible titles from that network can be selected.</small></span>
+                  </label>
+                  <label>
+                    <input type="radio" name="builderMode" value="custom" data-builder-mode ${networkMode ? '' : 'checked'}>
+                    <span><strong>Custom channel</strong><small>Search the entire playable library and choose every show or movie yourself.</small></span>
                   </label>
                 </div>
               </fieldset>
-              ${renderEraTemplatePicker(
-                catalog.eraTemplates ?? [],
-                catalog.familyMixSuggestions ?? [],
-                selectedPreset
+              ${target && networkMode && selectedLineupMode === 'automatic' ? '<p class="channel-auto-loaded" role="status"><strong>Automatic lineup loaded:</strong> It will keep following this network and era as the playable library changes.</p>' : target && hasExplicitSelection ? `<p class="channel-auto-loaded" role="status"><strong>Current lineup loaded:</strong> ${countLabel(selectedIds.size, 'selected title')}. Checks remain editable until you apply the update.</p>` : ''}
+              ${renderUnavailableSelections(unavailableCollectionRefs)}
+              ${renderNetworkChannelBuilder(
+                profiles,
+                selectedProfile,
+                selectedStartYear,
+                selectedEndYear,
+                selectedIds,
+                hasExplicitSelection,
+                catalog,
+                catalogSearch,
+                networkMode,
+                selectedLineupMode
               )}
-              <details class="channel-builder-tuning" ${selectedIds.size > 0 || selectedGenres.size > 0 || selectedNetworks.size > 0 || selectedStudios.size > 0 || normalizedSearch ? 'open' : ''}>
-                <summary><span><strong>Fine-tune the library mix</strong><small>Search, metadata facets, and individual titles</small></span></summary>
-                <div class="channel-builder-tuning-content">
-                  <div class="channel-auto-search">
-                    <label for="catalog-search">Find a show, network, studio, or genre</label>
-                    <div>
-                      <input id="catalog-search" type="search" name="catalogSearch" maxlength="100" value="${escapeHtml(catalogSearch)}" placeholder="Bluey, Nickelodeon, Ludo Studio…">
-                      <button type="submit" name="action" value="search" formnovalidate class="btn-secondary">Search catalog</button>
-                      ${catalogSearch ? '<button type="submit" name="action" value="clear-search" formnovalidate class="channel-auto-clear">Clear</button>' : ''}
-                    </div>
-                    <small>Search narrows the selectors below while keeping your checked collections. Presets always evaluate the full playable catalog.</small>
-                  </div>
-                  <div class="channel-auto-facets">
-                    ${renderFacet('Genres', 'genres', matchingGenres, selectedGenres, 50)}
-                    ${renderFacet('Networks', 'networks', matchingNetworks, selectedNetworks, 75)}
-                    ${renderFacet('Studios', 'studios', matchingStudios, selectedStudios, 75)}
-                  </div>
-                  <p class="channel-admin-help">Facet and show selections are added to a preset. Choose <strong>Custom mix</strong> if they should be the only selectors. Network and studio checkboxes show TMDB’s exact stored values; the Nick Jr.-style preset can still recognize known preschool titles when TMDB reports only Nickelodeon.${normalizedSearch && matchingGenres.length + matchingNetworks.length + matchingStudios.length === 0 ? ' No matching metadata facets were found.' : ''}</p>
-                  <details class="channel-auto-collections" ${selectedIds.size > 0 ? 'open' : ''}>
-                    <summary>Add individual shows or movies</summary>
-                    <div class="channel-auto-collection-grid">
-                      ${visibleCollections
-                        .map(
-                          (collection) => `<label>
-                            <input type="checkbox" name="collectionIds" value="${collection.id}" ${selectedIds.has(collection.id) ? 'checked' : ''}>
-                            <span><strong>${escapeHtml(collection.displayTitle)}</strong><small>${escapeHtml(collection.libraryKind.toUpperCase())} · ${countLabel(collection.eligibleFiles, 'playable file')}</small></span>
-                          </label>`
-                        )
-                        .join('')}
-                    </div>
-                    ${matchingCollections.length === 0 ? '<p class="channel-admin-help">No collection matches this catalog search. Clear it to browse the full catalog.</p>' : ''}
-                    ${matchingCollections.length > 250 ? `<p class="channel-admin-help">Showing the first 250 of ${matchingCollections.length} matching collections. Refine the catalog search to reach any remaining title.</p>` : normalizedSearch ? `<p class="channel-admin-help">Showing ${countLabel(matchingCollections.length, 'matching collection')}.</p>` : catalog.collections.length > 250 ? '<p class="channel-admin-help">Showing the first 250 collections. Search by title to reach any other collection without loading the entire catalog.</p>' : ''}
-                  </details>
-                </div>
-              </details>
+              ${renderCustomChannelBuilder(
+                visibleCollections,
+                matchingCollections.length,
+                catalog.collections.length,
+                selectedIds,
+                catalogSearch,
+                !networkMode
+              )}
             </section>
 
             <section class="channel-builder-step" aria-labelledby="auto-schedule-heading">
-              ${renderStepHeading(3, 'Choose airtime and marathons', 'Set when this station appears and whether it occasionally runs a single-show marathon.', 'auto-schedule-heading')}
+              ${renderStepHeading(3, 'Choose airtime and marathons', 'Set when this channel appears and whether it occasionally runs a single-show marathon.', 'auto-schedule-heading')}
               <fieldset class="channel-auto-presets">
                 <legend>Choose airtime</legend>
                 <div class="channel-auto-airtime-grid">
@@ -550,134 +567,393 @@ function renderAutomationBuilder(
                     </label>`
                   ).join('')}
                 </div>
-                <p class="channel-admin-help">All-day era layouts become their displayed morning, daytime, action, primetime, and repeat blocks. Other presets and reduced airtimes use the simpler editable windows ${target ? 'when Auto setup is applied' : 'after creation'}.</p>
+                <p class="channel-admin-help">All-day network channels use the visual dayparts shown above. Reduced airtimes use the selected window while keeping the same strict content lineup.</p>
               </fieldset>
+              ${renderAfterHoursHandoff(
+                draft?.handoff ?? target?.automation?.handoff,
+                selectedProfile?.id === 'cartoon-network',
+                selectedAirtime === 'all-day'
+              )}
               ${renderMarathonSettings(draft?.marathon ?? target?.marathon)}
             </section>
 
             <section class="channel-builder-step channel-builder-review" aria-labelledby="auto-review-heading">
-              ${renderStepHeading(4, 'Preview and apply', 'Check the eligible lineup before saving changes to the live station list.', 'auto-review-heading')}
+              ${renderStepHeading(4, 'Preview and apply', 'Verify the exact eligible lineup before saving changes.', 'auto-review-heading')}
               ${renderAutomationPreview(preview)}
-              ${target ? `<label class="channel-auto-replace"><input type="checkbox" name="confirmReplace" value="yes" required><span><strong>Replace this station’s current programming setup</strong><small>This replaces its schedule blocks, automated library selection, and marathon pattern. The station ID, enabled state, and manual on/off state are preserved.</small></span></label>` : ''}
+              ${target ? `<label class="channel-auto-replace"><input type="checkbox" name="confirmReplace" value="yes" required><span><strong>Replace this channel’s current programming setup</strong><small>This replaces its schedule blocks, selected content, and marathon pattern. The channel ID, enabled state, and manual on/off state are preserved.</small></span></label>` : ''}
               <footer class="channel-builder-footer channel-auto-actions">
-                ${target ? '' : '<a class="channel-admin-link" href="/channels?new=manual#channel-editor">Create manually</a>'}
+                ${target ? '' : '<a class="channel-admin-link" href="/channels?new=manual#channel-editor">Build an advanced manual schedule</a>'}
                 <button type="submit" name="action" value="preview" formnovalidate class="btn-secondary">Preview lineup</button>
-                <button type="submit" name="action" value="${target ? 'update' : 'create'}">${target ? 'Apply Auto setup' : `Create ${escapeHtml(airtimeActionLabel(selectedAirtime))} station`}</button>
+                <button type="submit" name="action" value="${target ? 'update' : 'create'}">${target ? 'Apply lineup changes' : `Create ${escapeHtml(airtimeActionLabel(selectedAirtime))} channel`}</button>
               </footer>
             </section>
-          </form>
-          `
+            </fieldset>
+          </form>`
     }
   </section>`
 }
 
-function renderEraTemplatePicker(
-  templates: readonly StationEraTemplateSummary[],
-  familyMix: NonNullable<StationAutomationCatalog['familyMixSuggestions']>,
-  selectedPreset: string
+function renderLegacyEraMigrationGuard(
+  preset: string | undefined,
+  name: string | undefined
 ): string {
-  if (templates.length === 0) return ''
-  const selectedTemplate = templates.some(
-    (template) => template.id === selectedPreset
-  )
-  return `<details class="channel-era-picker" ${selectedTemplate ? 'open' : ''} data-era-picker>
-    <summary>
-      <span><strong>Build a network-era station</strong><small>Use a familiar TV-day layout, with modern family favourites allowed as guest programming.</small></span>
-      <em>${templates.length} layouts</em>
-    </summary>
-    <div class="channel-era-picker-body">
-      <p class="channel-admin-help"><strong>Period-inspired, not a historical recording.</strong> The era controls dayparts, rotation character, movie guidance, and show suggestions. Parent-approved newer titles such as Bluey can still appear in the most suitable block.</p>
-      <div class="channel-era-grid">
-        ${templates
-          .map(
-            (template) => `<label class="channel-era-card">
-              <input type="radio" name="preset" value="${escapeHtml(template.id)}" ${selectedPreset === template.id ? 'checked' : ''} data-era-template-radio>
-              <span>
-                <em>${escapeHtml(template.networkFamily)} · ${template.eraStartYear}–${template.eraEndYear}</em>
-                <strong>${escapeHtml(template.name)}</strong>
-                <small>${escapeHtml(template.description)}</small>
-                <b>${countLabel(template.matchedShows, 'owned show')} · ${countLabel(template.matchedMovies, 'owned movie')} · ${countLabel(template.missingSuggestions.length, 'suggested addition')}</b>
-              </span>
-            </label>`
-          )
-          .join('')}
-      </div>
-      <div class="channel-era-detail-stack" aria-live="polite">
-        ${templates
-          .map((template) =>
-            renderEraTemplateDetail(
-              template,
-              familyMix,
-              selectedPreset === template.id
-            )
-          )
-          .join('')}
-      </div>
-    </div>
-  </details>`
+  if (!preset) return ''
+  return `<aside class="channel-auto-disclaimer" data-legacy-era-guard data-legacy-preset="${escapeHtml(preset)}" role="note">
+    <strong>Legacy Auto recipe preserved</strong>
+    <p>This station still uses <code>${escapeHtml(name ?? preset)}</code>. The current builder cannot edit that historical recipe without replacing it, so the replacement fields are read-only.</p>
+    <p data-legacy-migration-status role="status">Nothing changes unless you explicitly unlock this editor, choose a new Network or Custom lineup, preview it, and confirm the replacement.</p>
+    <button type="button" class="btn-secondary" data-legacy-migration-confirm aria-controls="legacy-replacement-editor" aria-expanded="false">I understand — unlock replacement editor</button>
+  </aside>`
 }
 
-function renderEraTemplateDetail(
-  template: StationEraTemplateSummary,
-  familyMix: NonNullable<StationAutomationCatalog['familyMixSuggestions']>,
-  visible: boolean
+function renderAfterHoursHandoff(
+  handoff: StationBuildRequest['handoff'],
+  cartoonNetworkSelected: boolean,
+  allDaySelected: boolean
 ): string {
-  const historical = template.matches.filter(
-    (match) => match.relationship === 'historical'
-  )
-  const guests = template.matches.filter(
-    (match) => match.relationship === 'family-guest'
-  )
-  return `<section class="channel-era-detail" data-era-template-panel="${escapeHtml(template.id)}" ${visible ? '' : 'hidden'}>
+  const available = cartoonNetworkSelected && allDaySelected
+  const enabled = handoff !== undefined
+  return `<section class="channel-handoff" data-handoff-panel ${cartoonNetworkSelected ? '' : 'hidden'}>
     <header>
-      <div><p class="channel-admin-eyebrow">Selected layout</p><h4>${escapeHtml(template.name)}</h4></div>
-      <span>${escapeHtml(template.movieCadence)} movies · ${escapeHtml(template.marathonCadence)} marathon guidance</span>
+      <div><p class="channel-admin-eyebrow">Optional scheduled identity</p><h3>Cartoon Network sign-off</h3></div>
+      <span class="channel-handoff-lock">Parent locked</span>
     </header>
-    <div class="channel-era-dayparts" aria-label="Template dayparts">
-      ${template.blocks
-        .map(
-          (block) => `<span><b>${escapeHtml(block.start)}–${escapeHtml(block.end)}</b><small>${escapeHtml(block.name)}</small></span>`
-        )
-        .join('')}
-    </div>
-    <div class="channel-era-coverage">
-      <section>
-        <h5>Already in your library</h5>
-        ${historical.length > 0
-          ? `<div class="channel-era-chips">${historical
-              .slice(0, 12)
-              .map(
-                (match) => `<span>${escapeHtml(match.title)}<small>${escapeHtml(match.playbackOrder)}</small></span>`
-              )
-              .join('')}</div>`
-          : '<p>No era-anchor title is playable yet.</p>'}
-        ${guests.length > 0
-          ? `<h5>Modern family guests</h5><div class="channel-era-chips is-guest">${guests
-              .slice(0, 8)
-              .map((match) => `<span>${escapeHtml(match.title)}<small>family mix</small></span>`)
-              .join('')}</div>`
-          : ''}
-      </section>
-      <section>
-        <h5>Suggestions to improve this station</h5>
-        <p>Wishlist only—ToastTV never downloads or links to media.</p>
-        <div class="channel-era-chips is-missing">${template.missingSuggestions
-          .slice(0, 12)
-          .map(
-            (suggestion) => `<span>${escapeHtml(suggestion.title)}<small>${escapeHtml(suggestion.libraryKind)} · ${suggestion.firstYear}</small></span>`
-          )
-          .join('') || '<span>Core era coverage is complete</span>'}</div>
-      </section>
-    </div>
-    <details class="channel-era-family-list">
-      <summary>Popular family-mix ideas</summary>
-      <div class="channel-era-chips">${familyMix
-        .map(
-          (suggestion) => `<span class="${suggestion.available ? 'is-owned' : ''}">${escapeHtml(suggestion.title)}<small>${suggestion.available ? 'available now' : `optional · ${suggestion.firstYear}`}</small></span>`
-        )
-        .join('')}</div>
-    </details>
+    <label class="channel-handoff-toggle">
+      <input type="checkbox" name="handoffEnabled" value="true" data-handoff-toggle ${enabled ? 'checked' : ''} ${available ? '' : 'disabled'}>
+      <span><strong>Hand off to an Adult Swim identity overnight</strong><small>At sign-off, Cartoon Network programming stops and the scheduled <code>adult-swim</code> logo variant can appear. The station remains off-air until sign-on.</small></span>
+    </label>
+    <fieldset data-handoff-fields ${enabled && available ? '' : 'disabled'}>
+      <legend>Local handoff times</legend>
+      <label>CN signs off <input type="time" name="handoffStart" value="${escapeHtml(handoff?.start ?? '21:00')}" min="17:00" max="23:59" required></label>
+      <label>CN returns <input type="time" name="handoffEnd" value="${escapeHtml(handoff?.end ?? '06:00')}" min="00:00" max="10:00" required></label>
+    </fieldset>
+    <p class="channel-handoff-status" data-handoff-status role="status">${
+      !available
+        ? 'Choose Cartoon Network with All day airtime to use this handoff.'
+        : enabled
+          ? 'Locked handoff active. No adult programmes are selected or played.'
+          : 'Off — Cartoon Network keeps its ordinary schedule.'
+    }</p>
+    <aside><strong>Why it is locked:</strong> Adult Swim is a young-adult service. No adult programmes are selected or played; ToastTV will not schedule that catalog on a child-focused server without a real PIN/profile gate. This option reproduces the timed sign-off safely.</aside>
   </section>`
+}
+
+function renderUnavailableSelections(
+  references: readonly UnavailableCollectionRef[]
+): string {
+  if (references.length === 0) return ''
+  return `<aside class="channel-unavailable-selections" role="note">
+    <div><strong>${countLabel(references.length, 'saved title')} currently unavailable</strong><p>These saved library references are not playable now, so they cannot appear as checkboxes. ToastTV keeps them when you apply the same network, era, and hand-picked mode; changing any of those rebuilds eligibility and may remove them.</p></div>
+    <ul>${references.map((reference) => `<li><code>${escapeHtml(reference.identityKey)}</code><small>${escapeHtml(reference.libraryKind)} · ${escapeHtml(reference.rootId)}</small></li>`).join('')}</ul>
+  </aside>`
+}
+
+function renderNetworkChannelBuilder(
+  profiles: readonly NetworkProfile[],
+  selectedProfile: NetworkProfile | undefined,
+  selectedStartYear: number,
+  selectedEndYear: number,
+  selectedIds: ReadonlySet<number>,
+  hasExplicitSelection: boolean,
+  catalog: StationAutomationCatalog,
+  catalogSearch: string,
+  active: boolean,
+  lineupMode: 'automatic' | 'explicit'
+): string {
+  if (profiles.length === 0 || !selectedProfile) {
+    return `<section class="channel-builder-mode-panel channel-network-builder" data-builder-mode-panel="network" ${active ? '' : 'hidden'}>
+      <input type="radio" name="preset" value="network-copy" data-builder-preset="network" ${active ? 'checked' : ''} hidden>
+      <p class="channel-auto-empty">No strict network profiles are available. Choose Custom channel instead.</p>
+    </section>`
+  }
+  return `<section class="channel-builder-mode-panel channel-network-builder" data-builder-mode-panel="network" data-explicit-selection="${hasExplicitSelection}" ${active ? '' : 'hidden'}>
+    <input type="radio" name="preset" value="network-copy" data-builder-preset="network" ${active ? 'checked' : ''} hidden>
+    <fieldset data-builder-mode-fields ${active ? '' : 'disabled'}>
+      <legend class="channel-visually-hidden">Network channel settings</legend>
+      <div class="channel-network-controls">
+        <label>Network
+          <select name="networkId" required data-network-select>
+            ${renderNetworkProfileOptions(profiles, selectedProfile.id)}
+          </select>
+          <small>School-age and preschool identities stay separate. Only verified titles from the selected service are offered.</small>
+        </label>
+        <label>Era starts
+          <select name="eraStartYear" required data-era-start>
+            ${renderYearOptions(
+              selectedProfile.availableStartYear,
+              selectedProfile.availableEndYear,
+              selectedStartYear
+            )}
+          </select>
+        </label>
+        <label>Era ends
+          <select name="eraEndYear" required data-era-end>
+            ${renderYearOptions(
+              selectedStartYear,
+              selectedProfile.availableEndYear,
+              selectedEndYear,
+              true
+            )}
+          </select>
+        </label>
+      </div>
+      <p class="channel-auto-disclaimer"><strong>Period-inspired personal channel—not an official feed.</strong> Network and era act as strict eligibility boundaries. Cross-network and family-mix guest titles are not added.</p>
+      ${renderLineupMode(lineupMode)}
+      <div class="channel-network-profile-stack" aria-live="polite">
+        ${profiles.map((profile) =>
+          renderNetworkProfile(
+            profile,
+            profile.id === selectedProfile.id,
+            profile.id === selectedProfile.id ? selectedStartYear : profile.defaultStartYear,
+            profile.id === selectedProfile.id ? selectedEndYear : profile.defaultEndYear,
+            selectedIds,
+            hasExplicitSelection,
+            catalog,
+            catalogSearch,
+            active,
+            lineupMode
+          )
+        ).join('')}
+      </div>
+    </fieldset>
+  </section>`
+}
+
+function renderNetworkProfileOptions(
+  profiles: readonly NetworkProfile[],
+  selectedId: NetworkProfile['id']
+): string {
+  const groups: ReadonlyArray<{
+    audience: NetworkProfile['audience']
+    label: string
+  }> = [
+    { audience: 'school-age', label: 'School-age & family channels' },
+    { audience: 'preschool', label: 'Preschool & younger-family channels' },
+  ]
+  return groups
+    .map(({ audience, label }) => {
+      const options = profiles.filter((profile) => profile.audience === audience)
+      if (options.length === 0) return ''
+      return `<optgroup label="${escapeHtml(label)}">${options
+        .map(
+          (profile) =>
+            `<option value="${escapeHtml(profile.id)}" ${profile.id === selectedId ? 'selected' : ''}>${escapeHtml(profile.name)}</option>`
+        )
+        .join('')}</optgroup>`
+    })
+    .join('')
+}
+
+function renderLineupMode(mode: 'automatic' | 'explicit'): string {
+  return `<fieldset class="channel-lineup-mode">
+    <legend>How should this lineup stay up to date?</legend>
+    <div class="channel-lineup-mode-grid">
+      <label>
+        <input type="radio" name="selectionMode" value="automatic" data-lineup-mode ${mode === 'automatic' ? 'checked' : ''}>
+        <span><strong>Follow eligible lineup automatically</strong><small>Keep following this network and era as eligible titles appear or disappear from your playable library.</small></span>
+      </label>
+      <label>
+        <input type="radio" name="selectionMode" value="explicit" data-lineup-mode ${mode === 'explicit' ? 'checked' : ''}>
+        <span><strong>Hand-picked lineup</strong><small>Include only the titles you check below. New eligible titles are not added automatically.</small></span>
+      </label>
+    </div>
+    <p class="channel-lineup-mode-status ${mode === 'explicit' ? 'is-explicit' : ''}" data-lineup-mode-status role="status">${mode === 'automatic' ? 'ToastTV recalculates this strict lineup during library refreshes using the selected network and era.' : 'Choose at least one title. An empty hand-picked lineup cannot be saved.'}</p>
+  </fieldset>`
+}
+
+function renderNetworkProfile(
+  profile: NetworkProfile,
+  selected: boolean,
+  startYear: number,
+  endYear: number,
+  selectedIds: ReadonlySet<number>,
+  hasExplicitSelection: boolean,
+  catalog: StationAutomationCatalog,
+  catalogSearch: string,
+  modeActive: boolean,
+  lineupMode: 'automatic' | 'explicit'
+): string {
+  const collections = new Map(
+    catalog.collections.map((collection) => [collection.id, collection])
+  )
+  const eligibleMatches = profile.matches.filter((match) =>
+    erasOverlap(match.airStartYear, match.airEndYear, startYear, endYear)
+  )
+  const selectedCount = eligibleMatches.filter((match) =>
+    hasExplicitSelection ? selectedIds.has(match.collectionId) : true
+  ).length
+  return `<fieldset class="channel-network-profile" data-network-panel="${escapeHtml(profile.id)}" data-min-year="${profile.availableStartYear}" data-max-year="${profile.availableEndYear}" data-default-start="${profile.defaultStartYear}" data-default-end="${profile.defaultEndYear}" data-selection-mode="${lineupMode}" ${selected ? '' : 'hidden'} ${modeActive && selected ? '' : 'disabled'}>
+    <legend class="channel-visually-hidden">${escapeHtml(profile.name)} content</legend>
+    <header class="channel-network-profile-header">
+      <div><p class="channel-admin-eyebrow">${escapeHtml(profile.name)} · ${escapeHtml(profileAudienceLabel(profile.audience))}</p><h3>${escapeHtml(profile.description)}</h3></div>
+      <span>${countLabel(profile.matchedShows, 'owned show')} · ${countLabel(profile.matchedMovies, 'owned movie')}</span>
+    </header>
+    ${renderNetworkIdentityNotice(profile)}
+    ${renderNetworkWeek(profile)}
+    <section class="channel-network-library" aria-labelledby="owned-${escapeHtml(profile.id)}">
+      <header><div><h4 id="owned-${escapeHtml(profile.id)}">Eligible titles you own</h4><p data-picker-description>${lineupMode === 'automatic' ? 'These titles currently match. ToastTV follows the strict network and era rules as your playable library changes.' : 'Every checked title is included; unchecked titles stay out.'}</p></div><strong data-selection-count aria-live="polite">${lineupMode === 'automatic' ? `${eligibleMatches.length} eligible automatically` : `${selectedCount} of ${eligibleMatches.length} selected`}</strong></header>
+      ${renderTitlePickerToolbar(`network-${profile.id}`, catalogSearch, lineupMode === 'automatic')}
+      <div class="channel-title-grid" data-title-list>
+        ${profile.matches.map((match) => {
+          const collection = collections.get(match.collectionId)
+          const eligible = erasOverlap(
+            match.airStartYear,
+            match.airEndYear,
+            startYear,
+            endYear
+          )
+          const checked = hasExplicitSelection
+            ? selectedIds.has(match.collectionId)
+            : true
+          const searchText = normalize(
+            `${match.title} ${match.libraryKind} ${match.firstAirYear ?? ''} ${eligibilityReasonLabel(match.eligibilityReason)}`
+          )
+          const firstAirLabel = match.firstAirYear
+            ? ` · first aired ${match.firstAirYear}`
+            : ''
+          return `<label data-title-row data-air-start-year="${match.airStartYear}" data-air-end-year="${match.airEndYear}" data-search-text="${escapeHtml(searchText)}" ${eligible ? '' : 'hidden'}>
+            <input type="checkbox" name="collectionIds" value="${match.collectionId}" ${checked ? 'checked' : ''} ${modeActive && selected && eligible && lineupMode === 'explicit' ? '' : 'disabled'}>
+            <span><strong>${escapeHtml(match.title)}</strong><small>${escapeHtml(match.libraryKind.toUpperCase())} · ${match.airStartYear}–${match.airEndYear}${firstAirLabel} · ${escapeHtml(eligibilityReasonLabel(match.eligibilityReason))} · ${escapeHtml(match.playbackOrder)}${collection ? ` · ${countLabel(collection.eligibleFiles, 'playable file')}` : ''}</small></span>
+          </label>`
+        }).join('') || '<p class="channel-title-empty">No owned title is strictly eligible for this network.</p>'}
+      </div>
+      <p class="channel-title-empty" data-title-filter-empty hidden>No eligible owned title matches this search.</p>
+    </section>
+    <section class="channel-network-wishlist" aria-labelledby="wishlist-${escapeHtml(profile.id)}">
+      <header><div><h4 id="wishlist-${escapeHtml(profile.id)}">Network acquisition suggestions</h4><p>Wishlist only—ToastTV never downloads, streams, or links to media.</p></div></header>
+      <div class="channel-wishlist-grid">
+        ${profile.missingSuggestions.map((suggestion) => {
+          const visible = erasOverlap(
+            suggestion.airStartYear,
+            suggestion.airEndYear,
+            startYear,
+            endYear
+          )
+          return `<article data-network-suggestion data-air-start-year="${suggestion.airStartYear}" data-air-end-year="${suggestion.airEndYear}" ${visible ? '' : 'hidden'}><strong>${escapeHtml(suggestion.title)}</strong><small>${escapeHtml(suggestion.libraryKind.toUpperCase())} · carried ${suggestion.airStartYear}–${suggestion.airEndYear} · produced ${suggestion.firstYear}${suggestion.lastYear && suggestion.lastYear !== suggestion.firstYear ? `–${suggestion.lastYear}` : ''}</small></article>`
+        }).join('') || '<p>There are no missing network titles in this profile.</p>'}
+      </div>
+      <p class="channel-title-empty" data-suggestion-empty hidden>No acquisition suggestion overlaps this era.</p>
+    </section>
+  </fieldset>`
+}
+
+function profileAudienceLabel(
+  audience: NetworkProfile['audience']
+): string {
+  return audience === 'preschool'
+    ? 'Preschool / younger family'
+    : audience === 'after-hours'
+      ? 'After-hours'
+      : 'School age / family'
+}
+
+function renderNetworkIdentityNotice(profile: NetworkProfile): string {
+  if (profile.id === 'abc3-abc-me') {
+    return '<p class="channel-network-identity-note"><strong>Historical boundary:</strong> ABC3 became ABC ME in 2016 and the ABC ME brand ended in 2024. This age-seven Best Of never pulls generic ABC titles; Bluey remains under ABC Kids Australia.</p>'
+  }
+  if (profile.id === 'abc-family-au') {
+    return '<p class="channel-network-identity-note"><strong>Current Australian profile:</strong> This follows ABC Family and children’s ABC iview delivery from 2024. General or adult ABC Entertains programming is excluded.</p>'
+  }
+  return ''
+}
+
+function renderCustomChannelBuilder(
+  collections: StationAutomationCatalog['collections'],
+  matchingCount: number,
+  totalCount: number,
+  selectedIds: ReadonlySet<number>,
+  catalogSearch: string,
+  active: boolean
+): string {
+  const selectedCount = collections.filter((collection) =>
+    selectedIds.has(collection.id)
+  ).length
+  return `<section class="channel-builder-mode-panel channel-custom-builder" data-builder-mode-panel="custom" ${active ? '' : 'hidden'}>
+    <input type="radio" name="preset" value="custom" data-builder-preset="custom" ${active ? 'checked' : ''} hidden>
+    <fieldset data-builder-mode-fields ${active ? '' : 'disabled'}>
+      <legend class="channel-visually-hidden">Custom channel settings</legend>
+      <input type="hidden" name="selectionMode" value="explicit">
+      <header class="channel-custom-header"><div><h3>Choose from every playable title</h3><p>No network identity is implied. Only checked titles are scheduled.</p></div><strong data-selection-count aria-live="polite">${countLabel(selectedCount, 'selected title')}</strong></header>
+      ${renderTitlePickerToolbar('custom', catalogSearch)}
+      <div class="channel-title-grid channel-title-grid-custom" data-title-list>
+        ${collections.map((collection) => `<label data-title-row data-search-text="${escapeHtml(collectionSearchText(collection))}">
+          <input type="checkbox" name="collectionIds" value="${collection.id}" ${selectedIds.has(collection.id) ? 'checked' : ''} ${active ? '' : 'disabled'}>
+          <span><strong>${escapeHtml(collection.displayTitle)}</strong><small>${escapeHtml(collection.libraryKind.toUpperCase())} · ${countLabel(collection.eligibleFiles, 'playable file')}${collection.networks.length > 0 ? ` · ${escapeHtml(collection.networks.join(', '))}` : ''}</small></span>
+        </label>`).join('') || '<p class="channel-title-empty">No playable titles are available yet.</p>'}
+      </div>
+      <p class="channel-title-empty" data-title-filter-empty hidden>No playable title matches this search.</p>
+      ${matchingCount === 0 && catalogSearch ? '<p class="channel-admin-help">No collection matches this catalog search. Clear it to browse the catalog.</p>' : ''}
+      ${matchingCount > 250 ? `<p class="channel-admin-help">Showing the first 250 of ${matchingCount} matching titles. Refine the search to reach the rest.</p>` : normalize(catalogSearch) ? `<p class="channel-admin-help">Showing ${countLabel(matchingCount, 'matching title')}.</p>` : totalCount > 250 ? '<p class="channel-admin-help">Showing the first 250 playable titles. Search by title, network, studio, or genre to reach the rest.</p>' : ''}
+    </fieldset>
+  </section>`
+}
+
+function renderTitlePickerToolbar(
+  id: string,
+  search: string,
+  automatic = false
+): string {
+  return `<div class="channel-title-toolbar" data-title-picker>
+    <label for="title-search-${escapeHtml(id)}">Search titles
+      <input id="title-search-${escapeHtml(id)}" type="search" name="catalogSearch" maxlength="100" value="${escapeHtml(search)}" placeholder="Type a title…" data-title-search>
+    </label>
+    <div class="channel-title-toolbar-actions">
+      <button type="submit" name="action" value="search" formnovalidate class="btn-secondary">Search catalog</button>
+      ${search ? '<button type="submit" name="action" value="clear-search" formnovalidate class="channel-auto-clear">Clear search</button>' : ''}
+      <button type="button" class="btn-secondary" data-select-visible data-explicit-action ${automatic ? 'hidden disabled' : ''}>Select all</button>
+      <button type="button" class="btn-secondary" data-clear-visible data-explicit-action ${automatic ? 'hidden disabled' : ''}>Clear checks</button>
+    </div>
+  </div>`
+}
+
+function renderNetworkWeek(profile: NetworkProfile): string {
+  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+  return `<section class="channel-network-plan" aria-labelledby="plan-${escapeHtml(profile.id)}">
+    <header><div><h4 id="plan-${escapeHtml(profile.id)}">Dayparts and week at a glance</h4><p>The all-day schedule repeats this network profile across the week.</p></div></header>
+    <div class="channel-network-dayparts" aria-label="Daily dayparts">
+      ${profile.blocks.map((block) => `<span><b>${escapeHtml(block.start)}–${escapeHtml(block.end)}</b><small>${escapeHtml(block.name)}</small></span>`).join('')}
+    </div>
+    <div class="channel-network-week" role="table" aria-label="${escapeHtml(profile.name)} weekly daypart summary">
+      <div class="channel-network-week-row is-heading" role="row"><strong role="columnheader">Daypart</strong>${days.map((day) => `<span role="columnheader">${day}</span>`).join('')}</div>
+      ${profile.blocks.map((block) => `<div class="channel-network-week-row" role="row"><strong role="rowheader"><small>${escapeHtml(block.start)}–${escapeHtml(block.end)}</small>${escapeHtml(block.name)}</strong>${days.map((day) => `<span role="cell" aria-label="${escapeHtml(`${day}, ${block.name}, ${block.start} to ${block.end}`)}"></span>`).join('')}</div>`).join('')}
+    </div>
+  </section>`
+}
+
+function renderYearOptions(
+  start: number,
+  end: number,
+  selected: number,
+  labelCurrent = false
+): string {
+  const currentYear = new Date().getFullYear()
+  const options: string[] = []
+  for (let year = start; year <= end; year += 1) {
+    const label = labelCurrent && year === currentYear ? `${year} (Current)` : String(year)
+    options.push(`<option value="${year}" ${year === selected ? 'selected' : ''}>${label}</option>`)
+  }
+  return options.join('')
+}
+
+function clampYear(value: number, minimum: number, maximum: number): number {
+  return Math.max(minimum, Math.min(maximum, value))
+}
+
+function erasOverlap(
+  itemStart: number,
+  itemEnd: number,
+  eraStart: number,
+  eraEnd: number
+): boolean {
+  return itemStart <= eraEnd && itemEnd >= eraStart
+}
+
+function eligibilityReasonLabel(
+  reason: NetworkProfile['matches'][number]['eligibilityReason']
+): string {
+  if (reason === 'documented-network-lineup') return 'Documented network lineup'
+  if (reason === 'curated-network-lineup') return 'Curated network lineup'
+  return 'Exact network metadata'
 }
 
 function renderModal(
@@ -695,34 +971,12 @@ function renderModal(
   </div>`
 }
 
-function renderFacet(
-  title: string,
-  field: string,
-  facets: readonly StationFacet[],
-  selected: ReadonlySet<string>,
-  limit: number
-): string {
-  return `<details class="channel-auto-facet" ${selected.size > 0 ? 'open' : ''}>
-    <summary>${escapeHtml(title)} <span>${facets.length}</span></summary>
-    ${
-      facets.length > 0
-        ? `<div>${facets
-            .slice(0, limit)
-            .map(
-              (facet) => `<label><input type="checkbox" name="${escapeHtml(field)}" value="${escapeHtml(facet.name)}" ${selected.has(normalize(facet.name)) ? 'checked' : ''}><span>${escapeHtml(facet.name)} <small>${facet.collections}</small></span></label>`
-            )
-            .join('')}</div>${facets.length > limit ? `<small>Showing the ${limit} most common values. Less-common values remain available through the admin API.</small>` : ''}`
-        : '<p>No values stored yet.</p>'
-    }
-  </details>`
-}
-
 function renderAutomationPreview(preview?: StationBuildPreview): string {
   if (!preview) return ''
   if (preview.collectionCount === 0 || preview.eligibleFiles === 0) {
     return `<div class="channel-auto-preview channel-auto-preview-empty">
       <strong>Preview: no schedulable matches</strong>
-      <p>The current selectors did not match a parent-allowed, available collection with a successfully probed video. Try All playable shows, select a collection directly, or finish approval/metadata/probe work first.</p>
+      <p>No checked title is both eligible for this channel and ready to schedule. Check at least one title, or finish its approval, metadata, and media probe first.</p>
     </div>`
   }
   return `<div class="channel-auto-preview channel-auto-preview-ready">
@@ -733,10 +987,6 @@ function renderAutomationPreview(preview?: StationBuildPreview): string {
       .join(' · ')}${preview.collectionCount > 12 ? ` · and ${preview.collectionCount - 12} more` : ''}</p>
     <small>The generated station is enabled immediately and receives the selected editable airtime schedule.</small>
   </div>`
-}
-
-function normalizedSet(values: readonly string[]): Set<string> {
-  return new Set(values.map(normalize))
 }
 
 function collectionSearchText(
@@ -752,14 +1002,6 @@ function collectionSearchText(
       ...collection.studios,
     ].join(' ')
   )
-}
-
-function filterFacets(
-  facets: readonly StationFacet[],
-  normalizedSearch: string
-): readonly StationFacet[] {
-  if (!normalizedSearch) return facets
-  return facets.filter((facet) => normalize(facet.name).includes(normalizedSearch))
 }
 
 function normalize(value: string): string {

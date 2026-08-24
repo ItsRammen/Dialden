@@ -216,28 +216,330 @@
     }
   )
 
-  var eraPicker = document.querySelector('[data-era-picker]')
-  if (eraPicker) {
-    var refreshEraTemplate = function () {
-      var selected = document.querySelector('input[name="preset"]:checked')
-      var selectedId = selected ? selected.value : ''
-      var hasEraSelection = false
+  var autoBuilder = document.querySelector('[data-auto-builder]')
+  if (autoBuilder) {
+    var modeInputs = autoBuilder.querySelectorAll('[data-builder-mode]')
+    var modePanels = autoBuilder.querySelectorAll('[data-builder-mode-panel]')
+    var presetInputs = autoBuilder.querySelectorAll('[data-builder-preset]')
+    var networkSelect = autoBuilder.querySelector('[data-network-select]')
+    var eraStart = autoBuilder.querySelector('[data-era-start]')
+    var eraEnd = autoBuilder.querySelector('[data-era-end]')
+    var airtimeInputs = autoBuilder.querySelectorAll('input[name="airtime"]')
+    var handoffPanel = autoBuilder.querySelector('[data-handoff-panel]')
+    var handoffToggle = autoBuilder.querySelector('[data-handoff-toggle]')
+    var handoffFields = autoBuilder.querySelector('[data-handoff-fields]')
+    var handoffStatus = autoBuilder.querySelector('[data-handoff-status]')
+    var legacyMigrationFields = autoBuilder.querySelector('[data-legacy-migration-fields]')
+    var legacyMigrationButton = autoBuilder.querySelector('[data-legacy-migration-confirm]')
+    var legacyMigrationStatus = autoBuilder.querySelector('[data-legacy-migration-status]')
+    var currentYear = new Date().getFullYear()
+
+    var selectedBuilderMode = function () {
+      var selected = autoBuilder.querySelector('[data-builder-mode]:checked')
+      return selected ? selected.value : 'custom'
+    }
+
+    var selectedLineupMode = function () {
+      var selected = autoBuilder.querySelector('[data-lineup-mode]:checked')
+      return selected ? selected.value : 'explicit'
+    }
+
+    var numberAttribute = function (element, name, fallback) {
+      var value = Number(element && element.getAttribute(name))
+      return isFinite(value) ? value : fallback
+    }
+
+    var boundedYear = function (value, minimum, maximum) {
+      return Math.max(minimum, Math.min(maximum, value))
+    }
+
+    var fillYearSelect = function (select, minimum, maximum, selected, markCurrent) {
+      if (!select) return
+      while (select.firstChild) select.removeChild(select.firstChild)
+      var chosen = boundedYear(Number(selected) || minimum, minimum, maximum)
+      for (var year = minimum; year <= maximum; year += 1) {
+        var option = document.createElement('option')
+        option.value = String(year)
+        option.textContent = markCurrent && year === currentYear
+          ? year + ' (Current)'
+          : String(year)
+        option.selected = year === chosen
+        select.appendChild(option)
+      }
+    }
+
+    var activeNetworkPanel = function () {
+      var selectedId = networkSelect ? networkSelect.value : ''
+      var result = null
       Array.prototype.forEach.call(
-        eraPicker.querySelectorAll('[data-era-template-panel]'),
+        autoBuilder.querySelectorAll('[data-network-panel]'),
         function (panel) {
-          var visible = panel.getAttribute('data-era-template-panel') === selectedId
-          panel.hidden = !visible
-          if (visible) hasEraSelection = true
+          if (panel.getAttribute('data-network-panel') === selectedId) result = panel
         }
       )
-      if (hasEraSelection) eraPicker.open = true
+      return result
     }
-    document.addEventListener('change', function (event) {
-      if (event.target && event.target.name === 'preset') {
-        refreshEraTemplate()
+
+    var searchValue = function (scope) {
+      var input = scope ? scope.querySelector('[data-title-search]') : null
+      return input ? input.value.trim().toLowerCase() : ''
+    }
+
+    var refreshNetwork = function (modeActive, resetEra) {
+      var selectedPanel = activeNetworkPanel()
+      if (!selectedPanel || !eraStart || !eraEnd) return
+      var minimum = numberAttribute(selectedPanel, 'data-min-year', currentYear)
+      var maximum = numberAttribute(selectedPanel, 'data-max-year', currentYear)
+      if (resetEra) {
+        fillYearSelect(
+          eraStart,
+          minimum,
+          maximum,
+          numberAttribute(selectedPanel, 'data-default-start', minimum),
+          false
+        )
+        fillYearSelect(
+          eraEnd,
+          Number(eraStart.value),
+          maximum,
+          numberAttribute(selectedPanel, 'data-default-end', maximum),
+          true
+        )
+      } else {
+        var start = boundedYear(Number(eraStart.value) || minimum, minimum, maximum)
+        eraStart.value = String(start)
+        fillYearSelect(
+          eraEnd,
+          start,
+          maximum,
+          Number(eraEnd.value) || maximum,
+          true
+        )
+      }
+
+      var selectedStart = Number(eraStart.value)
+      var selectedEnd = Number(eraEnd.value)
+      var explicitMode = selectedLineupMode() === 'explicit'
+      Array.prototype.forEach.call(
+        autoBuilder.querySelectorAll('[data-network-panel]'),
+        function (panel) {
+          var isSelected = panel === selectedPanel
+          panel.hidden = !isSelected
+          panel.disabled = !modeActive || !isSelected
+          panel.setAttribute('data-selection-mode', explicitMode ? 'explicit' : 'automatic')
+          var term = searchValue(panel)
+          var eligibleRows = 0
+          var visibleRows = 0
+          var checkedRows = 0
+          Array.prototype.forEach.call(
+            panel.querySelectorAll('[data-title-row]'),
+            function (row) {
+              var airStart = Number(row.getAttribute('data-air-start-year'))
+              var airEnd = Number(row.getAttribute('data-air-end-year'))
+              var eligible = airStart <= selectedEnd && airEnd >= selectedStart
+              var text = row.getAttribute('data-search-text') || ''
+              var matches = !term || text.indexOf(term) >= 0
+              var checkbox = row.querySelector('input[type="checkbox"]')
+              row.hidden = !eligible || !matches
+              if (checkbox) {
+                checkbox.disabled = !modeActive || !isSelected || !eligible || !explicitMode
+              }
+              if (eligible) eligibleRows += 1
+              if (eligible && matches) visibleRows += 1
+              if (eligible && checkbox && checkbox.checked) checkedRows += 1
+            }
+          )
+          var count = panel.querySelector('[data-selection-count]')
+          if (count) {
+            count.textContent = explicitMode
+              ? checkedRows + ' of ' + eligibleRows + ' selected'
+              : eligibleRows + ' eligible automatically'
+          }
+          var pickerDescription = panel.querySelector('[data-picker-description]')
+          if (pickerDescription) {
+            pickerDescription.textContent = explicitMode
+              ? 'Every checked title is included; unchecked titles stay out.'
+              : 'These titles currently match. ToastTV follows the strict network and era rules as your playable library changes.'
+          }
+          Array.prototype.forEach.call(
+            panel.querySelectorAll('[data-explicit-action]'),
+            function (action) {
+              action.hidden = !explicitMode
+              action.disabled = !modeActive || !isSelected || !explicitMode
+            }
+          )
+          var filterEmpty = panel.querySelector('[data-title-filter-empty]')
+          if (filterEmpty) filterEmpty.hidden = eligibleRows === 0 || visibleRows > 0
+
+          var visibleSuggestions = 0
+          var suggestionRows = panel.querySelectorAll('[data-network-suggestion]')
+          Array.prototype.forEach.call(suggestionRows, function (suggestion) {
+            var itemStart = Number(suggestion.getAttribute('data-air-start-year'))
+            var itemEnd = Number(suggestion.getAttribute('data-air-end-year'))
+            var visible = itemStart <= selectedEnd && itemEnd >= selectedStart
+            suggestion.hidden = !visible
+            if (visible) visibleSuggestions += 1
+          })
+          var suggestionEmpty = panel.querySelector('[data-suggestion-empty]')
+          if (suggestionEmpty) {
+            suggestionEmpty.hidden = suggestionRows.length === 0 || visibleSuggestions > 0
+          }
+        }
+      )
+      var lineupStatus = autoBuilder.querySelector('[data-lineup-mode-status]')
+      if (lineupStatus) {
+        lineupStatus.classList.toggle('is-explicit', explicitMode)
+        lineupStatus.textContent = explicitMode
+          ? 'Choose at least one title. An empty hand-picked lineup cannot be saved.'
+          : 'ToastTV recalculates this strict lineup during library refreshes using the selected network and era.'
+      }
+    }
+
+    var refreshCustom = function (modeActive) {
+      var panel = autoBuilder.querySelector('[data-builder-mode-panel="custom"]')
+      if (!panel) return
+      var term = searchValue(panel)
+      var visibleRows = 0
+      var selectedRows = 0
+      Array.prototype.forEach.call(
+        panel.querySelectorAll('[data-title-row]'),
+        function (row) {
+          var text = row.getAttribute('data-search-text') || ''
+          var visible = !term || text.indexOf(term) >= 0
+          var checkbox = row.querySelector('input[type="checkbox"]')
+          row.hidden = !visible
+          if (checkbox) {
+            checkbox.disabled = !modeActive
+            if (checkbox.checked) selectedRows += 1
+          }
+          if (visible) visibleRows += 1
+        }
+      )
+      var count = panel.querySelector('[data-selection-count]')
+      if (count) {
+        count.textContent = selectedRows + ' selected ' + (selectedRows === 1 ? 'title' : 'titles')
+      }
+      var filterEmpty = panel.querySelector('[data-title-filter-empty]')
+      if (filterEmpty) {
+        filterEmpty.hidden = panel.querySelectorAll('[data-title-row]').length === 0 || visibleRows > 0
+      }
+    }
+
+    var selectedAirtime = function () {
+      var selected = autoBuilder.querySelector('input[name="airtime"]:checked')
+      return selected ? selected.value : 'all-day'
+    }
+
+    var refreshHandoff = function () {
+      if (!handoffPanel || !handoffToggle || !handoffFields) return
+      var eligible = selectedBuilderMode() === 'network' &&
+        !!networkSelect && networkSelect.value === 'cartoon-network' &&
+        selectedAirtime() === 'all-day'
+      handoffPanel.hidden = selectedBuilderMode() !== 'network' ||
+        !networkSelect || networkSelect.value !== 'cartoon-network'
+      handoffToggle.disabled = !eligible
+      handoffFields.disabled = !eligible || !handoffToggle.checked
+      handoffPanel.setAttribute('data-enabled', String(eligible && handoffToggle.checked))
+      if (handoffStatus) {
+        handoffStatus.textContent = !eligible
+          ? 'Choose Cartoon Network with All day airtime to use this handoff.'
+          : handoffToggle.checked
+            ? 'Locked handoff active. No adult programmes are selected or played.'
+            : 'Off — Cartoon Network keeps its ordinary schedule.'
+      }
+    }
+
+    var refreshBuilderMode = function () {
+      var mode = selectedBuilderMode()
+      Array.prototype.forEach.call(modePanels, function (panel) {
+        var active = panel.getAttribute('data-builder-mode-panel') === mode
+        panel.hidden = !active
+        var fields = panel.querySelector('[data-builder-mode-fields]')
+        if (fields) fields.disabled = !active
+      })
+      Array.prototype.forEach.call(presetInputs, function (input) {
+        input.checked = input.getAttribute('data-builder-preset') === mode
+      })
+      refreshNetwork(mode === 'network', false)
+      refreshCustom(mode === 'custom')
+      refreshHandoff()
+    }
+
+    var refreshPickerForControl = function (control) {
+      var mode = selectedBuilderMode()
+      if (control.closest('.channel-network-profile')) {
+        refreshNetwork(mode === 'network', false)
+      } else {
+        refreshCustom(mode === 'custom')
+      }
+    }
+
+    autoBuilder.addEventListener('input', function (event) {
+      if (event.target && event.target.hasAttribute('data-title-search')) {
+        refreshPickerForControl(event.target)
       }
     })
-    refreshEraTemplate()
+
+    autoBuilder.addEventListener('change', function (event) {
+      if (!event.target) return
+      if (event.target.hasAttribute('data-builder-mode')) {
+        refreshBuilderMode()
+      } else if (event.target.hasAttribute('data-lineup-mode')) {
+        refreshNetwork(selectedBuilderMode() === 'network', false)
+      } else if (event.target === networkSelect) {
+        refreshNetwork(selectedBuilderMode() === 'network', true)
+        refreshHandoff()
+      } else if (event.target === eraStart || event.target === eraEnd) {
+        refreshNetwork(selectedBuilderMode() === 'network', false)
+      } else if (event.target.hasAttribute('data-handoff-toggle')) {
+        refreshHandoff()
+      } else if (Array.prototype.indexOf.call(airtimeInputs, event.target) >= 0) {
+        refreshHandoff()
+      } else if (event.target.name === 'collectionIds') {
+        refreshPickerForControl(event.target)
+      }
+    })
+
+    autoBuilder.addEventListener('click', function (event) {
+      if (!event.target) return
+      var selectAll = event.target.closest('[data-select-visible]')
+      var clearAll = event.target.closest('[data-clear-visible]')
+      if (!selectAll && !clearAll) return
+      var scope = event.target.closest('.channel-network-library, .channel-custom-builder')
+      if (!scope) return
+      Array.prototype.forEach.call(
+        scope.querySelectorAll('[data-title-row] input[type="checkbox"]'),
+        function (checkbox) {
+          if (!checkbox.disabled) checkbox.checked = !!selectAll
+        }
+      )
+      refreshPickerForControl(event.target)
+    })
+
+    Array.prototype.forEach.call(modeInputs, function (input) {
+      input.setAttribute('aria-controls', input.value === 'network'
+        ? 'network-channel-options'
+        : 'custom-channel-options')
+    })
+    var networkModePanel = autoBuilder.querySelector('[data-builder-mode-panel="network"]')
+    var customModePanel = autoBuilder.querySelector('[data-builder-mode-panel="custom"]')
+    if (networkModePanel) networkModePanel.id = 'network-channel-options'
+    if (customModePanel) customModePanel.id = 'custom-channel-options'
+    if (legacyMigrationFields && legacyMigrationButton) {
+      legacyMigrationButton.addEventListener('click', function () {
+        legacyMigrationFields.disabled = false
+        legacyMigrationButton.hidden = true
+        legacyMigrationButton.setAttribute('aria-expanded', 'true')
+        autoBuilder.setAttribute('data-legacy-migration-unlocked', 'true')
+        if (legacyMigrationStatus) {
+          legacyMigrationStatus.textContent = 'Replacement editor unlocked. Review the new channel type and lineup, preview the result, then confirm before applying it.'
+        }
+        refreshBuilderMode()
+        var firstMode = autoBuilder.querySelector('[data-builder-mode]:checked')
+        if (firstMode) firstMode.focus()
+      })
+    }
+    refreshBuilderMode()
   }
 
   var editor = document.querySelector('[data-schedule-editor]')
