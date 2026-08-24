@@ -516,7 +516,8 @@
   gap: 1rem;
 }
 
-.channel-auto-actions button[value="create"] {
+.channel-auto-actions button[value="create"],
+.channel-auto-actions button[value="update"] {
   padding: 0.7rem 1rem;
   background: var(--toast-green);
   color: #031b13;
@@ -811,6 +812,103 @@
   color: #fff;
 }
 
+.channel-admin-hero-actions,
+.channel-admin-editor-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.channel-admin-create {
+  padding: 0.65rem 0.9rem;
+  border: 2px solid var(--toast-yellow);
+  border-radius: 0.65rem;
+  background: var(--toast-yellow);
+  color: #12182f;
+  text-decoration: none;
+}
+
+.channel-modal {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: clamp(0.5rem, 2vw, 1.5rem);
+}
+
+.channel-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(7, 10, 24, 0.82);
+  backdrop-filter: blur(4px);
+}
+
+.channel-modal-panel {
+  position: relative;
+  width: min(76rem, 100%);
+  max-height: calc(100vh - clamp(1rem, 4vw, 3rem));
+  overflow: auto;
+  border: 2px solid rgba(255, 255, 255, 0.22);
+  border-radius: 1rem;
+  background: var(--panel, #173e6d);
+  box-shadow: 0 1.25rem 4rem rgba(0, 0, 0, 0.55);
+}
+
+.channel-modal-panel > .channel-auto,
+.channel-modal-panel > .channel-admin-editor {
+  margin: 0;
+  border: 0;
+  box-shadow: none;
+}
+
+.channel-modal-close {
+  position: sticky;
+  z-index: 2;
+  top: 0.75rem;
+  float: right;
+  display: grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  margin: 0.75rem 0.75rem -3.25rem 0;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-radius: 999px;
+  background: #101c39;
+  color: #fff;
+  font-size: 1.65rem;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.channel-auto-replace {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.9rem;
+  border: 2px solid var(--toast-yellow);
+  border-radius: 0.7rem;
+  background: rgba(255, 210, 63, 0.1);
+  cursor: pointer;
+}
+
+.channel-auto-replace input {
+  width: auto;
+  margin-top: 0.2rem;
+}
+
+.channel-auto-replace span {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.channel-auto-replace small {
+  color: var(--text-secondary);
+}
+
 @media (max-width: 640px) {
   .channel-admin-hero,
   .channel-admin-editor > header {
@@ -843,5 +941,22 @@
   .channel-slot {
     display: flex;
     flex-direction: column;
+  }
+
+  .channel-admin-hero-actions,
+  .channel-admin-editor-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .channel-modal {
+    padding: 0;
+  }
+
+  .channel-modal-panel {
+    max-height: 100vh;
+    min-height: 100vh;
+    border: 0;
+    border-radius: 0;
   }
 }

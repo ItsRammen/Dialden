@@ -277,41 +277,45 @@ export class ChannelService {
         'No schedulable media matched. Approve a collection, finish metadata and media probing, then preview again.'
       )
     }
-    const group = this.generatedGroup(request.id)
-
-    const byKey = new Map(
-      this.withoutConfiguredGroup(group).map((assignment) => [
-        this.configuredCollectionKey(assignment),
-        assignment,
-      ])
-    )
-    for (const collection of preview.collections) {
-      const key = this.collectionIdentityKey(
-        collection.rootId,
-        collection.libraryKind,
-        collection.identityKey
-      )
-      const idKey = this.collectionIdKey(collection.id)
-      const legacyKey = this.legacyConfiguredCollectionKey(
-        collection.rootId,
-        collection.collectionTitle
-      )
-      const current =
-        byKey.get(key) ?? byKey.get(idKey) ?? byKey.get(legacyKey)
-      byKey.delete(idKey)
-      byKey.delete(legacyKey)
-      byKey.set(key, {
-        collectionId: collection.id,
-        collectionIdentityKey: collection.identityKey,
-        libraryKind: collection.libraryKind,
-        rootId: collection.rootId,
-        collectionTitle: collection.collectionTitle,
-        groups: [...new Set([...(current?.groups ?? []), group])],
-      })
-    }
     const channels = validateLibraryChannels([...this.channels, channel])
-    this.persistAndApply(channels, this.manuallyOffAir, [...byKey.values()])
+    this.persistAndApply(
+      channels,
+      this.manuallyOffAir,
+      this.automatedCollectionGroups(request.id, preview)
+    )
     return { channel, ...preview }
+  }
+
+  async previewAutomatedStationUpdate(
+    channelId: string,
+    request: StationBuildRequest
+  ): Promise<StationBuildPreview> {
+    this.automatedStationUpdateChannel(channelId, request)
+    return this.previewAutomatedStation(request)
+  }
+
+  async updateAutomatedStation(
+    channelId: string,
+    request: StationBuildRequest
+  ): Promise<StationBuildResult | null> {
+    const index = this.channels.findIndex((channel) => channel.id === channelId)
+    if (index < 0) return null
+    const channel = this.automatedStationUpdateChannel(channelId, request)
+    const preview = await this.previewAutomatedStation(request)
+    if (preview.collectionCount === 0 || preview.eligibleFiles === 0) {
+      throw new Error(
+        'No schedulable media matched. Approve a collection, finish metadata and media probing, then preview again.'
+      )
+    }
+    const next = [...this.channels]
+    next[index] = channel
+    const validated = validateLibraryChannels(next)
+    this.persistAndApply(
+      validated,
+      this.manuallyOffAir,
+      this.automatedCollectionGroups(channelId, preview)
+    )
+    return { channel: validated[index] as LibraryChannelPolicy, ...preview }
   }
 
   create(channel: LibraryChannelPolicy): LibraryChannelPolicy {
@@ -539,6 +543,75 @@ export class ChannelService {
         slots: stationAirtimeSlots(request.airtime ?? 'all-day', group),
       },
     ])[0] as LibraryChannelPolicy
+  }
+
+  private automatedStationUpdateChannel(
+    channelId: string,
+    request: StationBuildRequest
+  ): LibraryChannelPolicy {
+    const current = this.channels.find((channel) => channel.id === channelId)
+    if (!current) throw new Error('Channel not found')
+    if (request.id !== channelId) {
+      throw new Error('A channel ID cannot be changed after creation')
+    }
+    const group = this.generatedGroup(channelId)
+    const scheduleCollision = this.channels.some(
+      (channel) =>
+        channel.id !== channelId &&
+        channel.slots.some((slot) => slot.groups.includes(group))
+    )
+    if (scheduleCollision) {
+      throw new Error('Generated station group conflicts with existing configuration')
+    }
+    return validateLibraryChannels([
+      {
+        ...current,
+        name: request.name,
+        timezone: request.timezone,
+        slots: stationAirtimeSlots(
+          request.airtime ?? 'all-day',
+          group
+        ),
+      },
+    ])[0] as LibraryChannelPolicy
+  }
+
+  private automatedCollectionGroups(
+    channelId: string,
+    preview: StationBuildPreview
+  ): CollectionProgrammingGroups[] {
+    const group = this.generatedGroup(channelId)
+    const byKey = new Map(
+      this.withoutConfiguredGroup(group).map((assignment) => [
+        this.configuredCollectionKey(assignment),
+        assignment,
+      ])
+    )
+    for (const collection of preview.collections) {
+      const key = this.collectionIdentityKey(
+        collection.rootId,
+        collection.libraryKind,
+        collection.identityKey
+      )
+      const idKey = this.collectionIdKey(collection.id)
+      const legacyKey = this.legacyConfiguredCollectionKey(
+        collection.rootId,
+        collection.collectionTitle
+      )
+      const current =
+        byKey.get(key) ?? byKey.get(idKey) ?? byKey.get(legacyKey)
+      byKey.delete(idKey)
+      byKey.delete(legacyKey)
+      byKey.set(key, {
+        collectionId: collection.id,
+        collectionIdentityKey: collection.identityKey,
+        libraryKind: collection.libraryKind,
+        rootId: collection.rootId,
+        collectionTitle: collection.collectionTitle,
+        groups: [...new Set([...(current?.groups ?? []), group])],
+      })
+    }
+    return [...byKey.values()]
   }
 
   private persistAndApply(

@@ -92,7 +92,8 @@ export class FilesystemClient implements IFileSystem {
    */
   watch(
     directory: string,
-    callback: (event: 'add' | 'change' | 'remove', path: string) => void
+    callback: (event: 'add' | 'change' | 'remove', path: string) => void,
+    onError?: (error: unknown) => void
   ): FileWatcher {
     const watcher = fsWatch(
       directory,
@@ -105,6 +106,10 @@ export class FilesystemClient implements IFileSystem {
         callback(eventType === 'rename' ? 'add' : 'change', fullPath)
       }
     )
+    watcher.on('error', (error) => {
+      if (onError) onError(error)
+      else console.error(`Filesystem watcher failed for ${directory}:`, error)
+    })
 
     return {
       close: () => watcher.close(),

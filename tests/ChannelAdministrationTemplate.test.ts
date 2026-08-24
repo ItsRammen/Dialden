@@ -49,6 +49,7 @@ describe('channel administration template', () => {
         configurationError: null,
       },
       {
+        automationOpen: true,
         automation: {
           collections: [
             {
@@ -134,6 +135,7 @@ describe('channel administration template', () => {
         configurationError: null,
       },
       {
+        automationOpen: true,
         automation: {
           collections,
           genres: [],
@@ -160,5 +162,87 @@ describe('channel administration template', () => {
     expect(markup).toContain('name="networks" value="Target Network"')
     expect(markup).toContain('Showing 1 matching collection.')
     expect(markup).toContain('while keeping your checked collections')
+  })
+
+  test('keeps creation out of the default page and opens it in a modal', () => {
+    const snapshot = {
+      channels: [],
+      manuallyOffAir: [],
+      programmingGroups: [],
+      configurationError: null,
+    }
+    const catalog = {
+      collections: [],
+      genres: [],
+      networks: [],
+      studios: [],
+      presets: [],
+      truncated: false,
+    }
+
+    const defaultMarkup = renderChannelAdministration(snapshot, {
+      automation: catalog,
+    })
+    const modalMarkup = renderChannelAdministration(snapshot, {
+      automation: catalog,
+      automationOpen: true,
+    })
+
+    expect(defaultMarkup).toContain('href="/channels?builder=create#station-builder"')
+    expect(defaultMarkup).not.toContain('role="dialog"')
+    expect(defaultMarkup).not.toContain('id="editor"')
+    expect(modalMarkup).toContain('role="dialog"')
+    expect(modalMarkup).toContain('Create an automatic station')
+  })
+
+  test('offers guarded Auto setup for an existing channel', () => {
+    const markup = renderChannelAdministration(
+      {
+        channels: [
+          {
+            id: 'kids',
+            name: 'Kids Club',
+            enabled: false,
+            timezone: 'UTC',
+            slots: [],
+          },
+        ],
+        manuallyOffAir: ['kids'],
+        programmingGroups: [],
+        configurationError: null,
+      },
+      {
+        automationOpen: true,
+        automationTargetId: 'kids',
+        automation: {
+          collections: [
+            {
+              id: 1,
+              rootId: 'tv',
+              identityKey: 'bluey',
+              collectionTitle: 'Bluey',
+              displayTitle: 'Bluey',
+              libraryKind: 'tv',
+              genres: ['Animation'],
+              networks: [],
+              studios: [],
+              eligibleFiles: 1,
+            },
+          ],
+          genres: [],
+          networks: [],
+          studios: [],
+          presets: [],
+          truncated: false,
+        },
+      }
+    )
+
+    expect(markup).toContain('Auto setup for Kids Club')
+    expect(markup).toContain('name="targetChannelId" value="kids"')
+    expect(markup).toContain('name="id" required maxlength="59"')
+    expect(markup).toContain('readonly')
+    expect(markup).toContain('name="confirmReplace" value="yes" required')
+    expect(markup).toContain('name="action" value="update"')
   })
 })

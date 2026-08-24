@@ -1,6 +1,16 @@
 (function () {
   'use strict'
 
+  var modal = document.querySelector('.channel-modal')
+  if (modal) {
+    document.documentElement.classList.add('channel-modal-open')
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape') window.location.href = '/channels'
+    })
+    var firstControl = modal.querySelector('input:not([type="hidden"]), button, select, textarea')
+    if (firstControl) firstControl.focus()
+  }
+
   var editor = document.querySelector('[data-schedule-editor]')
   if (!editor) return
 

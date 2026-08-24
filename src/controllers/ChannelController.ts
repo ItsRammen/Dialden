@@ -148,10 +148,15 @@ export function createChannelController({ channels }: ChannelControllerDeps) {
 
   controller.get('/channels', async (c) => {
     const changed = c.req.query('changed')
+    const builder = textValue(c.req.query('builder'))
     return c.html(
       renderChannelAdministration(channels.administrationSnapshot(), {
         ...(await automationSurface(channels)),
         editId: c.req.query('edit'),
+        newChannel: c.req.query('new') === 'manual',
+        automationTargetId:
+          builder && builder !== 'create' ? builder : undefined,
+        automationOpen: builder === 'create' || Boolean(builder),
         automationSearch: readCatalogSearch(c.req.query('catalogSearch')),
         changed:
           changed === 'created' ||
@@ -167,9 +172,11 @@ export function createChannelController({ channels }: ChannelControllerDeps) {
   controller.post('/channels/auto-build', async (c) => {
     let request: StationBuildRequest | undefined
     let automationSearch = ''
+    let automationTargetId: string | undefined
     try {
       const data = await c.req.formData()
       automationSearch = readCatalogSearch(textValue(data.get('catalogSearch')))
+      automationTargetId = textValue(data.get('targetChannelId')) || undefined
       request = readFormStationRequest(data)
       const action = textValue(data.get('action'))
       if (action === 'search' || action === 'clear-search') {
@@ -179,6 +186,8 @@ export function createChannelController({ channels }: ChannelControllerDeps) {
             ...(await automationSurface(channels)),
             automationDraft: request,
             automationSearch,
+            automationOpen: true,
+            automationTargetId,
           })
         )
       }
@@ -186,13 +195,34 @@ export function createChannelController({ channels }: ChannelControllerDeps) {
         await channels.createAutomatedStation(request)
         return c.redirect('/channels?changed=generated', 303)
       }
-      const preview = await channels.previewAutomatedStationBuild(request)
+      if (action === 'update') {
+        if (!automationTargetId) throw new Error('Choose a channel to update')
+        if (textValue(data.get('confirmReplace')) !== 'yes') {
+          throw new Error(
+            'Confirm that Auto setup may replace this channel’s current schedule and automated library selection.'
+          )
+        }
+        const result = await channels.updateAutomatedStation(
+          automationTargetId,
+          request
+        )
+        if (!result) return c.text('Channel not found', 404)
+        return c.redirect('/channels?changed=updated', 303)
+      }
+      const preview = automationTargetId
+        ? await channels.previewAutomatedStationUpdate(
+            automationTargetId,
+            request
+          )
+        : await channels.previewAutomatedStationBuild(request)
       return c.html(
         renderChannelAdministration(channels.administrationSnapshot(), {
           ...(await automationSurface(channels)),
           automationDraft: request,
           automationPreview: preview,
           automationSearch,
+          automationOpen: true,
+          automationTargetId,
         })
       )
     } catch (error) {
@@ -201,6 +231,8 @@ export function createChannelController({ channels }: ChannelControllerDeps) {
           ...(await automationSurface(channels)),
           automationDraft: request,
           automationSearch,
+          automationOpen: true,
+          automationTargetId,
           error: safeMessage(error),
         }),
         400
@@ -216,6 +248,7 @@ export function createChannelController({ channels }: ChannelControllerDeps) {
       return c.html(
         renderChannelAdministration(channels.administrationSnapshot(), {
           ...(await automationSurface(channels)),
+          newChannel: true,
           error: safeMessage(error),
         }),
         400

@@ -31,13 +31,30 @@ export class FileWatcherService extends EventEmitter {
       }
 
       try {
-        const watcher = this.filesystem.watch(dir, (_event, path) => {
-          // Filter by extension
-          if (!this.extensions.some((ext) => path.endsWith(ext))) return
+        let watcher: FileWatcher | null = null
+        watcher = this.filesystem.watch(
+          dir,
+          (_event, path) => {
+            // Filter by extension
+            if (!this.extensions.some((ext) => path.endsWith(ext))) return
 
-          this.pending.add(path)
-          this.resetDebounce()
-        })
+            this.pending.add(path)
+            this.resetDebounce()
+          },
+          (error) => {
+            const message =
+              error instanceof Error ? error.message : String(error)
+            console.error(
+              `FileWatcher: Watch failed for ${dir}; automatic change detection is disabled for this root until restart: ${message}`
+            )
+            watcher?.close()
+            if (watcher) {
+              this.watchers = this.watchers.filter(
+                (active) => active !== watcher
+              )
+            }
+          }
+        )
         this.watchers.push(watcher)
         console.log(`FileWatcher: Watching ${dir}`)
       } catch (e) {

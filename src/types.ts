@@ -392,7 +392,8 @@ export interface IFileSystem {
   getMtime(path: string): number | null // Unix timestamp in ms
   watch(
     directory: string,
-    callback: (event: 'add' | 'change' | 'remove', path: string) => void
+    callback: (event: 'add' | 'change' | 'remove', path: string) => void,
+    onError?: (error: unknown) => void
   ): FileWatcher
 }
 

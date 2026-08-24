@@ -760,4 +760,77 @@ describe('ChannelService', () => {
       rmSync(directory, { recursive: true, force: true })
     }
   })
+
+  test('applies Auto setup to an existing channel without changing its state', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'toasttv-channel-auto-update-'))
+    try {
+      const repository = mock<IMediaRepository>()
+      const store = new ChannelConfigurationStore(
+        join(directory, 'channels.json'),
+        policy.channels
+      )
+      const service = new ChannelService(repository, policy, undefined, store)
+      service.stationAutomationCatalog = async () => ({
+        collections: [
+          {
+            id: 8,
+            rootId: 'tv',
+            identityKey: 'bluey-2018',
+            collectionTitle: 'Bluey (2018)',
+            displayTitle: 'Bluey',
+            libraryKind: 'tv',
+            genres: ['Animation'],
+            networks: ['ABC Kids'],
+            studios: ['Ludo Studio'],
+            eligibleFiles: 12,
+          },
+        ],
+        genres: [{ name: 'Animation', collections: 1 }],
+        networks: [{ name: 'ABC Kids', collections: 1 }],
+        studios: [{ name: 'Ludo Studio', collections: 1 }],
+        presets: [],
+        truncated: false,
+      })
+      expect(service.setOnAir('kids-club', false)).toBe(true)
+      expect(service.setEnabled('kids-club', false)).toBe(true)
+
+      const result = await service.updateAutomatedStation('kids-club', {
+        id: 'kids-club',
+        name: 'Bluey All Day',
+        timezone: 'UTC',
+        preset: 'custom',
+        airtime: 'all-day',
+        collectionIds: [8],
+      })
+
+      expect(result?.channel).toMatchObject({
+        id: 'kids-club',
+        name: 'Bluey All Day',
+        enabled: false,
+        timezone: 'UTC',
+      })
+      expect(result?.channel.slots).toHaveLength(1)
+      expect(result?.channel.slots[0]).toMatchObject({
+        start: '00:00',
+        end: '24:00',
+      })
+      const generatedGroup = result?.channel.slots[0]?.groups[0]
+      expect(generatedGroup).toStartWith('toasttv-auto-')
+      expect(service.administrationSnapshot().manuallyOffAir).toContain(
+        'kids-club'
+      )
+
+      const restored = new ChannelService(repository, policy, undefined, store)
+      expect(
+        restored.administrationSnapshot().channels.find(
+          (channel) => channel.id === 'kids-club'
+        )
+      ).toMatchObject({ name: 'Bluey All Day', enabled: false })
+      expect(restored.administrationSnapshot().programmingGroups).toContain(
+        generatedGroup as string
+      )
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
 })

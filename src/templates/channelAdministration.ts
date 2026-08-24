@@ -14,12 +14,15 @@ import { escapeHtml } from './utils'
 
 interface ChannelAdministrationOptions {
   readonly editId?: string
+  readonly newChannel?: boolean
   readonly error?: string
   readonly changed?: 'created' | 'updated' | 'deleted' | 'generated'
   readonly automation?: StationAutomationCatalog
   readonly automationDraft?: StationBuildRequest
   readonly automationPreview?: StationBuildPreview
   readonly automationSearch?: string
+  readonly automationOpen?: boolean
+  readonly automationTargetId?: string
 }
 
 export function renderChannelAdministration(
@@ -27,6 +30,9 @@ export function renderChannelAdministration(
   options: ChannelAdministrationOptions = {}
 ): string {
   const edit = snapshot.channels.find((channel) => channel.id === options.editId)
+  const automationTarget = snapshot.channels.find(
+    (channel) => channel.id === options.automationTargetId
+  )
   const groups = snapshot.programmingGroups
   const offAir = new Set(snapshot.manuallyOffAir)
 
@@ -41,7 +47,10 @@ export function renderChannelAdministration(
           <h1>Channels</h1>
           <p>Create schedules from playable collections. Channel settings are saved in appdata and take effect immediately.</p>
         </div>
-        <a class="channel-admin-link" href="/">Back to dashboard</a>
+        <div class="channel-admin-hero-actions">
+          <a class="channel-admin-link channel-admin-create" href="/channels?builder=create#station-builder">Create station</a>
+          <a class="channel-admin-link" href="/">Back to dashboard</a>
+        </div>
       </header>
 
       ${
@@ -66,28 +75,38 @@ export function renderChannelAdministration(
             ? snapshot.channels
                 .map((channel) => renderChannelCard(channel, offAir.has(channel.id)))
                 .join('')
-            : '<p class="channel-admin-empty">No channels are configured. Add one below.</p>'
+            : '<p class="channel-admin-empty">No channels are configured yet. Create one to start broadcasting.</p>'
         }
       </section>
 
       ${
-        options.automation
-          ? renderAutomationBuilder(
+        options.automation && options.automationOpen
+          ? renderModal(
+              'station-builder',
+              renderAutomationBuilder(
               options.automation,
               options.automationDraft,
               options.automationPreview,
-              options.automationSearch
+              options.automationSearch,
+              automationTarget,
+              options.automationTargetId
+              )
             )
           : ''
       }
 
-      <section class="channel-admin-editor" id="editor">
+      ${
+        edit || options.newChannel
+          ? `${options.newChannel ? '<div class="channel-modal" role="dialog" aria-modal="true" aria-labelledby="manual-editor-title"><a class="channel-modal-backdrop" href="/channels" aria-label="Close station creator"></a><div class="channel-modal-panel"><a class="channel-modal-close" href="/channels" aria-label="Close station creator">×</a>' : ''}<section class="channel-admin-editor" id="editor">
         <header>
           <div>
             <p class="channel-admin-eyebrow">${edit ? 'Edit channel' : 'New channel'}</p>
-            <h2>${edit ? escapeHtml(edit.name) : 'Add a channel'}</h2>
+            <h2 id="manual-editor-title">${edit ? escapeHtml(edit.name) : 'Add a channel manually'}</h2>
           </div>
-          ${edit ? '<a href="/channels#editor">Cancel edit</a>' : ''}
+          <div class="channel-admin-editor-actions">
+            ${edit ? `<a href="/channels?builder=${encodeURIComponent(edit.id)}#station-builder">Auto setup</a>` : ''}
+            <a href="/channels">Cancel</a>
+          </div>
         </header>
         <form method="post" action="${edit ? `/channels/${encodeURIComponent(edit.id)}` : '/channels'}">
           <div class="channel-admin-fields">
@@ -115,7 +134,9 @@ export function renderChannelAdministration(
           </div>
           <button type="submit">${edit ? 'Save channel' : 'Create channel'}</button>
         </form>
-      </section>
+      </section>${options.newChannel ? '</div></div>' : ''}`
+          : ''
+      }
     </div>`
   )
 }
@@ -124,8 +145,13 @@ function renderAutomationBuilder(
   catalog: StationAutomationCatalog,
   draft?: StationBuildRequest,
   preview?: StationBuildPreview,
-  catalogSearch = ''
+  catalogSearch = '',
+  target?: LibraryChannelPolicy,
+  requestedTargetId?: string
 ): string {
+  if (requestedTargetId && !target) {
+    return `<section class="channel-auto" id="auto-builder"><h2>Channel not found</h2><p>The selected channel no longer exists.</p></section>`
+  }
   const selectedPreset = draft?.preset ?? 'all-approved-tv'
   const selectedAirtime = draft?.airtime ?? 'all-day'
   const selectedIds = new Set(draft?.collectionIds ?? [])
@@ -133,7 +159,7 @@ function renderAutomationBuilder(
   const selectedNetworks = normalizedSet(draft?.networks ?? [])
   const selectedStudios = normalizedSet(draft?.studios ?? [])
   const timezone =
-    draft?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone
+    draft?.timezone ?? target?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone
   const normalizedSearch = normalize(catalogSearch)
   const matchingCollections = normalizedSearch
     ? catalog.collections.filter((collection) =>
@@ -155,8 +181,8 @@ function renderAutomationBuilder(
     <header class="channel-auto-header">
       <div>
         <p class="channel-admin-eyebrow">Catalog automation</p>
-        <h2>Auto-build a station</h2>
-        <p>Choose playable shows directly or build a mix from TMDB genres, original networks, and production studios.</p>
+        <h2>${target ? `Auto setup for ${escapeHtml(target.name)}` : 'Create an automatic station'}</h2>
+        <p>${target ? 'Apply a preset to this station and regenerate its schedule and playable library selection.' : 'Choose playable shows directly or build a mix from TMDB genres, original networks, and production studios.'}</p>
       </div>
       <span class="channel-auto-count">${countLabel(catalog.collections.length, 'playable collection')}</span>
     </header>
@@ -174,6 +200,7 @@ function renderAutomationBuilder(
             <a href="/library/review">Open Needs review</a>
           </div>`
         : `<form method="post" action="/channels/auto-build" class="channel-auto-form">
+            ${target ? `<input type="hidden" name="targetChannelId" value="${escapeHtml(target.id)}">` : ''}
             <div class="channel-auto-search">
               <label for="catalog-search">Find a show, network, studio, or genre</label>
               <div>
@@ -185,11 +212,11 @@ function renderAutomationBuilder(
             </div>
             <div class="channel-admin-fields">
               <label>Station ID
-                <input type="text" name="id" required maxlength="59" pattern="[A-Za-z0-9][A-Za-z0-9_-]*" value="${escapeHtml(draft?.id ?? '')}" placeholder="saturday-cartoons">
+                <input type="text" name="id" required maxlength="59" pattern="[A-Za-z0-9][A-Za-z0-9_-]*" value="${escapeHtml(draft?.id ?? target?.id ?? '')}" ${target ? 'readonly' : ''} placeholder="saturday-cartoons">
                 <small>Used by TV clients. The generated group uses the same stable ID.</small>
               </label>
               <label>Display name
-                <input type="text" name="name" required maxlength="100" value="${escapeHtml(draft?.name ?? '')}" placeholder="Saturday Cartoons">
+                <input type="text" name="name" required maxlength="100" value="${escapeHtml(draft?.name ?? target?.name ?? '')}" placeholder="Saturday Cartoons">
               </label>
               <label>Timezone
                 <input type="text" name="timezone" required maxlength="100" value="${escapeHtml(timezone)}" placeholder="America/New_York">
@@ -224,7 +251,7 @@ function renderAutomationBuilder(
                   </label>`
                 ).join('')}
               </div>
-              <p class="channel-admin-help">These become ordinary editable schedule slots after creation.</p>
+              <p class="channel-admin-help">These become ordinary editable schedule slots ${target ? 'when Auto setup is applied' : 'after creation'}.</p>
             </fieldset>
 
             <div class="channel-auto-facets">
@@ -251,14 +278,26 @@ function renderAutomationBuilder(
             </details>
 
             ${renderAutomationPreview(preview)}
+            ${target ? `<label class="channel-auto-replace"><input type="checkbox" name="confirmReplace" value="yes" required><span><strong>Replace this station’s current programming setup</strong><small>This replaces its schedule blocks and automated library selection. The station ID, enabled state, and manual on/off state are preserved.</small></span></label>` : ''}
             <div class="channel-auto-actions">
-              <button type="submit" name="action" value="preview" class="btn-secondary">Preview lineup</button>
-              <button type="submit" name="action" value="create">Create ${escapeHtml(airtimeActionLabel(selectedAirtime))} station</button>
+              ${target ? '' : '<a class="channel-admin-link" href="/channels?new=manual#editor">Create manually</a>'}
+              <button type="submit" name="action" value="preview" formnovalidate class="btn-secondary">Preview lineup</button>
+              <button type="submit" name="action" value="${target ? 'update' : 'create'}">${target ? 'Apply Auto setup' : `Create ${escapeHtml(airtimeActionLabel(selectedAirtime))} station`}</button>
             </div>
           </form>
           `
     }
   </section>`
+}
+
+function renderModal(id: string, content: string): string {
+  return `<div class="channel-modal" id="${escapeHtml(id)}" role="dialog" aria-modal="true" aria-label="Station setup">
+    <a class="channel-modal-backdrop" href="/channels" aria-label="Close station setup"></a>
+    <div class="channel-modal-panel">
+      <a class="channel-modal-close" href="/channels" aria-label="Close station setup">×</a>
+      ${content}
+    </div>
+  </div>`
 }
 
 function renderFacet(
@@ -356,6 +395,7 @@ function renderChannelCard(
     </dl>
     <div class="channel-admin-actions">
       <a href="/channels?edit=${encodeURIComponent(channel.id)}#editor">Edit</a>
+      <a href="/channels?builder=${encodeURIComponent(channel.id)}#station-builder">Auto setup</a>
       <form method="post" action="/channels/${encodeURIComponent(channel.id)}/enabled">
         <input type="hidden" name="enabled" value="${channel.enabled ? 'false' : 'true'}">
         <button type="submit">${channel.enabled ? 'Disable' : 'Enable'}</button>

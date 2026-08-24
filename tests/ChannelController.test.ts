@@ -174,6 +174,50 @@ describe('ChannelController', () => {
     )
   })
 
+  test('applies a confirmed Auto setup preset to an existing channel', async () => {
+    const channels = mock<ChannelService>()
+    channels.updateAutomatedStation.mockResolvedValue({
+      channel: {
+        id: 'kids-club',
+        name: 'Kids Club',
+        enabled: true,
+        timezone: 'Asia/Taipei',
+        slots: [],
+      },
+      collections: [],
+      collectionCount: 1,
+      eligibleFiles: 12,
+    })
+    const app = new Hono().route('/', createChannelController({ channels }))
+    const body = new URLSearchParams({
+      action: 'update',
+      targetChannelId: 'kids-club',
+      confirmReplace: 'yes',
+      id: 'kids-club',
+      name: 'Kids Club',
+      timezone: 'Asia/Taipei',
+      preset: 'family-animation',
+      airtime: 'all-day',
+    })
+
+    const response = await app.request('/channels/auto-build', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body,
+    })
+
+    expect(response.status).toBe(303)
+    expect(response.headers.get('location')).toBe('/channels?changed=updated')
+    expect(channels.updateAutomatedStation).toHaveBeenCalledWith(
+      'kids-club',
+      expect.objectContaining({
+        id: 'kids-club',
+        preset: 'family-animation',
+        airtime: 'all-day',
+      })
+    )
+  })
+
   test('keeps channel administration available when automation catalog loading fails', async () => {
     const channels = mock<ChannelService>()
     channels.administrationSnapshot.mockReturnValue({

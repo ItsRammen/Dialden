@@ -13,6 +13,7 @@ describe('FileWatcherService', () => {
   let capturedCallback:
     | ((event: 'add' | 'change' | 'remove', path: string) => void)
     | null
+  let capturedErrorCallback: ((error: unknown) => void) | null
 
   const TEST_DIRECTORIES = ['/media/videos', '/media/interludes']
   const TEST_EXTENSIONS = ['.mp4', '.mkv'] as const
@@ -20,13 +21,15 @@ describe('FileWatcherService', () => {
   beforeEach(() => {
     fs = mock<IFileSystem>()
     capturedCallback = null
+    capturedErrorCallback = null
 
     // Default: directories exist
     fs.exists.mockReturnValue(true)
 
     // Capture the callback passed to watch()
-    fs.watch.mockImplementation((_dir, callback) => {
+    fs.watch.mockImplementation((_dir, callback, onError) => {
       capturedCallback = callback
+      capturedErrorCallback = onError ?? null
       return { close: bunMock(() => {}) }
     })
 
@@ -37,9 +40,14 @@ describe('FileWatcherService', () => {
     service.start()
 
     expect(fs.watch).toHaveBeenCalledTimes(2)
-    expect(fs.watch).toHaveBeenCalledWith('/media/videos', expect.any(Function))
+    expect(fs.watch).toHaveBeenCalledWith(
+      '/media/videos',
+      expect.any(Function),
+      expect.any(Function)
+    )
     expect(fs.watch).toHaveBeenCalledWith(
       '/media/interludes',
+      expect.any(Function),
       expect.any(Function)
     )
   })
@@ -53,8 +61,26 @@ describe('FileWatcherService', () => {
     expect(fs.watch).toHaveBeenCalledTimes(1)
     expect(fs.watch).toHaveBeenCalledWith(
       '/media/interludes',
+      expect.any(Function),
       expect.any(Function)
     )
+  })
+
+  test('contains an asynchronous watcher permission failure', () => {
+    const close = bunMock(() => {})
+    fs.watch.mockImplementation((_dir, callback, onError) => {
+      capturedCallback = callback
+      capturedErrorCallback = onError ?? null
+      return { close }
+    })
+
+    service.start()
+    capturedErrorCallback?.(
+      Object.assign(new Error('permission denied'), { code: 'EACCES' })
+    )
+
+    expect(close).toHaveBeenCalledTimes(1)
+    expect(() => service.stop()).not.toThrow()
   })
 
   test('filters events by extension', async () => {
