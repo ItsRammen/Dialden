@@ -59,6 +59,13 @@ describe('settings template', () => {
       currentVersion: '<script>version()</script>',
       latestVersion: '<script>latest()</script>',
       updateAvailable: true,
+      transcodingStatus: {
+        configuredMode: 'intel-qsv',
+        activeBackend: 'software',
+        hardwareAcceleration: false,
+        device: '<img src=x onerror=device()>',
+        fallbackReason: '<script>fallback()</script>',
+      },
     })
 
     expect(html).not.toContain('<script>socket()</script>')
@@ -66,6 +73,62 @@ describe('settings template', () => {
     expect(html).not.toContain('<script>profile()</script>')
     expect(html).not.toContain('<script>version()</script>')
     expect(html).not.toContain('<script>latest()</script>')
+    expect(html).not.toContain('<img src=x onerror=device()>')
+    expect(html).not.toContain('<script>fallback()</script>')
     expect(html).toContain('&lt;script&gt;profile()&lt;/script&gt;')
+  })
+
+  test('shows Intel QSV as enabled only when it is the active backend', () => {
+    const html = renderSettings({
+      config,
+      mediaDirectory: '/media',
+      transcodingStatus: {
+        configuredMode: 'auto',
+        activeBackend: 'intel-qsv',
+        hardwareAcceleration: true,
+        device: '/dev/dri/renderD128',
+      },
+    })
+
+    expect(html).toContain('id="transcoding-status"')
+    expect(html).toContain('Hardware transcoding is enabled and active.')
+    expect(html).toContain('Automatic (Intel QSV with CPU fallback)')
+    expect(html).toContain('Intel Quick Sync (QSV)')
+    expect(html).toContain('/dev/dri/renderD128')
+    expect(html).toContain('TOASTTV_TRANSCODING_MODE')
+  })
+
+  test('shows the actual CPU fallback and its reason', () => {
+    const html = renderSettings({
+      config,
+      mediaDirectory: '/media',
+      transcodingStatus: {
+        configuredMode: 'intel-qsv',
+        activeBackend: 'software',
+        hardwareAcceleration: false,
+        device: '/dev/dri/renderD128',
+        fallbackReason: 'QSV smoke test failed',
+      },
+    })
+
+    expect(html).toContain('Hardware transcoding is unavailable; CPU fallback is active.')
+    expect(html).toContain('Hardware Unavailable')
+    expect(html).toContain('Active encoder</dt><dd>CPU software encoding')
+    expect(html).toContain('Fallback reason: QSV smoke test failed')
+  })
+
+  test('shows concise CPU status when hardware transcoding is disabled', () => {
+    const html = renderSettings({
+      config,
+      mediaDirectory: '/media',
+      transcodingStatus: {
+        configuredMode: 'software',
+        activeBackend: 'software',
+        hardwareAcceleration: false,
+      },
+    })
+
+    expect(html).toContain('Hardware transcoding is disabled; CPU software encoding is active.')
+    expect(html).not.toContain('Fallback reason:')
   })
 })

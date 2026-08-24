@@ -40,15 +40,21 @@ import { createClientPresenceController } from './controllers/ClientPresenceCont
 import { mutationOriginGuard } from './middleware/mutationOriginGuard'
 import { ContinuousChannelWorkerManager } from './services/ContinuousChannelWorkerManager'
 import { FfmpegContinuousHlsPipelineFactory } from './services/FfmpegContinuousHlsPipelineFactory'
+import {
+  resolveFfmpegTranscodingBackend,
+  type FfmpegTranscodingStatus,
+} from './services/FfmpegTranscodingBackend'
 import { ChannelLogoStore } from './services/ChannelLogoStore'
 import { BunChannelWorkerFiles } from './services/BunChannelWorkerFiles'
 import { ChannelTimelineResolverService } from './services/ChannelTimelineResolverService'
 import { createChannelStreamController } from './controllers/ChannelStreamController'
+import { loadRuntimeConfig, type RuntimeConfig } from './config/runtime'
 
 export interface ServerResult {
   app: Hono
   playbackService: PlaybackService
   channelWorkers: ContinuousChannelWorkerManager
+  transcodingStatus: FfmpegTranscodingStatus
 }
 
 /** Allow the credentialless packaged TV app to call only the read-only v1 API. */
@@ -71,7 +77,10 @@ export function applyClientApiCors(app: Hono): void {
   )
 }
 
-export async function createServer(daemon: ToastTVDaemon): Promise<ServerResult> {
+export async function createServer(
+  daemon: ToastTVDaemon,
+  runtime: RuntimeConfig = loadRuntimeConfig()
+): Promise<ServerResult> {
   const app = new Hono()
   app.use('*', mutationOriginGuard)
 
@@ -106,6 +115,10 @@ export async function createServer(daemon: ToastTVDaemon): Promise<ServerResult>
   )
   const clientPresenceService = new ClientPresenceService()
   const channelLogos = new ChannelLogoStore(getDataPath('channel-logos'))
+  const transcodingStatus = await resolveFfmpegTranscodingBackend({
+    mode: runtime.transcodingMode,
+    qsvDevice: runtime.qsvDevice,
+  })
   const channelTimeline = new ChannelTimelineResolverService(
     channelService,
     mediaDeliveryService,
@@ -115,7 +128,13 @@ export async function createServer(daemon: ToastTVDaemon): Promise<ServerResult>
   )
   const channelWorkers = new ContinuousChannelWorkerManager(
     channelTimeline,
-    new FfmpegContinuousHlsPipelineFactory(),
+    new FfmpegContinuousHlsPipelineFactory(
+      'ffmpeg',
+      undefined,
+      undefined,
+      undefined,
+      transcodingStatus
+    ),
     new BunChannelWorkerFiles(),
     {
       outputRoot: getDataPath('streams'),
@@ -180,6 +199,7 @@ export async function createServer(daemon: ToastTVDaemon): Promise<ServerResult>
     config: configService,
     media: mediaService,
     hardware: daemon.getHardwareService(),
+    transcodingStatus,
     update: updateService,
     onInterludeUpdated: async (policy) => {
       channelService.setInterludePolicy(policy)
@@ -201,7 +221,11 @@ export async function createServer(daemon: ToastTVDaemon): Promise<ServerResult>
           .administrationSnapshot()
           .channels.filter(
             (channel) =>
-              !channel.branding || channel.branding.mode === 'inherit'
+              channel.branding?.burnIn === true &&
+              (channel.branding.mode === 'inherit' ||
+                channel.slots.some(
+                  (slot) => slot.branding?.mode === 'inherit'
+                ))
           )
           .map((channel) => channel.id)
       )
@@ -233,11 +257,16 @@ export async function createServer(daemon: ToastTVDaemon): Promise<ServerResult>
   const channelController = createChannelController({
     channels: channelService,
     logos: channelLogos,
-    onBrandingUpdated: async (channelId) => {
-      await channelWorkers.restart(
-        channelId,
-        'Channel branding configuration changed'
-      )
+    branding: channelTimeline,
+    onChannelChanged: async (channelId, mode) => {
+      if (mode === 'deactivate') {
+        await channelWorkers.deactivate(channelId)
+      } else {
+        await channelWorkers.restart(
+          channelId,
+          'Channel schedule or branding configuration changed'
+        )
+      }
     },
   })
 
@@ -270,7 +299,22 @@ export async function createServer(daemon: ToastTVDaemon): Promise<ServerResult>
   })
   const artworkController = createArtworkController(artworkService)
   const metadataSettingsController = createMetadataSettingsController(
-    metadataService
+    metadataService,
+    async () => {
+      await daemon.getEngine().refreshCache(true)
+      await playbackService.reconcilePrequeue()
+      await Promise.all(
+        channelWorkers
+          .listStates()
+          .filter((state) => state.viewerCount > 0)
+          .map((state) =>
+            channelWorkers.restart(
+              state.channelId,
+              'Library metadata and policy re-evaluation completed'
+            )
+          )
+      )
+    }
   )
   const clientPresenceController = createClientPresenceController({
     presence: clientPresenceService,
@@ -334,5 +378,5 @@ export async function createServer(daemon: ToastTVDaemon): Promise<ServerResult>
     return c.html(renderDashboard(updateInfo?.updateAvailable))
   })
 
-  return { app, playbackService, channelWorkers }
+  return { app, playbackService, channelWorkers, transcodingStatus }
 }

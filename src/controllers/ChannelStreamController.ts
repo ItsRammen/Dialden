@@ -147,7 +147,12 @@ function hasChannel(
   channels: Pick<ChannelService, 'list'>,
   channelId: string
 ): boolean {
-  return channels.list().channels.some((channel) => channel.id === channelId)
+  return channels
+    .list()
+    .channels.some(
+      (channel) =>
+        channel.id === channelId && channel.enabled && channel.onAir
+    )
 }
 
 async function waitForOutput(
@@ -157,6 +162,7 @@ async function waitForOutput(
 ): Promise<ReturnType<typeof Bun.file> | null> {
   const file = Bun.file(path)
   for (let attempt = 0; attempt < 120; attempt++) {
+    if (shouldStop()) return null
     if (
       (await file.exists()) &&
       (!Number.isFinite(minimumModifiedAt) ||
@@ -165,7 +171,6 @@ async function waitForOutput(
     ) {
       return file
     }
-    if (shouldStop()) return null
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
   return null

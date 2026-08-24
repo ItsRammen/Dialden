@@ -17,6 +17,8 @@ export interface MetadataSettingsDraft {
 export interface MetadataSettingsRenderOptions {
   readonly saved?: boolean
   readonly testResult?: 'success' | 'failed'
+  readonly reevaluationStarted?: boolean
+  readonly reevaluationUnavailable?: boolean
   readonly errors?: Partial<Record<MetadataConfigField, string>>
   /** Non-secret values may be redisplayed after validation. */
   readonly draft?: MetadataSettingsDraft
@@ -202,6 +204,20 @@ export function renderMetadataSettings(
         </div>
       </form>
 
+      <section class="settings-card metadata-settings-card metadata-maintenance">
+        <div class="card-header metadata-card-heading">
+          <div>
+            <p class="metadata-step">Library maintenance</p>
+            <h2>Re-evaluate matches and policy</h2>
+          </div>
+        </div>
+        <p>Search automatic TMDB matches again, refresh genres, networks, studios, episode details, and ratings, then recalculate the Kids 7 policy and channel categories.</p>
+        <p class="hint"><strong>Parent approve and Parent block choices are preserved.</strong> Manually confirmed TMDB identities stay locked and are refreshed without choosing a different title.</p>
+        <form method="post" action="/settings/metadata/reevaluate" onsubmit="return confirm('Re-evaluate metadata and automatic policy decisions for the whole library? This may make many TMDB requests.');">
+          <button class="btn btn-secondary" type="submit" ${config.configured ? '' : 'disabled'}>Re-evaluate entire library</button>
+        </form>
+      </section>
+
       <aside class="metadata-settings-note">
         <strong>About existing environment values</strong>
         <p><code>TMDB_API_KEY</code>, language, region, and timeout environment values are used only as bootstrap defaults until this page is saved. Saved appdata settings take precedence on later starts.</p>
@@ -229,6 +245,12 @@ export function renderMetadataTestResult(
 function renderPageAlert(options: MetadataSettingsRenderOptions): string {
   const messages: string[] = []
   if (options.saved) messages.push('Metadata settings saved in appdata.')
+  if (options.reevaluationStarted) {
+    messages.push('Library re-evaluation started. Progress appears on the dashboard and library pages.')
+  }
+  if (options.reevaluationUnavailable) {
+    messages.push('Configure a TMDB API key before re-evaluating the library.')
+  }
   if (options.testResult === 'success') messages.push('TMDB connection succeeded.')
   if (options.testResult === 'failed') {
     messages.push('TMDB connection failed. Check the key and server network access.')
@@ -238,7 +260,9 @@ function renderPageAlert(options: MetadataSettingsRenderOptions): string {
   }
   if (messages.length === 0) return ''
   const tone =
-    options.testResult === 'failed' || Object.keys(options.errors ?? {}).length > 0
+    options.testResult === 'failed' ||
+    options.reevaluationUnavailable ||
+    Object.keys(options.errors ?? {}).length > 0
       ? 'warning'
       : 'success'
   return `<div class="metadata-page-alert ${tone}" role="status">${messages.map(escapeHtml).join(' ')}</div>`

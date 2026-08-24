@@ -29,4 +29,26 @@ describe('cleanFilename', () => {
   it('handles filename with only extension', () => {
     expect(cleanFilename('.mp4')).toBe('')
   })
+
+  it('removes Sonarr quality and provider ID blocks', () => {
+    expect(
+      cleanFilename(
+        "Franklin's Gloomy Day + Franklin Tells Time [SDTV 10bit AV1 AAC 2 0 Sonarr]{imdb-tt0203254}{tvdb-78150}.mkv"
+      )
+    ).toBe("Franklin's Gloomy Day + Franklin Tells Time")
+  })
+
+  it('removes bare WEB-DL and resolution suffixes from episode titles', () => {
+    expect(
+      cleanFilename("Ryan's Kick-Flipping Playdate-WEB-DL-1080p.mkv")
+    ).toBe("Ryan's Kick-Flipping Playdate")
+    expect(cleanFilename("Ryan's Mystery Playdate - 1080p.mkv")).toBe(
+      "Ryan's Mystery Playdate"
+    )
+  })
+
+  it('preserves legitimate numeric and hyphenated titles', () => {
+    expect(cleanFilename('Room 104.mkv')).toBe('Room 104')
+    expect(cleanFilename('Catch-22.mkv')).toBe('Catch-22')
+  })
 })

@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import type { AppConfig } from '../repositories/ConfigRepository'
 import type {
   ChannelBrandingPolicy,
@@ -17,19 +18,70 @@ import type { MediaDeliveryService } from './MediaDeliveryService'
 type ChannelRuntimeConfig = Pick<AppConfig, 'session'> &
   Partial<Pick<AppConfig, 'logo'>>
 
+export interface ChannelBrandingPresentation {
+  readonly enabled: boolean
+  readonly logoUrl?: string
+}
+
+interface ResolvedChannelBranding {
+  readonly policy: ChannelBrandingPolicy
+  readonly logoId?: string
+}
+
 /** Adapts the deterministic public guide to safe, absolute worker inputs. */
 export class ChannelTimelineResolverService implements ChannelTimelineResolver {
   constructor(
-    private readonly channels: Pick<ChannelService, 'getNow' | 'getGuide'> &
-      Partial<Pick<ChannelService, 'administrationSnapshot'>>,
+    private readonly channels: Pick<ChannelService, 'getGuide'> &
+      Partial<Pick<ChannelService, 'getNow' | 'administrationSnapshot'>>,
     private readonly media: Pick<
       MediaDeliveryService,
       'resolveForChannelWorker'
     >,
     private readonly repository: Pick<IMediaRepository, 'getById'>,
     private readonly config?: () => Promise<ChannelRuntimeConfig>,
-    private readonly logos?: Pick<ChannelLogoStore, 'path'>
+    private readonly logos?: Pick<ChannelLogoStore, 'path'> &
+      Partial<Pick<ChannelLogoStore, 'has'>>,
+    private readonly sourceExists: (path: string) => boolean = existsSync
   ) {}
+
+  /** Effective logo metadata for the client UI at the authoritative response time. */
+  async presentation(
+    channelId: string,
+    at = new Date()
+  ): Promise<ChannelBrandingPresentation> {
+    const channel = this.channel(channelId)
+    if (!channel) return { enabled: false }
+    const selected = this.resolveBranding(channel, at)
+    if (selected.policy.mode === 'off') return { enabled: false }
+
+    if (selected.policy.mode === 'custom') {
+      if (!this.logos) return { enabled: false }
+      const available = this.logos.has
+        ? this.logos.has(channel.id, selected.logoId)
+        : this.sourceExists(this.logos.path(channel.id, selected.logoId))
+      if (!available) {
+        return { enabled: false }
+      }
+      const base = `/channels/${encodeURIComponent(channel.id)}/logo`
+      return {
+        enabled: true,
+        logoUrl: selected.logoId
+          ? `${base}?variant=${encodeURIComponent(selected.logoId)}`
+          : base,
+      }
+    }
+
+    const runtime = await this.config?.()
+    const global = runtime?.logo
+    if (
+      !global?.enabled ||
+      !global.imagePath ||
+      !this.sourceExists(global.imagePath)
+    ) {
+      return { enabled: false }
+    }
+    return { enabled: true, logoUrl: '/logo' }
+  }
 
   async overlay(channelId: string, at = new Date()): Promise<ChannelVideoOverlay | null> {
     const channel = this.channel(channelId)
@@ -42,25 +94,27 @@ export class ChannelTimelineResolverService implements ChannelTimelineResolver {
     at: Date,
     runtime?: ChannelRuntimeConfig
   ): ChannelVideoOverlay | null {
-    const slotBranding = activeSlot(channel, at)?.branding
-    const branding =
-      slotBranding?.mode === 'inherit'
-        ? defaultBranding('inherit')
-        : slotBranding?.mode === 'off'
-          ? defaultBranding('off')
-          : slotBranding?.mode === 'custom'
-            ? { ...(channel.branding ?? defaultBranding('custom')), mode: 'custom' as const }
-            : channel.branding ?? defaultBranding('inherit')
-    if (branding.mode === 'off') return null
+    const selected = this.resolveBranding(channel, at)
+    const branding = selected.policy
+    if (branding.mode === 'off' || branding.burnIn !== true) return null
     if (branding.mode === 'custom') {
       if (!this.logos) return null
+      if (this.logos.has && !this.logos.has(channel.id, selected.logoId)) {
+        return null
+      }
       return {
-        sourcePath: this.logos.path(channel.id, slotBranding?.mode === 'custom' ? slotBranding.logoId : undefined),
+        sourcePath: this.logos.path(channel.id, selected.logoId),
         ...brandingValues(branding),
       }
     }
     const global = runtime?.logo
-    if (!global?.enabled || !global.imagePath) return null
+    if (
+      !global?.enabled ||
+      !global.imagePath ||
+      !this.sourceExists(global.imagePath)
+    ) {
+      return null
+    }
     return {
       sourcePath: global.imagePath,
       opacity: clamp(global.opacity / 255, 0, 1),
@@ -69,6 +123,32 @@ export class ChannelTimelineResolverService implements ChannelTimelineResolver {
       y: boundedInteger(global.y, 8, 0, 500),
       sizePercent: 12,
     }
+  }
+
+  private resolveBranding(
+    channel: LibraryChannelPolicy,
+    at: Date
+  ): ResolvedChannelBranding {
+    const channelBranding = channel.branding ?? defaultBranding('inherit')
+    const slotBranding = activeSlot(channel, at)?.branding
+    if (slotBranding?.mode === 'inherit') {
+      return {
+        policy: {
+          ...defaultBranding('inherit'),
+          ...(channelBranding.burnIn === true ? { burnIn: true } : {}),
+        },
+      }
+    }
+    if (slotBranding?.mode === 'off') {
+      return { policy: defaultBranding('off') }
+    }
+    if (slotBranding?.mode === 'custom') {
+      return {
+        policy: { ...channelBranding, mode: 'custom' },
+        logoId: slotBranding.logoId,
+      }
+    }
+    return { policy: channelBranding }
   }
 
   async resolve(
@@ -84,36 +164,53 @@ export class ChannelTimelineResolverService implements ChannelTimelineResolver {
     minimumItems: number
   ): Promise<readonly ChannelTimelinePosition[]> {
     const hours = Math.min(24, Math.max(1, Math.ceil(minimumItems * 2)))
-    const [now, guide] = await Promise.all([
-      this.channels.getNow(channelId),
-      this.channels.getGuide(channelId, hours),
-    ])
-    if (!now || !guide || !now.program) return []
+    // One guide response owns the catalog, timeline revision, and clock sample.
+    // Combining an independently generated /now response with a guide can
+    // straddle a schedule boundary and briefly start the previous programme.
+    const guide = await this.channels.getGuide(channelId, hours)
+    if (!guide) return []
 
     const ordered = guide.programs.filter(
-      (program) => Date.parse(program.scheduledEnd) > now.serverTimeMs
+      (program) => Date.parse(program.scheduledEnd) > guide.serverTimeMs
     )
     const currentIndex = ordered.findIndex(
-      (program) => program.id === now.program?.id
+      (program) =>
+        Date.parse(program.scheduledStart) <= guide.serverTimeMs &&
+        guide.serverTimeMs < Date.parse(program.scheduledEnd)
     )
-    const window = (currentIndex >= 0 ? ordered.slice(currentIndex) : [now.program])
+    if (currentIndex < 0) return []
+    const current = ordered[currentIndex]!
+    const window = ordered
+      .slice(currentIndex)
       .slice(0, Math.max(1, minimumItems))
     const result: ChannelTimelinePosition[] = []
     const channel = this.channel(channelId)
-    const runtime = await this.config?.()
+    const [runtime, resolvedWindow] = await Promise.all([
+      this.config?.(),
+      Promise.all(
+        window.map((program) =>
+          this.media.resolveForChannelWorker(program.mediaId)
+        )
+      ),
+    ])
 
     for (let index = 0; index < window.length; index++) {
       const program = window[index]
       if (!program) continue
-      const resolved = await this.media.resolveForChannelWorker(program.mediaId)
+      const resolved = resolvedWindow[index]
       if (!resolved) break
-      const isCurrent = program.id === now.program.id
-      const elapsed = isCurrent ? now.program.offsetSeconds : 0
+      const isCurrent = program.id === current.id
+      const elapsed = isCurrent
+        ? Math.max(
+            0,
+            (guide.serverTimeMs - Date.parse(program.scheduledStart)) / 1000
+          )
+        : 0
       const startAt = new Date(
         Date.parse(program.scheduledStart) + elapsed * 1_000
       )
       const remaining = Math.max(0.001, program.sourceDurationSeconds - elapsed)
-      const parts = channel
+      const parts = channel?.branding?.burnIn === true
         ? brandingSlices(channel, startAt, remaining)
         : [{ at: startAt, offsetSeconds: 0, durationSeconds: remaining }]
       for (let partIndex = 0; partIndex < parts.length; partIndex++) {

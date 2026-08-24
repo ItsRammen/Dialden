@@ -245,6 +245,68 @@ describe('metadata enrichment and policy integration', () => {
     expect(await repository.getAllVideos()).toHaveLength(1)
   })
 
+  test('re-searches automatic matches while preserving explicit parent overrides', async () => {
+    const collection = await addCollection('Bluey', 2018)
+    const original = new MetadataEnrichmentService(
+      repository,
+      providerFor({
+        candidates: [
+          {
+            provider: 'tmdb',
+            externalId: '111',
+            mediaType: 'tv',
+            title: 'Bluey',
+            year: 2018,
+          },
+        ],
+        certification: 'TV-Y7',
+      }),
+      runtimeConfig
+    )
+    await original.runPending()
+    await repository.updateCollectionOverride(collection.id, 'allow')
+
+    const reevaluator = new MetadataEnrichmentService(
+      repository,
+      providerFor({
+        candidates: [
+          {
+            provider: 'tmdb',
+            externalId: '222',
+            mediaType: 'tv',
+            title: 'Bluey',
+            year: 2018,
+          },
+        ],
+        certification: 'TV-14',
+        detailsForLanguage(_language, candidate) {
+          return {
+            ...candidate,
+            genres: ['Documentary'],
+            networks: ['BBC One'],
+            studios: ['BBC Studios'],
+          }
+        },
+      }),
+      runtimeConfig
+    )
+
+    expect(await reevaluator.reevaluateLibrary()).toMatchObject({
+      status: 'completed',
+      processed: 1,
+      matched: 1,
+    })
+    expect(await repository.getCollectionById(collection.id)).toMatchObject({
+      metadataExternalId: '222',
+      genres: ['Documentary'],
+      networks: ['BBC One'],
+      studios: ['BBC Studios'],
+      policyDecision: 'block',
+      parentOverride: 'allow',
+      effectiveDecision: 'allow',
+    })
+  })
+
   test('retries without the year when a regional release year hides the exact title', async () => {
     const collection = await addCollection('A Close Shave', 1995)
     const exact: MetadataCandidate = {

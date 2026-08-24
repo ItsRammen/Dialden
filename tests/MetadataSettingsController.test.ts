@@ -33,6 +33,7 @@ function service(overrides: Record<string, unknown> = {}) {
     updateConfiguration: async () => {},
     testConfiguration: async () => {},
     runPending: async () => state,
+    reevaluateLibrary: async () => state,
     ...overrides,
   }
 }
@@ -207,5 +208,45 @@ describe('metadata settings controller', () => {
     expect(html).toContain('TMDB connection failed')
     expect(html).not.toContain(secret)
     expect(html).not.toContain('upstream URL')
+  })
+
+  test('starts a whole-library re-evaluation and refreshes schedules afterward', async () => {
+    let reevaluations = 0
+    let refreshes = 0
+    const metadata = service({
+      async reevaluateLibrary() {
+        reevaluations++
+        return state
+      },
+    })
+    const app = new Hono()
+    app.route(
+      '/',
+      createMetadataSettingsController(metadata as never, async () => {
+        refreshes++
+      })
+    )
+
+    const response = await app.request('/settings/metadata/reevaluate', {
+      method: 'POST',
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(response.status).toBe(303)
+    expect(response.headers.get('location')).toBe(
+      '/settings/metadata?reevaluate=started'
+    )
+    expect(reevaluations).toBe(1)
+    expect(refreshes).toBe(1)
+  })
+
+  test('explains that re-evaluation preserves explicit parent decisions', async () => {
+    const response = await appFor(service()).request('/settings/metadata')
+    const html = await response.text()
+
+    expect(html).toContain('Re-evaluate entire library')
+    expect(html).toContain('Parent approve and Parent block choices are preserved')
+    expect(html).toContain('Manually confirmed TMDB identities stay locked')
   })
 })

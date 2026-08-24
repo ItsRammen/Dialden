@@ -6,6 +6,8 @@
  * fuzzy title matching or make policy decisions.
  */
 
+import { cleanMediaTitle } from '../utils/cleanFilename'
+
 export type CollectionLibraryKind = 'tv' | 'movie'
 
 export interface CollectionTitleParts {
@@ -31,8 +33,14 @@ export interface CollectionIdentityInput {
   readonly relativePath: string
 }
 
+export interface EpisodeRange {
+  readonly seasonNumber: number
+  readonly episodeNumber: number
+  readonly endEpisodeNumber: number | null
+}
+
 const TERMINAL_YEAR = /^(.*?)\s*\(((?:18|19|20|21)\d{2})\)\s*$/
-const EPISODE_TOKEN = /\bS(\d{1,3})E(\d{1,4})\b/i
+const EPISODE_TOKEN = /\bS(\d{1,3})E(\d{1,4})(?:(?:\s*[-+]\s*E?|E)(\d{1,4}))?\b/i
 const SEASON_DIRECTORY = /^Season[\s._-]*(\d{1,3})$/i
 
 /**
@@ -116,6 +124,32 @@ export function deriveCollectionIdentity(
   }
 }
 
+/** Parse both ordinary and multi-episode Sonarr/Plex tokens. */
+export function parseEpisodeRange(value: string): EpisodeRange | null {
+  const match = EPISODE_TOKEN.exec(value)
+  const seasonNumber = parseInteger(match?.[1])
+  const episodeNumber = parseInteger(match?.[2])
+  const endEpisodeNumber = parseInteger(match?.[3])
+  if (seasonNumber === null || episodeNumber === null) return null
+  return {
+    seasonNumber,
+    episodeNumber,
+    endEpisodeNumber:
+      endEpisodeNumber !== null && endEpisodeNumber > episodeNumber
+        ? endEpisodeNumber
+        : null,
+  }
+}
+
+/** Re-derive the human episode title from the current filename. */
+export function parseEpisodeDisplayTitle(value: string): string | null {
+  const fileStem = stripExtension(value)
+  const match = EPISODE_TOKEN.exec(fileStem)
+  return match
+    ? parseEpisodeTitle(fileStem, match.index, match[0].length)
+    : null
+}
+
 function parseRelativeSegments(value: string): string[] | null {
   if (!value || value.includes('\0')) return null
   const normalized = value.replace(/\\/g, '/')
@@ -154,7 +188,6 @@ function parseEpisodeTitle(
   const suffix = fileStem
     .slice(tokenIndex + tokenLength)
     .replace(/^[\s._-]+/, '')
-    .replace(/_/g, ' ')
-  const title = normalizeDisplayWhitespace(suffix)
+  const title = normalizeDisplayWhitespace(cleanMediaTitle(suffix))
   return title || null
 }

@@ -5,7 +5,9 @@
   if (modal) {
     document.documentElement.classList.add('channel-modal-open')
     document.addEventListener('keydown', function (event) {
-      if (event.key === 'Escape') window.location.href = '/channels'
+      if (event.key === 'Escape') {
+        window.location.href = modal.getAttribute('data-modal-close-href') || '/channels'
+      }
     })
     var firstControl = modal.querySelector('input:not([type="hidden"]), button, select, textarea')
     if (firstControl) firstControl.focus()
@@ -14,15 +16,137 @@
   var branding = document.querySelector('[data-branding-editor]')
   if (branding) {
     var brandingCustom = branding.querySelector('[data-branding-custom]')
-    var refreshBranding = function () {
+    var burnInToggle = branding.querySelector('[data-branding-burn-in]')
+    var burnInNote = branding.querySelector('[data-branding-burn-in-note]')
+    var burnInOptions = branding.querySelectorAll('[data-branding-burn-in-options]')
+    var logoFile = branding.querySelector('[data-logo-file]')
+    var logoPreview = branding.querySelector('[data-logo-preview]')
+    var logoPlaceholder = branding.querySelector('[data-logo-placeholder]')
+    var logoScreen = branding.querySelector('[data-logo-screen]')
+    var logoPosition = branding.querySelector('[data-logo-position]')
+    var logoSize = branding.querySelector('[data-logo-size]')
+    var logoOpacity = branding.querySelector('[data-logo-opacity]')
+    var logoX = branding.querySelector('[data-logo-x]')
+    var logoY = branding.querySelector('[data-logo-y]')
+    var sizeOutput = branding.querySelector('[data-logo-size-output]')
+    var opacityOutput = branding.querySelector('[data-logo-opacity-output]')
+    var previewCaption = branding.querySelector('[data-logo-preview-caption]')
+    var originalLogoSrc = logoPreview ? logoPreview.getAttribute('src') : ''
+
+    var selectedBrandingMode = function () {
       var selected = branding.querySelector('input[name="brandingMode"]:checked')
-      if (brandingCustom) brandingCustom.hidden = !selected || selected.value !== 'custom'
+      return selected ? selected.value : 'inherit'
     }
+
+    var burnInEnabled = function () {
+      return selectedBrandingMode() !== 'off' && !!burnInToggle && burnInToggle.checked
+    }
+
+    var refreshLogoPreview = function () {
+      if (!logoPreview || !logoScreen) return
+      var position = logoPosition ? logoPosition.value : '2'
+      var size = logoSize ? Number(logoSize.value) : 12
+      var opacity = logoOpacity ? Number(logoOpacity.value) : 210
+      var x = logoX ? Math.min(Number(logoX.value) || 0, 500) : 24
+      var y = logoY ? Math.min(Number(logoY.value) || 0, 500) : 24
+      var burnIn = burnInEnabled()
+      logoScreen.setAttribute('data-position', position)
+      logoScreen.setAttribute('data-burn-in', String(burnIn))
+      logoPreview.style.width = burnIn ? size + '%' : '28%'
+      logoPreview.style.opacity = burnIn ? String(opacity / 255) : '1'
+      logoPreview.style.setProperty('--logo-x', Math.min(x / 8, 40) + 'px')
+      logoPreview.style.setProperty('--logo-y', Math.min(y / 8, 40) + 'px')
+      if (sizeOutput) sizeOutput.textContent = size + '%'
+      if (opacityOutput) opacityOutput.textContent = Math.round((opacity / 255) * 100) + '%'
+      if (previewCaption) {
+        previewCaption.textContent = burnIn
+          ? 'Burn-in preview · final video'
+          : 'App logo preview · video remains clean'
+      }
+    }
+
+    var refreshBranding = function () {
+      var mode = selectedBrandingMode()
+      var burnIn = mode !== 'off' && !!burnInToggle && burnInToggle.checked
+      if (brandingCustom) brandingCustom.hidden = mode !== 'custom'
+      if (logoFile) logoFile.disabled = mode !== 'custom'
+      if (burnInToggle) {
+        burnInToggle.disabled = mode === 'off'
+        if (mode === 'off') burnInToggle.checked = false
+        burnIn = mode !== 'off' && burnInToggle.checked
+      }
+      Array.prototype.forEach.call(burnInOptions, function (option) {
+        option.hidden = !burnIn
+      })
+      if (burnInNote) {
+        burnInNote.textContent = mode === 'off'
+          ? 'Choose a global or custom logo before enabling burn-in.'
+          : burnIn
+            ? 'The logo will appear in apps and in the encoded video.'
+            : 'App-only is recommended: the logo remains hideable by each client.'
+      }
+      refreshLogoPreview()
+    }
+
+    branding.addEventListener('input', refreshLogoPreview)
     branding.addEventListener('change', function (event) {
-      if (event.target && event.target.name === 'brandingMode') refreshBranding()
+      if (
+        event.target &&
+        (event.target.name === 'brandingMode' || event.target.name === 'brandingBurnIn')
+      ) {
+        refreshBranding()
+        return
+      }
+      refreshLogoPreview()
     })
+    if (logoFile) {
+      logoFile.addEventListener('change', function () {
+        var file = logoFile.files && logoFile.files[0]
+        if (!logoPreview) return
+        if (!file) {
+          if (originalLogoSrc) {
+            logoPreview.src = originalLogoSrc
+            logoPreview.hidden = false
+            if (logoPlaceholder) logoPlaceholder.hidden = true
+          } else {
+            logoPreview.removeAttribute('src')
+            logoPreview.hidden = true
+            if (logoPlaceholder) logoPlaceholder.hidden = false
+          }
+          refreshLogoPreview()
+          return
+        }
+        var reader = new FileReader()
+        reader.addEventListener('load', function () {
+          logoPreview.src = String(reader.result || '')
+          logoPreview.hidden = false
+          if (logoPlaceholder) logoPlaceholder.hidden = true
+          refreshLogoPreview()
+        })
+        reader.readAsDataURL(file)
+      })
+    }
     refreshBranding()
   }
+
+  Array.prototype.forEach.call(
+    document.querySelectorAll('[data-marathon-settings]'),
+    function (settings) {
+      var toggle = settings.querySelector('[data-marathon-enabled]')
+      var status = settings.querySelector('[data-marathon-status]')
+      if (!toggle) return
+      var refreshMarathon = function () {
+        settings.setAttribute('data-enabled', String(toggle.checked))
+        if (status) {
+          status.textContent = toggle.checked
+            ? 'Automatic marathons are active.'
+            : 'Off — use the normal mixed lineup.'
+        }
+      }
+      toggle.addEventListener('change', refreshMarathon)
+      refreshMarathon()
+    }
+  )
 
   var editor = document.querySelector('[data-schedule-editor]')
   if (!editor) return

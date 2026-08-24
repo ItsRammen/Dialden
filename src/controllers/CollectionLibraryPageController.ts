@@ -10,6 +10,10 @@ import {
   type CollectionMetadataStatus,
   type CollectionTechnicalViewModel,
 } from '../templates/collectionLibrary'
+import {
+  parseEpisodeDisplayTitle,
+  parseEpisodeRange,
+} from '../domain/CollectionIdentity'
 import type {
   LibrarySummary,
   MediaCollection,
@@ -351,29 +355,42 @@ function collectionDetailModel(
               (left.episodeNumber ?? Number.MAX_SAFE_INTEGER) -
               (right.episodeNumber ?? Number.MAX_SAFE_INTEGER)
           )
-          .map((file) => ({
-            numberLabel:
-              file.episodeNumber === null || file.episodeNumber === undefined
-                ? '—'
-                : String(file.episodeNumber).padStart(2, '0'),
-            title:
-              file.episodeMetadataTitle ||
-              file.episodeTitle ||
-              cleanFilename(file.filename),
-            durationLabel: formatDuration(file.durationSeconds),
-            ...(file.episodeOverview
-              ? { overview: file.episodeOverview }
-              : {}),
-            ...(file.episodeAirDate ? { airDate: file.episodeAirDate } : {}),
-            technicalSummary: [
-              file.codec?.toUpperCase(),
-              file.height ? `${file.height}p` : null,
-              file.compatibility,
-              file.warning,
-            ]
-              .filter(Boolean)
-              .join(' · '),
-          }))
+          .map((file) => {
+            const range = parseEpisodeRange(file.relativePath || file.filename)
+            const parsedTitle =
+              parseEpisodeDisplayTitle(file.relativePath || file.filename) ||
+              file.episodeTitle?.trim()
+            const isMultiEpisode = Boolean(range?.endEpisodeNumber)
+            const providerTitle = file.episodeMetadataTitle?.trim()
+            const multiEpisodeTitle = providerTitle?.includes(' + ')
+              ? providerTitle
+              : parsedTitle
+            return {
+              numberLabel:
+                file.episodeNumber === null || file.episodeNumber === undefined
+                  ? '—'
+                  : range?.endEpisodeNumber
+                    ? `${String(file.episodeNumber).padStart(2, '0')}–${String(range.endEpisodeNumber).padStart(2, '0')}`
+                    : String(file.episodeNumber).padStart(2, '0'),
+              title:
+                (isMultiEpisode ? multiEpisodeTitle : providerTitle) ||
+                parsedTitle ||
+                cleanFilename(file.filename),
+              durationLabel: formatDuration(file.durationSeconds),
+              ...(file.episodeOverview
+                ? { overview: file.episodeOverview }
+                : {}),
+              ...(file.episodeAirDate ? { airDate: file.episodeAirDate } : {}),
+              technicalSummary: [
+                file.codec?.toUpperCase(),
+                file.height ? `${file.height}p` : null,
+                file.compatibility,
+                file.warning,
+              ]
+                .filter(Boolean)
+                .join(' · '),
+            }
+          })
   return {
     ...card,
     overview: collection.overview ?? undefined,

@@ -32,7 +32,7 @@ function program(
 }
 
 describe('ChannelTimelineResolverService', () => {
-  test('resolves custom and inherited channel video overlays', async () => {
+  test('burns channel logos only when explicitly enabled and the source exists', async () => {
     const base = {
       getNow: async () => null,
       getGuide: async () => null,
@@ -46,6 +46,7 @@ describe('ChannelTimelineResolverService', () => {
             slots: [],
             branding: {
               mode: 'custom' as const,
+              burnIn: true,
               opacity: 204,
               position: 8 as const,
               x: 20,
@@ -59,6 +60,46 @@ describe('ChannelTimelineResolverService', () => {
             enabled: true,
             timezone: 'UTC',
             slots: [],
+            branding: {
+              mode: 'inherit' as const,
+              burnIn: true,
+              opacity: 210,
+              position: 2 as const,
+              x: 24,
+              y: 24,
+              sizePercent: 12,
+            },
+          },
+          {
+            id: 'app-only',
+            name: 'App only',
+            enabled: true,
+            timezone: 'UTC',
+            slots: [],
+            branding: {
+              mode: 'custom' as const,
+              opacity: 210,
+              position: 2 as const,
+              x: 24,
+              y: 24,
+              sizePercent: 12,
+            },
+          },
+          {
+            id: 'missing',
+            name: 'Missing',
+            enabled: true,
+            timezone: 'UTC',
+            slots: [],
+            branding: {
+              mode: 'custom' as const,
+              burnIn: true,
+              opacity: 210,
+              position: 2 as const,
+              x: 24,
+              y: 24,
+              sizePercent: 12,
+            },
           },
         ],
         manuallyOffAir: [],
@@ -87,7 +128,11 @@ describe('ChannelTimelineResolverService', () => {
           y: 9,
         },
       }),
-      { path: (id) => `/data/channel-logos/${id}.png` }
+      {
+        path: (id) => `/data/channel-logos/${id}.png`,
+        has: (id) => id !== 'missing',
+      },
+      () => true
     )
 
     expect(await resolver.overlay('kids')).toEqual({
@@ -105,6 +150,170 @@ describe('ChannelTimelineResolverService', () => {
       y: 9,
       sizePercent: 12,
     })
+    expect(await resolver.overlay('app-only')).toBeNull()
+    expect(await resolver.overlay('missing')).toBeNull()
+  })
+
+  test('does not return a stale inherited logo path for burn-in', async () => {
+    const resolver = new ChannelTimelineResolverService(
+      {
+        getGuide: async () => null,
+        administrationSnapshot: () => ({
+          channels: [
+            {
+              id: 'family',
+              name: 'Family',
+              enabled: true,
+              timezone: 'UTC',
+              slots: [],
+              branding: {
+                mode: 'inherit' as const,
+                burnIn: true,
+                opacity: 210,
+                position: 2 as const,
+                x: 24,
+                y: 24,
+                sizePercent: 12,
+              },
+            },
+          ],
+          manuallyOffAir: [],
+          programmingGroups: [],
+          configurationError: null,
+        }),
+      },
+      { resolveForChannelWorker: async () => null },
+      { getById: async () => null },
+      async () => ({
+        session: {
+          limitMinutes: 0,
+          resetHour: 6,
+          introVideoId: null,
+          outroVideoId: null,
+          offAirAssetId: null,
+        },
+        logo: {
+          enabled: true,
+          imagePath: '/data/missing-logo.png',
+          opacity: 210,
+          position: 2,
+          x: 24,
+          y: 24,
+        },
+      }),
+      undefined,
+      () => false
+    )
+
+    expect(await resolver.overlay('family')).toBeNull()
+  })
+
+  test('resolves effective app logo metadata for channel and scheduled branding', async () => {
+    const channel = {
+      id: 'kids',
+      name: 'Kids',
+      enabled: true,
+      timezone: 'UTC',
+      branding: {
+        mode: 'custom' as const,
+        opacity: 210,
+        position: 2 as const,
+        x: 24,
+        y: 24,
+        sizePercent: 12,
+      },
+      slots: [
+        {
+          days: ['mon' as const],
+          start: '18:00',
+          end: '20:00',
+          groups: ['kids'],
+          branding: { mode: 'custom' as const, logoId: 'nick' },
+        },
+        {
+          days: ['mon' as const],
+          start: '20:00',
+          end: '21:00',
+          groups: ['kids'],
+          branding: { mode: 'off' as const },
+        },
+        {
+          days: ['mon' as const],
+          start: '21:00',
+          end: '22:00',
+          groups: ['kids'],
+          branding: { mode: 'inherit' as const },
+        },
+      ],
+    }
+    const resolver = new ChannelTimelineResolverService(
+      {
+        getGuide: async () => null,
+        administrationSnapshot: () => ({
+          channels: [
+            channel,
+            {
+              ...channel,
+              id: 'missing',
+              name: 'Missing',
+              slots: [],
+            },
+            {
+              ...channel,
+              id: 'hidden',
+              name: 'Hidden',
+              branding: { ...channel.branding, mode: 'off' as const },
+              slots: [],
+            },
+          ],
+          manuallyOffAir: [],
+          programmingGroups: ['kids'],
+          configurationError: null,
+        }),
+      },
+      { resolveForChannelWorker: async () => null },
+      { getById: async () => null },
+      async () => ({
+        session: {
+          limitMinutes: 0,
+          resetHour: 6,
+          introVideoId: null,
+          outroVideoId: null,
+          offAirAssetId: null,
+        },
+        logo: {
+          enabled: true,
+          imagePath: '/data/logo.png',
+          opacity: 210,
+          position: 2,
+          x: 24,
+          y: 24,
+        },
+      }),
+      {
+        path: (id, logoId) => `/logos/${id}${logoId ? `--${logoId}` : ''}.png`,
+        has: (id, logoId) => id !== 'missing' && logoId !== 'missing',
+      },
+      (path) => path === '/data/logo.png'
+    )
+
+    expect(
+      await resolver.presentation('kids', new Date('2026-08-24T17:00:00.000Z'))
+    ).toEqual({ enabled: true, logoUrl: '/channels/kids/logo' })
+    expect(
+      await resolver.presentation('kids', new Date('2026-08-24T19:00:00.000Z'))
+    ).toEqual({
+      enabled: true,
+      logoUrl: '/channels/kids/logo?variant=nick',
+    })
+    expect(
+      await resolver.presentation('kids', new Date('2026-08-24T20:30:00.000Z'))
+    ).toEqual({ enabled: false })
+    expect(
+      await resolver.presentation('kids', new Date('2026-08-24T21:30:00.000Z'))
+    ).toEqual({ enabled: true, logoUrl: '/logo' })
+    expect(await resolver.presentation('missing')).toEqual({ enabled: false })
+    expect(await resolver.presentation('hidden')).toEqual({ enabled: false })
   })
 
   test('resolves the live offset plus bumper and next episode as one window', async () => {
@@ -190,6 +399,59 @@ describe('ChannelTimelineResolverService', () => {
     })
   })
 
+  test('cannot mix a stale now result with a newer guide at a program boundary', async () => {
+    const bluey = program(
+      'bluey',
+      1,
+      '2026-08-24T11:30:00.000Z',
+      '2026-08-24T12:00:00.000Z'
+    )
+    const magicSchoolBus = program(
+      'magic-school-bus',
+      2,
+      '2026-08-24T12:00:00.000Z',
+      '2026-08-24T12:30:00.000Z'
+    )
+    let nowCalls = 0
+    const resolver = new ChannelTimelineResolverService(
+      {
+        getNow: async () => {
+          nowCalls += 1
+          return null
+        },
+        getGuide: async () => ({
+          channelId: 'kids',
+          serverTime: '2026-08-24T12:00:01.000Z',
+          serverTimeMs: Date.parse('2026-08-24T12:00:01.000Z'),
+          timezone: 'UTC',
+          timelineRevision: 'boundary-revision',
+          requestedEnd: '2026-08-24T14:00:00.000Z',
+          coverageEnd: magicSchoolBus.scheduledEnd,
+          truncated: false,
+          programs: [bluey, magicSchoolBus],
+        }),
+      },
+      {
+        resolveForChannelWorker: async (id) => ({
+          path: `/media/${id}.mkv`,
+          size: 1,
+          mimeType: 'video/x-matroska',
+          lastModified: new Date(0),
+        }),
+      },
+      { getById: async () => null }
+    )
+
+    const window = await resolver.resolveWindow('kids', new Date(), 1)
+
+    expect(nowCalls).toBe(0)
+    expect(window[0]).toMatchObject({
+      scheduleItemId: 'magic-school-bus',
+      sourcePath: '/media/2.mkv',
+      sourceOffsetSeconds: 1,
+    })
+  })
+
   test('splits a playing item at a scheduled branding boundary', async () => {
     const episode = program(
       'episode-a',
@@ -213,7 +475,7 @@ describe('ChannelTimelineResolverService', () => {
     }
     const channel = {
       id: 'kids', name: 'Kids', enabled: true, timezone: 'UTC',
-      branding: { mode: 'inherit' as const, opacity: 210, position: 2 as const, x: 24, y: 24, sizePercent: 12 },
+      branding: { mode: 'inherit' as const, burnIn: true, opacity: 210, position: 2 as const, x: 24, y: 24, sizePercent: 12 },
       slots: [
         { days: ['mon' as const], start: '00:00', end: '20:00', groups: ['kids'], branding: { mode: 'custom' as const, logoId: 'nick' } },
         { days: ['mon' as const], start: '20:00', end: '24:00', groups: ['kids'], branding: { mode: 'custom' as const, logoId: 'adult-swim' } },

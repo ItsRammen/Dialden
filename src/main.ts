@@ -49,7 +49,7 @@ async function main(): Promise<void> {
     await daemon.start()
 
     // 3. Create web server (requires services from daemon.start())
-    const server = await createServer(daemon)
+    const server = await createServer(daemon, runtime)
     const { app, playbackService } = server
     channelWorkers = server.channelWorkers
 

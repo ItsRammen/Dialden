@@ -22,6 +22,8 @@ describe('SettingsController', () => {
     configService = mock<ConfigService>()
     mediaService = mock<MediaService>()
     updateService = mock<UpdateService>()
+    Object.defineProperty(updateService, 'currentVersion', { value: '0.8.0' })
+    Object.defineProperty(updateService, 'isEnabled', { value: false })
 
     const controller = createSettingsController({
       config: configService,
@@ -96,6 +98,51 @@ describe('SettingsController', () => {
     expect(res.status).toBe(200)
     const json = await res.json()
     expect(json).toEqual({ server: { port: 3000 } })
+  })
+
+  test('GET /settings renders the resolved transcoding backend status', async () => {
+    configService.get.mockResolvedValue({
+      server: { port: 1993 },
+      session: {
+        limitMinutes: 60,
+        resetHour: 6,
+        offAirAssetId: null,
+        introVideoId: null,
+        outroVideoId: null,
+      },
+      interlude: { enabled: true, frequency: 2 },
+      mpv: { ipcSocket: '/tmp/toasttv.sock' },
+      logo: {
+        enabled: false,
+        imagePath: null,
+        opacity: 128,
+        position: 2,
+        x: 8,
+        y: 8,
+      },
+      detection: { cecEnabled: false, heartbeatIntervalMs: 30_000 },
+      playback: { safeMode: true },
+    })
+    mediaService.getMediaDirectory.mockReturnValue('/media')
+    const controller = createSettingsController({
+      config: configService,
+      media: mediaService,
+      update: updateService,
+      transcodingStatus: {
+        configuredMode: 'intel-qsv',
+        activeBackend: 'intel-qsv',
+        hardwareAcceleration: true,
+        device: '/dev/dri/renderD128',
+      },
+    })
+    const local = new Hono().route('/', controller)
+
+    const response = await local.request('/settings')
+    const markup = await response.text()
+
+    expect(response.status).toBe(200)
+    expect(markup).toContain('Hardware transcoding is enabled and active.')
+    expect(markup).toContain('/dev/dri/renderD128')
   })
 
   test('refreshes inherited live channel branding after settings save', async () => {

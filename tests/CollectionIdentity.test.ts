@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import {
   deriveCollectionIdentity,
+  parseEpisodeDisplayTitle,
+  parseEpisodeRange,
   parseCollectionTitle,
 } from '../src/domain/CollectionIdentity'
 
@@ -78,6 +80,45 @@ describe('CollectionIdentity', () => {
     expect(first).toEqual(
       expect.objectContaining({ title: 'Bluey', year: 2018 })
     )
+  })
+
+  test('parses multi-episode Sonarr names without release tags in the title', () => {
+    const identity = deriveCollectionIdentity({
+      libraryKind: 'tv',
+      relativePath:
+        "Franklin/Season 01/Franklin - S01E01-E02 - Franklin's Gloomy Day + Franklin Tells Time [SDTV 10bit AV1 AAC 2 0 Sonarr]{imdb-tt0203254}{tvdb-78150}.mkv",
+    })
+
+    expect(identity).toEqual(
+      expect.objectContaining({
+        seasonNumber: 1,
+        episodeNumber: 1,
+        episodeTitle: "Franklin's Gloomy Day + Franklin Tells Time",
+      })
+    )
+    expect(
+      parseEpisodeRange(
+        "Franklin - S01E01-E02 - Franklin's Gloomy Day + Franklin Tells Time.mkv"
+      )
+    ).toEqual({ seasonNumber: 1, episodeNumber: 1, endEpisodeNumber: 2 })
+  })
+
+  test('preserves multi-episode names while removing a bare quality suffix', () => {
+    const relativePath =
+      "Ryan's Mystery Playdate/Season 01/Ryan's Mystery Playdate - S01E01-E02 - Ryan's Kick-Flipping Playdate + Ryan's Experimental Playdate-WEB-DL-1080p.mkv"
+    const expected =
+      "Ryan's Kick-Flipping Playdate + Ryan's Experimental Playdate"
+
+    expect(
+      deriveCollectionIdentity({ libraryKind: 'tv', relativePath })
+    ).toEqual(
+      expect.objectContaining({
+        seasonNumber: 1,
+        episodeNumber: 1,
+        episodeTitle: expected,
+      })
+    )
+    expect(parseEpisodeDisplayTitle(relativePath)).toBe(expected)
   })
 
   test('does not reinterpret the numeric title 1923 as a year', () => {

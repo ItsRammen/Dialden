@@ -84,6 +84,7 @@ describe('ChannelConfigurationStore', () => {
         ...channel,
         branding: {
           mode: 'custom' as const,
+          burnIn: true,
           opacity: 210,
           position: 2 as const,
           x: 24,
@@ -93,6 +94,17 @@ describe('ChannelConfigurationStore', () => {
       }
       store.save({ channels: [branded], manuallyOffAir: [] })
       expect(store.load().channels[0]?.branding).toEqual(branded.branding)
+
+      store.save({
+        channels: [
+          {
+            ...branded,
+            branding: { ...branded.branding, burnIn: false },
+          },
+        ],
+        manuallyOffAir: [],
+      })
+      expect(store.load().channels[0]?.branding).not.toHaveProperty('burnIn')
 
       expect(() =>
         store.save({
@@ -105,6 +117,114 @@ describe('ChannelConfigurationStore', () => {
           manuallyOffAir: [],
         })
       ).toThrow('branding size')
+
+      expect(() =>
+        store.save({
+          channels: [
+            {
+              ...branded,
+              branding: {
+                ...branded.branding,
+                burnIn: 'yes' as unknown as boolean,
+              },
+            },
+          ],
+          manuallyOffAir: [],
+        })
+      ).toThrow('branding burn-in must be a boolean')
+
+      expect(() =>
+        store.save({
+          channels: [
+            {
+              ...branded,
+              branding: { ...branded.branding, mode: 'off', burnIn: true },
+            },
+          ],
+          manuallyOffAir: [],
+        })
+      ).toThrow('cannot burn in disabled branding')
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  test('persists a validated marathon policy while legacy channels stay unchanged', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'toasttv-channel-marathon-'))
+    try {
+      const store = new ChannelConfigurationStore(join(directory, 'channels.json'))
+      const marathon = {
+        ...channel,
+        marathon: { enabled: true, frequency: 4, episodeCount: 6 },
+      }
+      store.save({ channels: [marathon], manuallyOffAir: [] })
+
+      expect(store.load().channels[0]?.marathon).toEqual(marathon.marathon)
+      expect(
+        new ChannelConfigurationStore(
+          join(directory, 'missing.json'),
+          [channel]
+        ).load().channels[0]
+      ).not.toHaveProperty('marathon')
+
+      expect(() =>
+        store.save({
+          channels: [
+            {
+              ...marathon,
+              marathon: { ...marathon.marathon, frequency: 0 },
+            },
+          ],
+          manuallyOffAir: [],
+        })
+      ).toThrow('marathon frequency')
+      expect(() =>
+        store.save({
+          channels: [
+            {
+              ...marathon,
+              marathon: { ...marathon.marathon, frequency: 101 },
+            },
+          ],
+          manuallyOffAir: [],
+        })
+      ).toThrow('marathon frequency')
+      expect(() =>
+        store.save({
+          channels: [
+            {
+              ...marathon,
+              marathon: { ...marathon.marathon, episodeCount: 1 },
+            },
+          ],
+          manuallyOffAir: [],
+        })
+      ).toThrow('marathon episode count')
+      expect(() =>
+        store.save({
+          channels: [
+            {
+              ...marathon,
+              marathon: { ...marathon.marathon, episodeCount: 21 },
+            },
+          ],
+          manuallyOffAir: [],
+        })
+      ).toThrow('marathon episode count')
+      expect(() =>
+        store.save({
+          channels: [
+            {
+              ...marathon,
+              marathon: {
+                ...marathon.marathon,
+                enabled: 'yes' as unknown as boolean,
+              },
+            },
+          ],
+          manuallyOffAir: [],
+        })
+      ).toThrow('marathon enabled must be a boolean')
     } finally {
       rmSync(directory, { recursive: true, force: true })
     }

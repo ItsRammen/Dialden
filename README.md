@@ -174,6 +174,46 @@ The admin UI defaults to `http://127.0.0.1:1993`; health status is at
 not expose this port to the internet or an untrusted network. To reach it from
 a trusted home LAN, explicitly set `TOASTTV_BIND_ADDRESS=0.0.0.0` in `.env`.
 
+### Optional Intel Quick Sync transcoding
+
+ToastTV defaults to CPU encoding. On a native Linux or Unraid host with an
+Intel Iris/Quick Sync iGPU, set the following deployment variables:
+
+```env
+TOASTTV_TRANSCODING_MODE=auto
+TOASTTV_QSV_DEVICE=/dev/dri/renderD128
+```
+
+`software` always uses `libx264`; `auto` and `intel-qsv` run a real one-frame
+Quick Sync encode test at server startup. If the device, permissions, driver,
+or encoder is unavailable, ToastTV stays online with CPU encoding and shows
+the reason under **Settings → Playback and scheduling → Transcoding**. These are
+read-only process settings, so changing them requires a container restart.
+
+The image invokes the pinned `jellyfin-ffmpeg` build directly and includes its
+Intel user-mode media stack; Jellyfin Server is not installed or required. The
+first implementation offloads H.264 encoding while keeping mixed-codec decode,
+scaling, padding, concatenation, and PNG channel-logo overlays on the CPU. This
+usually removes the largest CPU cost without making the continuous channel
+graph less reliable. A later zero-copy pipeline can move compatible decode and
+filters to the GPU as a separate optimization.
+
+For native Linux Compose, confirm that the render node exists, select `auto` in
+`.env`, and include the optional device override:
+
+```bash
+ls -l /dev/dri/renderD128
+docker compose -f docker-compose.yml -f docker-compose.qsv.yml up -d --build
+```
+
+For Unraid, enable the iGPU on the host, edit the ToastTV template's advanced
+settings, select `/dev/dri/renderD128` for **Intel GPU Render Device**, and set
+**Transcoding Mode** to `auto` or `intel-qsv`. The container adds the mapped
+render node's numeric group when it drops root privileges; privileged mode is
+not required. If the host uses another render node, set both device fields to
+that same path. Intel Quick Sync is not available to this Linux container
+through Docker Desktop on Windows/WSL.
+
 SQLite, thumbnails, cached artwork, parent overrides, editable channel
 definitions, and manual off-air state use the `toasttv-data` Docker volume.
 TV, movies, interludes, and policy are separate read-only bind mounts. Back up
@@ -269,13 +309,19 @@ delete channels and configure timezone and schedule slots. **Auto-build a
 station** can preview and generate an editable station from playable
 collections, TMDB genres, original networks, production studios, or selected
 shows/movies. Presets include all playable shows, family animation, movie night,
-and a clearly unofficial Nickelodeon-style personal mix. Brand-style presets
-filter only the user's parent-allowed local files; they are not affiliated with a
-broadcaster and do not reproduce an original or historical network schedule.
+and separate clearly unofficial Nickelodeon-style and Nick Jr.-style personal
+mixes. Raw network facets remain faithful to TMDB; the Nick Jr. preset also uses
+a conservative preschool-title list when TMDB reports a show only as
+Nickelodeon. Brand-style presets filter only the user's parent-allowed local
+files; they are not affiliated with a broadcaster and do not reproduce an
+original or historical network schedule.
 The individual selector stays browser-bounded and can search titles, genres,
 networks, and studios while retaining already checked collections.
 Generated stations can use all-day, before/after-school, evening, or weekend-
 morning airtime templates; every generated slot remains editable afterward.
+Each channel can optionally insert deterministic episode marathons after a
+configured number of ordinary programmes. Marathon length is configurable,
+movies and bumpers are excluded, and an airtime boundary may shorten a block.
 
 Auto-build persists its exact collection-to-group assignments alongside live
 channel definitions and manual off-air state in `/app/data/channels.json`.

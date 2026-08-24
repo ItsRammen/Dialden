@@ -40,6 +40,157 @@ describe('channel administration template', () => {
     expect(markup).not.toContain('<script>Kids</script>')
   })
 
+  test('opens channel branding in its own preview modal while preserving editor values', () => {
+    const snapshot = {
+      channels: [
+        {
+          id: 'kids',
+          name: 'Kids Club',
+          enabled: true,
+          timezone: 'UTC',
+          slots: [],
+          branding: {
+            mode: 'custom' as const,
+            burnIn: true,
+            opacity: 204,
+            position: 8 as const,
+            x: 20,
+            y: 18,
+            sizePercent: 14,
+          },
+        },
+      ],
+      manuallyOffAir: [],
+      programmingGroups: [],
+      configurationError: null,
+    }
+    const editor = renderChannelAdministration(snapshot, {
+      editId: 'kids',
+      channelLogoIds: ['kids'],
+    })
+    const modal = renderChannelAdministration(snapshot, {
+      brandingId: 'kids',
+      channelLogoIds: ['kids'],
+      channelLogoVariants: { kids: ['adult-swim'] },
+    })
+
+    expect(editor).toContain('href="/channels?edit=kids&amp;branding=kids#branding-modal"')
+    expect(editor).toContain('Apps + burn-in')
+    expect(editor).toContain('name="brandingBurnIn" value="true"')
+    expect(editor).toContain('name="brandingOpacity" value="204"')
+    expect(editor).not.toContain('name="brandingLogo"')
+    expect(modal).toContain('id="branding-modal"')
+    expect(modal).toContain('action="/channels/kids/branding"')
+    expect(modal).toContain('Logo shown in apps')
+    expect(modal).toContain('Hide channel logo')
+    expect(modal).toContain('name="brandingBurnIn" value="true" data-branding-burn-in checked')
+    expect(modal).toContain('viewers cannot hide it in their app')
+    expect(modal).toContain('data-logo-preview')
+    expect(modal).toContain('src="/channels/kids/logo"')
+    expect(modal).toContain('Scheduled logo variants')
+    expect(modal).toContain('Switch app artwork by time block')
+    expect(modal).not.toContain('data-branding-burn-in-file')
+    expect(modal).toContain('<code>adult-swim</code>')
+    expect(modal).toContain('Save branding')
+  })
+
+  test('defaults channel logos to app-only and preserves the choice through the main editor', () => {
+    const snapshot = {
+      channels: [
+        {
+          id: 'news',
+          name: 'News',
+          enabled: true,
+          timezone: 'UTC',
+          slots: [],
+          branding: {
+            mode: 'inherit' as const,
+            opacity: 210,
+            position: 2 as const,
+            x: 24,
+            y: 24,
+            sizePercent: 12,
+          },
+        },
+      ],
+      manuallyOffAir: [],
+      programmingGroups: [],
+      configurationError: null,
+    }
+    const editor = renderChannelAdministration(snapshot, { editId: 'news' })
+    const modal = renderChannelAdministration(snapshot, { brandingId: 'news' })
+
+    expect(editor).toContain('Apps only')
+    expect(editor).toContain('name="brandingBurnIn" value="false"')
+    expect(modal).toContain('App-only is recommended')
+    expect(modal).toContain('name="brandingBurnIn" value="true" data-branding-burn-in >')
+    expect(modal).not.toContain('data-branding-burn-in checked')
+    expect(modal).toContain('data-branding-burn-in-options hidden')
+    expect(modal).toContain('name="brandingVariantLogos"')
+    expect(modal).not.toContain('name="brandingVariantLogos" accept="image/png" multiple disabled')
+  })
+
+  test('renders persisted marathon controls in manual and Auto channel editors', () => {
+    const snapshot = {
+      channels: [
+        {
+          id: 'nick-jr',
+          name: 'Nick Jr. Mix',
+          enabled: true,
+          timezone: 'UTC',
+          slots: [],
+          marathon: { enabled: true, frequency: 10, episodeCount: 5 },
+        },
+      ],
+      manuallyOffAir: [],
+      programmingGroups: [],
+      configurationError: null,
+    }
+    const manual = renderChannelAdministration(snapshot, { editId: 'nick-jr' })
+    const automatic = renderChannelAdministration(snapshot, {
+      automationOpen: true,
+      automationTargetId: 'nick-jr',
+      automationDraft: {
+        id: 'nick-jr',
+        name: 'Nick Jr. Mix',
+        timezone: 'UTC',
+        preset: 'custom',
+        collectionIds: [4],
+        marathon: { enabled: false, frequency: 18, episodeCount: 6 },
+      },
+      automation: {
+        collections: [
+          {
+            id: 4,
+            rootId: 'tv',
+            identityKey: 'paw-patrol',
+            collectionTitle: 'PAW Patrol',
+            displayTitle: 'PAW Patrol',
+            libraryKind: 'tv',
+            genres: ['Animation'],
+            networks: ['Nickelodeon'],
+            studios: [],
+            eligibleFiles: 10,
+          },
+        ],
+        genres: [],
+        networks: [{ name: 'Nickelodeon', collections: 1 }],
+        studios: [],
+        presets: [],
+        truncated: false,
+      },
+    })
+
+    expect(manual).toContain('Episode marathons')
+    expect(manual).toContain('Every 10 programmes · 5 episodes')
+    expect(manual).toContain('name="marathonEnabled" value="true" data-marathon-enabled checked')
+    expect(manual).toContain('name="marathonFrequency" min="2" max="100" step="1" required value="10"')
+    expect(automatic).toContain('name="marathonFrequency" min="2" max="100" step="1" required value="18"')
+    expect(automatic).toContain('name="marathonEpisodeCount" min="2" max="20" step="1" required value="6"')
+    expect(automatic).not.toContain('data-marathon-enabled checked')
+    expect(automatic).toContain('and marathon pattern')
+  })
+
   test('renders an honest auto-build preview with a direct all-day creation action', () => {
     const markup = renderChannelAdministration(
       {
@@ -111,6 +262,7 @@ describe('channel administration template', () => {
     expect(markup).toContain('name="action" value="create"')
     expect(markup).toContain('Preview lineup')
     expect(markup).toContain('name="networks" value="ABC Kids"')
+    expect(markup).toContain('Network and studio checkboxes show TMDB’s exact stored values')
   })
 
   test('search exposes a specific collection beyond the bounded initial picker', () => {

@@ -3,7 +3,10 @@ import type {
   StationBuildPreview,
   StationBuildRequest,
 } from '../services/ChannelService'
-import type { LibraryChannelPolicy } from '../config/library'
+import type {
+  ChannelMarathonPolicy,
+  LibraryChannelPolicy,
+} from '../config/library'
 import type {
   StationAutomationCatalog,
   StationFacet,
@@ -14,6 +17,7 @@ import { escapeHtml } from './utils'
 
 interface ChannelAdministrationOptions {
   readonly editId?: string
+  readonly brandingId?: string
   readonly newChannel?: boolean
   readonly error?: string
   readonly changed?: 'created' | 'updated' | 'deleted' | 'generated'
@@ -32,6 +36,9 @@ export function renderChannelAdministration(
   options: ChannelAdministrationOptions = {}
 ): string {
   const edit = snapshot.channels.find((channel) => channel.id === options.editId)
+  const brandingTarget = snapshot.channels.find(
+    (channel) => channel.id === options.brandingId
+  )
   const automationTarget = snapshot.channels.find(
     (channel) => channel.id === options.automationTargetId
   )
@@ -67,7 +74,7 @@ export function renderChannelAdministration(
       }
       ${
         options.changed
-          ? `<p class="channel-admin-alert channel-admin-alert-success">Channel ${escapeHtml(options.changed)} successfully. The live schedule has been reloaded.</p>`
+          ? `<p class="channel-admin-alert channel-admin-alert-success">Channel ${escapeHtml(options.changed)} successfully. The new configuration is active.</p>`
           : ''
       }
 
@@ -98,6 +105,28 @@ export function renderChannelAdministration(
       }
 
       ${
+        brandingTarget
+          ? renderModal(
+              'branding-modal',
+              renderBrandingEditor(
+                brandingTarget,
+                new Set(options.channelLogoIds ?? []),
+                options.channelLogoVariants?.[brandingTarget.id] ?? []
+              ),
+              `/channels?edit=${encodeURIComponent(brandingTarget.id)}#editor`,
+              `Branding for ${brandingTarget.name}`
+            )
+          : options.brandingId
+            ? renderModal(
+                'branding-modal',
+                '<section class="channel-branding-dialog"><h2>Channel not found</h2><p>The selected channel no longer exists.</p></section>',
+                '/channels',
+                'Channel not found'
+              )
+            : ''
+      }
+
+      ${
         edit || options.newChannel
           ? `${options.newChannel ? '<div class="channel-modal" role="dialog" aria-modal="true" aria-labelledby="manual-editor-title"><a class="channel-modal-backdrop" href="/channels" aria-label="Close station creator"></a><div class="channel-modal-panel"><a class="channel-modal-close" href="/channels" aria-label="Close station creator">×</a>' : ''}<section class="channel-admin-editor" id="editor">
         <header>
@@ -125,7 +154,8 @@ export function renderChannelAdministration(
             </label>
             <label class="channel-admin-checkbox"><input type="checkbox" name="enabled" ${edit?.enabled === false ? '' : 'checked'}> Enabled and visible to TV clients</label>
           </div>
-          ${renderBrandingEditor(edit, new Set(options.channelLogoIds ?? []), edit ? options.channelLogoVariants?.[edit.id] ?? [] : [])}
+          ${renderBrandingSummary(edit, new Set(options.channelLogoIds ?? []))}
+          ${renderMarathonSettings(edit?.marathon)}
           ${renderScheduleDesigner(edit?.slots ?? [], groups, edit ? options.channelLogoVariants?.[edit.id] ?? [] : [])}
           <div class="channel-admin-groups">
             <strong>Groups currently assigned by the library policy</strong>
@@ -144,56 +174,140 @@ export function renderChannelAdministration(
   )
 }
 
-function renderBrandingEditor(
+function renderBrandingSummary(
   channel: LibraryChannelPolicy | undefined,
+  uploadedLogoIds: ReadonlySet<string>
+): string {
+  const branding = channel?.branding ?? defaultBranding()
+  const hasCustomLogo = channel ? uploadedLogoIds.has(channel.id) : false
+  const burnIn = brandingBurnIn(branding)
+  const summary =
+    branding.mode === 'off'
+      ? 'Logo hidden in apps and omitted from the video.'
+      : branding.mode === 'inherit'
+        ? `Using the global logo in apps${burnIn ? ' and burning it into the video.' : '. The video stays clean.'}`
+        : hasCustomLogo
+          ? `Using this channel’s custom logo in apps${burnIn ? ' and burning it into the video.' : '. The video stays clean.'}`
+          : 'Custom app logo selected, but no image has been uploaded yet.'
+  const status =
+    branding.mode === 'off' ? 'Hidden' : burnIn ? 'Apps + burn-in' : 'Apps only'
+  const image =
+    channel && branding.mode === 'custom' && hasCustomLogo
+      ? `<img src="/channels/${encodeURIComponent(channel.id)}/logo" alt="Current ${escapeHtml(channel.name)} logo">`
+      : branding.mode === 'off' && channel && hasCustomLogo
+        ? `<img class="is-hidden" src="/channels/${encodeURIComponent(channel.id)}/logo" alt="Stored ${escapeHtml(channel.name)} logo, currently hidden">`
+        : `<div class="channel-branding-summary-placeholder" aria-hidden="true">${branding.mode === 'inherit' ? 'Global' : branding.mode === 'off' ? 'Off' : 'TV'}</div>`
+  return `<section class="channel-branding-summary">
+    ${brandingHiddenFields(branding)}
+    <div>
+      <p class="channel-admin-eyebrow">Channel identity</p>
+      <div class="channel-branding-summary-title"><h3>Channel logo</h3><span>${status}</span></div>
+      <p>${summary}</p>
+    </div>
+    ${image}
+    ${channel ? `<a class="channel-branding-button" href="/channels?edit=${encodeURIComponent(channel.id)}&amp;branding=${encodeURIComponent(channel.id)}#branding-modal">${hasCustomLogo ? 'Edit logo' : 'Add logo'}</a>` : '<small>Create the channel before uploading its logo.</small>'}
+  </section>`
+}
+
+function renderBrandingEditor(
+  channel: LibraryChannelPolicy,
   uploadedLogoIds: ReadonlySet<string>,
   scheduledLogoIds: readonly string[]
 ): string {
-  const branding = channel?.branding ?? {
-    mode: 'inherit' as const,
-    opacity: 210,
-    position: 2 as const,
-    x: 24,
-    y: 24,
-    sizePercent: 12,
-  }
-  const hasCustomLogo = channel ? uploadedLogoIds.has(channel.id) : false
-  return `<fieldset class="channel-branding" data-branding-editor>
-    <legend>Channel branding overlay</legend>
-    <p class="channel-admin-help">Branding is burned into this channel’s live video feed, so every TV and player sees the same station identity.</p>
-    <div class="channel-branding-modes">
-      ${brandingMode('inherit', 'Use global branding', 'Use the logo and placement from Settings.', branding.mode)}
-      ${brandingMode('custom', 'Custom channel logo', 'Use a separate transparent PNG and channel-specific placement.', branding.mode)}
-      ${brandingMode('off', 'No branding', 'Keep this channel feed completely clean.', branding.mode)}
+  const branding = channel.branding ?? defaultBranding()
+  const hasCustomLogo = uploadedLogoIds.has(channel.id)
+  const logoUrl = `/channels/${encodeURIComponent(channel.id)}/logo`
+  const burnIn = brandingBurnIn(branding)
+  return `<section class="channel-branding-dialog" data-branding-editor>
+    <header>
+      <div><p class="channel-admin-eyebrow">Channel identity</p><h2>${escapeHtml(channel.name)} logo</h2></div>
+      <p>Choose where this channel’s logo appears. Video burn-in is optional and separate from app artwork.</p>
+    </header>
+    <form method="post" enctype="multipart/form-data" action="/channels/${encodeURIComponent(channel.id)}/branding">
+    <div class="channel-branding-section-heading">
+      <strong>Logo shown in apps</strong>
+      <small>This controls channel artwork in ToastTV clients.</small>
     </div>
-    <div class="channel-branding-custom" data-branding-custom>
-      <label>Channel logo (PNG, up to 5 MB)
-        ${channel ? '<input type="file" name="brandingLogo" accept="image/png">' : ''}
-        <small>${hasCustomLogo ? 'A custom logo is uploaded. Choose another file to replace it.' : channel ? 'No custom logo is uploaded yet.' : 'Create the channel first, then edit it to upload its custom logo.'}</small>
+    <div class="channel-branding-modes">
+      ${brandingMode('inherit', 'Global logo', 'Show the logo configured in Settings.', branding.mode)}
+      ${brandingMode('custom', 'Custom channel logo', 'Show a separate transparent PNG for this channel.', branding.mode)}
+      ${brandingMode('off', 'Hide channel logo', 'Do not show a logo for this channel in apps.', branding.mode)}
+    </div>
+    <div class="channel-branding-burn-in" data-branding-burn-in-section>
+      <label>
+        <input type="checkbox" name="brandingBurnIn" value="true" data-branding-burn-in ${burnIn ? 'checked' : ''}>
+        <span>
+          <strong>Burn logo into video</strong>
+          <small>Optional. This adds transcoding work and permanently places the logo in the video; viewers cannot hide it in their app.</small>
+        </span>
       </label>
-      <div class="channel-branding-controls">
-        <label>Corner
-          <select name="brandingPosition">
-            ${brandingPosition(0, 'Top left', branding.position)}
-            ${brandingPosition(2, 'Top right', branding.position)}
-            ${brandingPosition(6, 'Bottom left', branding.position)}
-            ${brandingPosition(8, 'Bottom right', branding.position)}
-          </select>
-        </label>
-        <label>Size (%) <input type="number" name="brandingSizePercent" min="5" max="30" value="${branding.sizePercent}"></label>
-        <label>Opacity <input type="range" name="brandingOpacity" min="0" max="255" value="${branding.opacity}"></label>
-        <label>X offset <input type="number" name="brandingX" min="0" max="500" value="${branding.x}"></label>
-        <label>Y offset <input type="number" name="brandingY" min="0" max="500" value="${branding.y}"></label>
+      <p data-branding-burn-in-note>${branding.mode === 'off' ? 'Choose a global or custom logo before enabling burn-in.' : burnIn ? 'The logo will appear in apps and in the encoded video.' : 'App-only is recommended: the logo remains hideable by each client.'}</p>
+    </div>
+    <div class="channel-branding-workspace" data-branding-custom>
+      <div class="channel-logo-preview" data-logo-screen data-position="${branding.position}" data-burn-in="${burnIn}">
+        <div class="channel-logo-preview-safe-area">
+          ${hasCustomLogo ? `<img src="${logoUrl}" alt="Current logo preview" data-logo-preview>` : '<img alt="Selected logo preview" data-logo-preview hidden>'}
+          <span data-logo-placeholder ${hasCustomLogo ? 'hidden' : ''}>Choose a transparent PNG to preview it here</span>
+        </div>
+        <small data-logo-preview-caption>${burnIn ? 'Burn-in preview · final video' : 'App logo preview · video remains clean'}</small>
+      </div>
+      <div class="channel-branding-fields">
+        <label>Custom app logo <input type="file" name="brandingLogo" accept="image/png" data-logo-file><small>Transparent PNG, up to 5 MB. Selecting a file updates the preview before saving.</small></label>
+        <div class="channel-branding-controls" data-branding-burn-in-options ${burnIn ? '' : 'hidden'}>
+          <strong class="channel-branding-controls-title">Burn-in placement</strong>
+          <label>Corner
+            <select name="brandingPosition" data-logo-position>
+              ${brandingPosition(0, 'Top left', branding.position)}
+              ${brandingPosition(2, 'Top right', branding.position)}
+              ${brandingPosition(6, 'Bottom left', branding.position)}
+              ${brandingPosition(8, 'Bottom right', branding.position)}
+            </select>
+          </label>
+          <label>Size <span><input type="range" name="brandingSizePercent" min="5" max="30" value="${branding.sizePercent}" data-logo-size><output data-logo-size-output>${branding.sizePercent}%</output></span></label>
+          <label>Opacity <span><input type="range" name="brandingOpacity" min="0" max="255" value="${branding.opacity}" data-logo-opacity><output data-logo-opacity-output>${Math.round((branding.opacity / 255) * 100)}%</output></span></label>
+          <label>X offset <input type="number" name="brandingX" min="0" max="500" value="${branding.x}" data-logo-x></label>
+          <label>Y offset <input type="number" name="brandingY" min="0" max="500" value="${branding.y}" data-logo-y></label>
+        </div>
       </div>
     </div>
     <div class="channel-branding-schedule-assets">
       <label>Scheduled logo variants (PNG, up to 5 MB each)
-        ${channel ? '<input type="file" name="brandingVariantLogos" accept="image/png" multiple>' : ''}
-        <small>Upload user-supplied logos for time blocks. The filename becomes its ID—for example, <code>adult-swim.png</code> becomes <code>adult-swim</code>.</small>
+        <input type="file" name="brandingVariantLogos" accept="image/png" multiple>
+        <small>Switch app artwork by time block—for example, Kids by day and Adult Swim at night. When burn-in is enabled, the same scheduled logo is also placed in the video. The filename becomes its ID: <code>adult-swim.png</code> becomes <code>adult-swim</code>.</small>
       </label>
       <p>${scheduledLogoIds.length > 0 ? `Available IDs: ${scheduledLogoIds.map((id) => `<code>${escapeHtml(id)}</code>`).join(' ')}` : 'No scheduled logo variants uploaded yet.'}</p>
     </div>
-  </fieldset>`
+    <footer><a href="/channels?edit=${encodeURIComponent(channel.id)}#editor">Cancel</a><button type="submit">Save branding</button></footer>
+    </form>
+  </section>`
+}
+
+function defaultBranding(): NonNullable<LibraryChannelPolicy['branding']> {
+  return {
+    mode: 'inherit',
+    burnIn: false,
+    opacity: 210,
+    position: 2,
+    x: 24,
+    y: 24,
+    sizePercent: 12,
+  }
+}
+
+function brandingBurnIn(branding: NonNullable<LibraryChannelPolicy['branding']>): boolean {
+  return branding.burnIn === true
+}
+
+function brandingHiddenFields(
+  branding: NonNullable<LibraryChannelPolicy['branding']>
+): string {
+  return `<input type="hidden" name="brandingMode" value="${branding.mode}">
+    <input type="hidden" name="brandingBurnIn" value="${brandingBurnIn(branding)}">
+    <input type="hidden" name="brandingOpacity" value="${branding.opacity}">
+    <input type="hidden" name="brandingPosition" value="${branding.position}">
+    <input type="hidden" name="brandingX" value="${branding.x}">
+    <input type="hidden" name="brandingY" value="${branding.y}">
+    <input type="hidden" name="brandingSizePercent" value="${branding.sizePercent}">`
 }
 
 function brandingMode(
@@ -327,12 +441,14 @@ function renderAutomationBuilder(
               <p class="channel-admin-help">These become ordinary editable schedule slots ${target ? 'when Auto setup is applied' : 'after creation'}.</p>
             </fieldset>
 
+            ${renderMarathonSettings(draft?.marathon ?? target?.marathon)}
+
             <div class="channel-auto-facets">
               ${renderFacet('Genres', 'genres', matchingGenres, selectedGenres, 50)}
               ${renderFacet('Networks', 'networks', matchingNetworks, selectedNetworks, 75)}
               ${renderFacet('Studios', 'studios', matchingStudios, selectedStudios, 75)}
             </div>
-            <p class="channel-admin-help">Facet and show selections are added to a preset. Choose <strong>Custom mix</strong> if they should be the only selectors. Network/studio choices appear after a TMDB metadata refresh stores those fields.${normalizedSearch && matchingGenres.length + matchingNetworks.length + matchingStudios.length === 0 ? ' No matching metadata facets were found.' : ''}</p>
+            <p class="channel-admin-help">Facet and show selections are added to a preset. Choose <strong>Custom mix</strong> if they should be the only selectors. Network and studio checkboxes show TMDB’s exact stored values; the Nick Jr.-style preset can still recognize known preschool titles when TMDB reports only Nickelodeon.${normalizedSearch && matchingGenres.length + matchingNetworks.length + matchingStudios.length === 0 ? ' No matching metadata facets were found.' : ''}</p>
 
             <details class="channel-auto-collections" ${selectedIds.size > 0 ? 'open' : ''}>
               <summary>Add individual shows or movies</summary>
@@ -351,7 +467,7 @@ function renderAutomationBuilder(
             </details>
 
             ${renderAutomationPreview(preview)}
-            ${target ? `<label class="channel-auto-replace"><input type="checkbox" name="confirmReplace" value="yes" required><span><strong>Replace this station’s current programming setup</strong><small>This replaces its schedule blocks and automated library selection. The station ID, enabled state, and manual on/off state are preserved.</small></span></label>` : ''}
+            ${target ? `<label class="channel-auto-replace"><input type="checkbox" name="confirmReplace" value="yes" required><span><strong>Replace this station’s current programming setup</strong><small>This replaces its schedule blocks, automated library selection, and marathon pattern. The station ID, enabled state, and manual on/off state are preserved.</small></span></label>` : ''}
             <div class="channel-auto-actions">
               ${target ? '' : '<a class="channel-admin-link" href="/channels?new=manual#editor">Create manually</a>'}
               <button type="submit" name="action" value="preview" formnovalidate class="btn-secondary">Preview lineup</button>
@@ -363,11 +479,16 @@ function renderAutomationBuilder(
   </section>`
 }
 
-function renderModal(id: string, content: string): string {
-  return `<div class="channel-modal" id="${escapeHtml(id)}" role="dialog" aria-modal="true" aria-label="Station setup">
-    <a class="channel-modal-backdrop" href="/channels" aria-label="Close station setup"></a>
+function renderModal(
+  id: string,
+  content: string,
+  closeHref = '/channels',
+  label = 'Station setup'
+): string {
+  return `<div class="channel-modal" id="${escapeHtml(id)}" role="dialog" aria-modal="true" aria-label="${escapeHtml(label)}" data-modal-close-href="${escapeHtml(closeHref)}">
+    <a class="channel-modal-backdrop" href="${escapeHtml(closeHref)}" aria-label="Close ${escapeHtml(label)}"></a>
     <div class="channel-modal-panel">
-      <a class="channel-modal-close" href="/channels" aria-label="Close station setup">×</a>
+      <a class="channel-modal-close" href="${escapeHtml(closeHref)}" aria-label="Close ${escapeHtml(label)}">×</a>
       ${content}
     </div>
   </div>`
@@ -465,9 +586,11 @@ function renderChannelCard(
     <dl>
       <div><dt>Timezone</dt><dd>${escapeHtml(channel.timezone)}</dd></div>
       <div><dt>Schedule slots</dt><dd>${channel.slots.length}</dd></div>
+      <div><dt>Marathons</dt><dd>${escapeHtml(marathonSummary(channel.marathon))}</dd></div>
     </dl>
     <div class="channel-admin-actions">
       <a href="/channels?edit=${encodeURIComponent(channel.id)}#editor">Edit</a>
+      <a href="/channels?branding=${encodeURIComponent(channel.id)}#branding-modal">Branding</a>
       <a href="/channels?builder=${encodeURIComponent(channel.id)}#station-builder">Edit lineup</a>
       <form method="post" action="/channels/${encodeURIComponent(channel.id)}/enabled">
         <input type="hidden" name="enabled" value="${channel.enabled ? 'false' : 'true'}">
@@ -478,6 +601,43 @@ function renderChannelCard(
       </form>
     </div>
   </article>`
+}
+
+const DEFAULT_MARATHON: ChannelMarathonPolicy = {
+  enabled: false,
+  frequency: 12,
+  episodeCount: 4,
+}
+
+function renderMarathonSettings(policy?: ChannelMarathonPolicy): string {
+  const marathon = policy ?? DEFAULT_MARATHON
+  return `<section class="channel-marathon" data-marathon-settings data-enabled="${marathon.enabled}">
+    <header>
+      <div>
+        <p class="channel-admin-eyebrow">Programming pattern</p>
+        <h3>Episode marathons</h3>
+        <p>Occasionally keep one series on air for several consecutive episodes.</p>
+      </div>
+      <label class="channel-marathon-toggle"><input type="checkbox" name="marathonEnabled" value="true" data-marathon-enabled ${marathon.enabled ? 'checked' : ''}><span><strong>Enable marathon blocks</strong><small data-marathon-status>${marathon.enabled ? 'Automatic marathons are active.' : 'Off — use the normal mixed lineup.'}</small></span></label>
+    </header>
+    <div class="channel-marathon-fields">
+      <label>Start after this many normal programmes
+        <input type="number" name="marathonFrequency" min="2" max="100" step="1" required value="${marathon.frequency}">
+        <small>Bumpers and episodes already inside a marathon do not count.</small>
+      </label>
+      <label>Episodes in each marathon
+        <input type="number" name="marathonEpisodeCount" min="2" max="20" step="1" required value="${marathon.episodeCount}">
+        <small>The end of an airtime block may shorten a marathon.</small>
+      </label>
+    </div>
+    <p class="channel-marathon-note">Only ordered TV episodes are grouped. Movies remain single programmes, and shows without at least two eligible ordered episodes fall back to the normal lineup.</p>
+  </section>`
+}
+
+function marathonSummary(policy?: ChannelMarathonPolicy): string {
+  return policy?.enabled
+    ? `Every ${policy.frequency} programmes · ${policy.episodeCount} episodes`
+    : 'Off'
 }
 
 function formatSlots(slots: LibraryChannelPolicy['slots']): string {

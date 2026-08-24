@@ -39,11 +39,24 @@ export type ChannelBrandingMode = 'inherit' | 'custom' | 'off'
 
 export interface ChannelBrandingPolicy {
   readonly mode: ChannelBrandingMode
+  /**
+   * Missing/false keeps the logo as client UI metadata only. `true` also burns
+   * the selected logo into the normalized HLS video for legacy presentation.
+   */
+  readonly burnIn?: boolean
   readonly opacity: number
   readonly position: 0 | 2 | 6 | 8
   readonly x: number
   readonly y: number
   readonly sizePercent: number
+}
+
+export interface ChannelMarathonPolicy {
+  readonly enabled: boolean
+  /** Start a marathon after this many ordinary programme selections. */
+  readonly frequency: number
+  /** Maximum consecutive episodes in one marathon, including its first item. */
+  readonly episodeCount: number
 }
 
 export interface LibraryChannelPolicy {
@@ -54,6 +67,8 @@ export interface LibraryChannelPolicy {
   readonly slots: readonly ChannelScheduleSlot[]
   /** Absent is backwards-compatible and means inherit the global logo. */
   readonly branding?: ChannelBrandingPolicy
+  /** Absent/disabled preserves the ordinary deterministic programme order. */
+  readonly marathon?: ChannelMarathonPolicy
 }
 
 export interface LibraryPolicyDocument {
@@ -241,6 +256,7 @@ export function validateLibraryChannels(input: unknown): LibraryChannelPolicy[] 
       timezone?: unknown
       slots?: unknown
       branding?: unknown
+      marathon?: unknown
     }
     const id = typeof value.id === 'string' ? value.id.trim() : ''
     const name = typeof value.name === 'string' ? value.name.trim() : ''
@@ -362,8 +378,43 @@ export function validateLibraryChannels(input: unknown): LibraryChannelPolicy[] 
       ...(value.branding === undefined
         ? {}
         : { branding: validateChannelBranding(value.branding, id) }),
+      ...(value.marathon === undefined
+        ? {}
+        : { marathon: validateChannelMarathon(value.marathon, id) }),
     }
   })
+}
+
+function validateChannelMarathon(
+  input: unknown,
+  channelId: string
+): ChannelMarathonPolicy {
+  if (!input || typeof input !== 'object') {
+    throw new Error(`Channel ${channelId} marathon must be an object`)
+  }
+  const value = input as Record<string, unknown>
+  if (typeof value.enabled !== 'boolean') {
+    throw new Error(`Channel ${channelId} marathon enabled must be a boolean`)
+  }
+  if (
+    !Number.isInteger(value.frequency) ||
+    (value.frequency as number) < 2 ||
+    (value.frequency as number) > 100
+  ) {
+    throw new Error(`Channel ${channelId} marathon frequency must be from 2 to 100`)
+  }
+  if (
+    !Number.isInteger(value.episodeCount) ||
+    (value.episodeCount as number) < 2 ||
+    (value.episodeCount as number) > 20
+  ) {
+    throw new Error(`Channel ${channelId} marathon episode count must be from 2 to 20`)
+  }
+  return {
+    enabled: value.enabled,
+    frequency: value.frequency as number,
+    episodeCount: value.episodeCount as number,
+  }
 }
 
 function validateScheduleBranding(
@@ -401,6 +452,7 @@ function validateChannelBranding(
   }
   const value = input as Record<string, unknown>
   const mode = value.mode
+  const burnIn = value.burnIn
   const opacity = value.opacity
   const position = value.position
   const x = value.x
@@ -408,6 +460,12 @@ function validateChannelBranding(
   const sizePercent = value.sizePercent
   if (!['inherit', 'custom', 'off'].includes(String(mode))) {
     throw new Error(`Channel ${channelId} branding mode is invalid`)
+  }
+  if (burnIn !== undefined && typeof burnIn !== 'boolean') {
+    throw new Error(`Channel ${channelId} branding burn-in must be a boolean`)
+  }
+  if (mode === 'off' && burnIn === true) {
+    throw new Error(`Channel ${channelId} cannot burn in disabled branding`)
   }
   if (!Number.isInteger(opacity) || (opacity as number) < 0 || (opacity as number) > 255) {
     throw new Error(`Channel ${channelId} branding opacity is invalid`)
@@ -434,6 +492,7 @@ function validateChannelBranding(
   }
   return {
     mode: mode as ChannelBrandingMode,
+    ...(burnIn === true ? { burnIn: true } : {}),
     opacity: opacity as number,
     position: position as ChannelBrandingPolicy['position'],
     x: x as number,

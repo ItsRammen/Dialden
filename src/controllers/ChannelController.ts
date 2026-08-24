@@ -1,11 +1,13 @@
 import { Hono } from 'hono'
 import {
   validateLibraryChannels,
+  type ChannelMarathonPolicy,
   type ChannelScheduleSlot,
   type LibraryChannelPolicy,
 } from '../config/library'
 import type { ChannelService } from '../services/ChannelService'
 import type { ChannelLogoStore } from '../services/ChannelLogoStore'
+import type { ChannelTimelineResolverService } from '../services/ChannelTimelineResolverService'
 import type { StationBuildRequest } from '../services/ChannelService'
 import type {
   StationAirtimeId,
@@ -16,6 +18,12 @@ import { renderChannelAdministration } from '../templates/channelAdministration'
 interface ChannelControllerDeps {
   channels: ChannelService
   logos?: ChannelLogoStore
+  branding?: Pick<ChannelTimelineResolverService, 'presentation'>
+  onChannelChanged?: (
+    channelId: string,
+    mode: 'restart' | 'deactivate'
+  ) => Promise<void> | void
+  /** Legacy alias retained for callers that only invalidate branding edits. */
   onBrandingUpdated?: (channelId: string) => Promise<void> | void
 }
 
@@ -23,18 +31,37 @@ interface ChannelControllerDeps {
 export function createChannelController({
   channels,
   logos,
+  branding,
+  onChannelChanged,
   onBrandingUpdated,
 }: ChannelControllerDeps) {
   const controller = new Hono()
+  const notifyChannelChanged = async (channelId: string) => {
+    if (onChannelChanged) {
+      const runnable = channels
+        .list()
+        .channels.some(
+          (channel) =>
+            channel.id === channelId && channel.enabled && channel.onAir
+        )
+      await onChannelChanged(channelId, runnable ? 'restart' : 'deactivate')
+    } else {
+      await onBrandingUpdated?.(channelId)
+    }
+  }
 
   controller.get('/api/v1/channels', (c) => c.json(channels.list()))
 
   controller.get('/api/v1/channels/:id/now', async (c) => {
     const channelId = c.req.param('id')
     const result = await channels.getNow(channelId)
+    const presentation = result
+      ? await branding?.presentation(channelId, new Date(result.serverTimeMs))
+      : undefined
     return result
       ? c.json({
           ...result,
+          ...(presentation ? { branding: presentation } : {}),
           liveStream: {
             mode: 'hls' as const,
             url: `/api/v1/channels/${encodeURIComponent(channelId)}/live/index.m3u8`,
@@ -103,18 +130,19 @@ export function createChannelController({
         await readJsonChannel(c.req.raw)
       )
       if (!channel) return c.json({ error: 'Channel not found' }, 404)
-      await onBrandingUpdated?.(id)
+      await notifyChannelChanged(id)
       return c.json({ channel })
     } catch (error) {
       return c.json({ error: safeMessage(error) }, 400)
     }
   })
 
-  controller.delete('/api/admin/v1/channels/:id', (c) => {
+  controller.delete('/api/admin/v1/channels/:id', async (c) => {
     try {
       const id = c.req.param('id')
       if (!channels.delete(id)) return c.json({ error: 'Channel not found' }, 404)
       logos?.remove(id)
+      await notifyChannelChanged(id)
       return c.json({ deleted: true })
     } catch (error) {
       return c.json({ error: safeMessage(error) }, 500)
@@ -127,29 +155,38 @@ export function createChannelController({
       if (typeof value.enabled !== 'boolean') {
         return c.json({ error: 'enabled must be a boolean' }, 400)
       }
-      return channels.setEnabled(c.req.param('id'), value.enabled)
-        ? c.json({ channelId: c.req.param('id'), enabled: value.enabled })
-        : c.json({ error: 'Channel not found' }, 404)
+      const id = c.req.param('id')
+      if (!channels.setEnabled(id, value.enabled)) {
+        return c.json({ error: 'Channel not found' }, 404)
+      }
+      await notifyChannelChanged(id)
+      return c.json({ channelId: id, enabled: value.enabled })
     } catch (error) {
       return c.json({ error: safeMessage(error) }, 400)
     }
   })
 
-  controller.post('/api/admin/v1/channels/:id/on-air', (c) => {
+  controller.post('/api/admin/v1/channels/:id/on-air', async (c) => {
     try {
-      return channels.setOnAir(c.req.param('id'), true)
-        ? c.json({ channelId: c.req.param('id'), onAir: true })
-        : c.json({ error: 'Channel not found' }, 404)
+      const id = c.req.param('id')
+      if (!channels.setOnAir(id, true)) {
+        return c.json({ error: 'Channel not found' }, 404)
+      }
+      await notifyChannelChanged(id)
+      return c.json({ channelId: id, onAir: true })
     } catch (error) {
       return c.json({ error: safeMessage(error) }, 500)
     }
   })
 
-  controller.post('/api/admin/v1/channels/:id/off-air', (c) => {
+  controller.post('/api/admin/v1/channels/:id/off-air', async (c) => {
     try {
-      return channels.setOnAir(c.req.param('id'), false)
-        ? c.json({ channelId: c.req.param('id'), onAir: false })
-        : c.json({ error: 'Channel not found' }, 404)
+      const id = c.req.param('id')
+      if (!channels.setOnAir(id, false)) {
+        return c.json({ error: 'Channel not found' }, 404)
+      }
+      await notifyChannelChanged(id)
+      return c.json({ channelId: id, onAir: false })
     } catch (error) {
       return c.json({ error: safeMessage(error) }, 500)
     }
@@ -175,6 +212,7 @@ export function createChannelController({
       renderChannelAdministration(channels.administrationSnapshot(), {
         ...(await automationSurface(channels)),
         editId: c.req.query('edit'),
+        brandingId: c.req.query('branding'),
         newChannel: c.req.query('new') === 'manual',
         automationTargetId,
         automationDraft,
@@ -223,7 +261,7 @@ export function createChannelController({
         if (!automationTargetId) throw new Error('Choose a channel to update')
         if (textValue(data.get('confirmReplace')) !== 'yes') {
           throw new Error(
-            'Confirm that Auto setup may replace this channel’s current schedule and automated library selection.'
+            'Confirm that Auto setup may replace this channel’s current schedule, automated library selection, and marathon pattern.'
           )
         }
         const result = await channels.updateAutomatedStation(
@@ -231,6 +269,7 @@ export function createChannelController({
           request
         )
         if (!result) return c.text('Channel not found', 404)
+        await notifyChannelChanged(automationTargetId)
         return c.redirect('/channels?changed=updated', 303)
       }
       const preview = automationTargetId
@@ -291,9 +330,17 @@ export function createChannelController({
           await logos.save(id, scheduled.file, scheduled.id)
         }
       }
-      const channel = channels.update(id, input)
+      const existing = channels
+        .administrationSnapshot()
+        ?.channels.find((channel) => channel.id === id)
+      const channel = channels.update(
+        id,
+        input.marathon === undefined && existing?.marathon
+          ? { ...input, marathon: existing.marathon }
+          : input
+      )
       if (!channel) return c.text('Channel not found', 404)
-      await onBrandingUpdated?.(id)
+      await notifyChannelChanged(id)
       return c.redirect('/channels?changed=updated', 303)
     } catch (error) {
       return c.html(
@@ -309,44 +356,116 @@ export function createChannelController({
     }
   })
 
+  controller.get('/channels/:id/logo', (c) => {
+    try {
+      const id = c.req.param('id')
+      const variant = textValue(c.req.query('variant')) || undefined
+      if (!logos?.has(id, variant)) return c.text('Channel logo not found', 404)
+      return new Response(Bun.file(logos.path(id, variant)), {
+        headers: {
+          'content-type': 'image/png',
+          'cache-control': 'private, no-cache',
+          'x-content-type-options': 'nosniff',
+        },
+      })
+    } catch (error) {
+      return c.text(safeMessage(error), 400)
+    }
+  })
+
+  controller.post('/channels/:id/branding', async (c) => {
+    const id = c.req.param('id')
+    try {
+      const existing = channels
+        .administrationSnapshot()
+        .channels.find((channel) => channel.id === id)
+      if (!existing) return c.text('Channel not found', 404)
+      const data = await c.req.raw.formData()
+      const branding = readBrandingPolicy(data)
+      const candidate = validateLibraryChannels([
+        { ...existing, branding },
+      ])[0] as LibraryChannelPolicy
+      const logo = data.get('brandingLogo')
+      if (logo instanceof File && logo.size > 0) {
+        if (!logos) throw new Error('Channel logo storage is unavailable')
+        await logos.save(id, logo)
+      }
+      if (logos) {
+        const scheduledLogos = readScheduledLogos(data)
+        for (const scheduled of scheduledLogos) {
+          await logos.save(id, scheduled.file, scheduled.id)
+        }
+      }
+      const updated = channels.update(id, candidate)
+      if (!updated) return c.text('Channel not found', 404)
+      if (
+        existing.branding?.burnIn === true ||
+        updated.branding?.burnIn === true
+      ) {
+        await notifyChannelChanged(id)
+      }
+      return c.redirect(
+        `/channels?changed=updated&edit=${encodeURIComponent(id)}#editor`,
+        303
+      )
+    } catch (error) {
+      return c.html(
+        renderChannelAdministration(channels.administrationSnapshot(), {
+          ...(await automationSurface(channels)),
+          brandingId: id,
+          channelLogoIds: channelLogoIds(channels, logos),
+          channelLogoVariants: channelLogoVariants(channels, logos),
+          error: safeMessage(error),
+        }),
+        400
+      )
+    }
+  })
+
   controller.post('/channels/:id/enabled', async (c) => {
     try {
       const body = await c.req.parseBody()
       const enabled = textValue(body.enabled) === 'true'
-      return channels.setEnabled(c.req.param('id'), enabled)
-        ? c.redirect('/channels?changed=updated', 303)
-        : c.text('Channel not found', 404)
+      const id = c.req.param('id')
+      if (!channels.setEnabled(id, enabled)) {
+        return c.text('Channel not found', 404)
+      }
+      await notifyChannelChanged(id)
+      return c.redirect('/channels?changed=updated', 303)
     } catch (error) {
       return c.text(safeMessage(error), 500)
     }
   })
 
-  controller.post('/channels/:id/delete', (c) => {
+  controller.post('/channels/:id/delete', async (c) => {
     try {
       const id = c.req.param('id')
       if (!channels.delete(id)) return c.text('Channel not found', 404)
       logos?.remove(id)
+      await notifyChannelChanged(id)
       return c.redirect('/channels?changed=deleted', 303)
     } catch (error) {
       return c.text(safeMessage(error), 500)
     }
   })
 
-  controller.post('/channels/:id/on-air', (c) => {
+  controller.post('/channels/:id/on-air', async (c) => {
     try {
-      return channels.setOnAir(c.req.param('id'), true)
-        ? c.redirect('/', 303)
-        : c.text('Channel not found', 404)
+      const id = c.req.param('id')
+      if (!channels.setOnAir(id, true)) return c.text('Channel not found', 404)
+      await notifyChannelChanged(id)
+      return c.redirect('/', 303)
     } catch (error) {
       return c.text(safeMessage(error), 500)
     }
   })
 
-  controller.post('/channels/:id/off-air', (c) => {
+  controller.post('/channels/:id/off-air', async (c) => {
     try {
-      return channels.setOnAir(c.req.param('id'), false)
-        ? c.redirect('/', 303)
-        : c.text('Channel not found', 404)
+      const id = c.req.param('id')
+      if (!channels.setOnAir(id, false)) return c.text('Channel not found', 404)
+      await notifyChannelChanged(id)
+      return c.redirect('/', 303)
     } catch (error) {
       return c.text(safeMessage(error), 500)
     }
@@ -382,6 +501,7 @@ async function readJsonStationRequest(
     genres: candidate.genres,
     networks: candidate.networks,
     studios: candidate.studios,
+    marathon: candidate.marathon,
   })
 }
 
@@ -396,6 +516,7 @@ function readFormStationRequest(data: FormData): StationBuildRequest {
     genres: data.getAll('genres'),
     networks: data.getAll('networks'),
     studios: data.getAll('studios'),
+    marathon: readFormMarathon(data),
   })
 }
 
@@ -409,11 +530,13 @@ function normalizeStationRequest(value: {
   genres?: unknown
   networks?: unknown
   studios?: unknown
+  marathon?: unknown
 }): StationBuildRequest {
   const preset = textValue(value.preset)
   if (!isStationPreset(preset)) throw new Error('Choose a valid station preset')
   const airtime = textValue(value.airtime) || 'all-day'
   if (!isStationAirtime(airtime)) throw new Error('Choose a valid airtime')
+  const marathon = normalizeMarathon(value.marathon)
   return {
     id: textValue(value.id),
     name: textValue(value.name),
@@ -426,6 +549,7 @@ function normalizeStationRequest(value: {
     genres: readArray(value.genres, 'genres').map(textValue),
     networks: readArray(value.networks, 'networks').map(textValue),
     studios: readArray(value.studios, 'studios').map(textValue),
+    ...(marathon ? { marathon } : {}),
   }
 }
 
@@ -493,37 +617,97 @@ async function readFormChannel(
   scheduledLogos: Array<{ id: string; file: File }>
 }> {
   const data = await request.formData()
+  const marathon = readFormMarathon(data)
   const value = {
     id: textValue(data.get('id')),
     name: textValue(data.get('name')),
     timezone: textValue(data.get('timezone')),
     enabled: data.get('enabled') !== null,
     slots: parseChannelSlots(textValue(data.get('slots'))),
-    branding: {
-      mode: textValue(data.get('brandingMode')) || 'inherit',
-      opacity: integerValue(data.get('brandingOpacity'), 210),
-      position: integerValue(data.get('brandingPosition'), 2),
-      x: integerValue(data.get('brandingX'), 24),
-      y: integerValue(data.get('brandingY'), 24),
-      sizePercent: integerValue(data.get('brandingSizePercent'), 12),
-    },
+    branding: readBrandingPolicy(data),
+    ...(marathon ? { marathon } : {}),
   }
   const logo = data.get('brandingLogo')
+  const scheduledLogos = readScheduledLogos(data)
+  return {
+    channel: validateLibraryChannels([value])[0] as LibraryChannelPolicy,
+    ...(logo instanceof File && logo.size > 0 ? { logo } : {}),
+    scheduledLogos,
+  }
+}
+
+interface ChannelFormData {
+  get(name: string): unknown
+  getAll(name: string): readonly unknown[]
+}
+
+function readBrandingPolicy(data: ChannelFormData): NonNullable<LibraryChannelPolicy['branding']> {
+  return {
+    mode: (textValue(data.get('brandingMode')) || 'inherit') as 'inherit' | 'custom' | 'off',
+    ...(textValue(data.get('brandingBurnIn')) === 'true' ? { burnIn: true } : {}),
+    opacity: integerValue(data.get('brandingOpacity'), 210),
+    position: integerValue(data.get('brandingPosition'), 2) as 0 | 2 | 6 | 8,
+    x: integerValue(data.get('brandingX'), 24),
+    y: integerValue(data.get('brandingY'), 24),
+    sizePercent: integerValue(data.get('brandingSizePercent'), 12),
+  }
+}
+
+function readFormMarathon(data: ChannelFormData): ChannelMarathonPolicy | undefined {
+  const frequencyValue = data.get('marathonFrequency')
+  const episodeCountValue = data.get('marathonEpisodeCount')
+  if (frequencyValue == null && episodeCountValue == null) return undefined
+  return normalizeMarathon({
+    enabled: textValue(data.get('marathonEnabled')) === 'true',
+    frequency: integerValue(frequencyValue, Number.NaN),
+    episodeCount: integerValue(episodeCountValue, Number.NaN),
+  })
+}
+
+function normalizeMarathon(value: unknown): ChannelMarathonPolicy | undefined {
+  if (value === undefined || value === null) return undefined
+  if (!value || typeof value !== 'object') {
+    throw new Error('Marathon settings must be an object')
+  }
+  const candidate = value as Record<string, unknown>
+  if (typeof candidate.enabled !== 'boolean') {
+    throw new Error('Marathon enabled must be a boolean')
+  }
+  if (
+    !Number.isInteger(candidate.frequency) ||
+    (candidate.frequency as number) < 2 ||
+    (candidate.frequency as number) > 100
+  ) {
+    throw new Error('Marathon frequency must be a whole number from 2 to 100')
+  }
+  if (
+    !Number.isInteger(candidate.episodeCount) ||
+    (candidate.episodeCount as number) < 2 ||
+    (candidate.episodeCount as number) > 20
+  ) {
+    throw new Error('Marathon episode count must be a whole number from 2 to 20')
+  }
+  return {
+    enabled: candidate.enabled,
+    frequency: candidate.frequency as number,
+    episodeCount: candidate.episodeCount as number,
+  }
+}
+
+function readScheduledLogos(
+  data: ChannelFormData
+): Array<{ id: string; file: File }> {
   const scheduledLogos: Array<{ id: string; file: File }> = []
   for (const value of data.getAll('brandingVariantLogos')) {
-    if (typeof value === 'string' || value.size <= 0) continue
-    const file = value as unknown as File
+    if (!(value instanceof File) || value.size <= 0) continue
+    const file = value
     scheduledLogos.push({ id: scheduledLogoId(value.name), file })
   }
   const duplicate = scheduledLogos.find(
     (item, index) => scheduledLogos.findIndex((candidate) => candidate.id === item.id) !== index
   )
   if (duplicate) throw new Error(`More than one scheduled logo uses ID ${duplicate.id}`)
-  return {
-    channel: validateLibraryChannels([value])[0] as LibraryChannelPolicy,
-    ...(logo instanceof File && logo.size > 0 ? { logo } : {}),
-    scheduledLogos,
-  }
+  return scheduledLogos
 }
 
 function scheduledLogoId(filename: string): string {

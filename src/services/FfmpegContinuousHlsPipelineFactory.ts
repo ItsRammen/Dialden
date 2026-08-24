@@ -4,6 +4,7 @@ import type {
   ChannelPipelineRequest,
   ChannelTimelinePosition,
 } from './ContinuousChannelWorkerManager'
+import type { FfmpegTranscodingStatus } from './FfmpegTranscodingBackend'
 
 export interface SpawnedChannelProcess {
   readonly exited: Promise<number>
@@ -16,6 +17,14 @@ export interface ChannelProcessSpawner {
 
 export interface ChannelAudioProbe {
   hasAudio(sourcePath: string): Promise<boolean>
+}
+
+const AUDIO_PROBE_CACHE_TTL_MS = 10 * 60_000
+
+const SOFTWARE_TRANSCODING: FfmpegTranscodingStatus = {
+  configuredMode: 'software',
+  activeBackend: 'software',
+  hardwareAcceleration: false,
 }
 
 const BUN_SPAWNER: ChannelProcessSpawner = {
@@ -54,49 +63,62 @@ class FfprobeChannelAudioProbe implements ChannelAudioProbe {
  */
 export class FfmpegContinuousHlsPipelineFactory implements ChannelPipelineFactory {
   private lastStartNumber = 0
+  private readonly audioProbeCache = new Map<
+    string,
+    { expiresAt: number; promise: Promise<boolean> }
+  >()
 
   constructor(
     private readonly ffmpegPath = 'ffmpeg',
     private readonly spawner: ChannelProcessSpawner = BUN_SPAWNER,
     private readonly audioProbe: ChannelAudioProbe = new FfprobeChannelAudioProbe('ffprobe'),
-    private readonly now: () => number = Date.now
+    private readonly now: () => number = Date.now,
+    readonly transcodingStatus: FfmpegTranscodingStatus = SOFTWARE_TRANSCODING
   ) {}
 
   async start(request: ChannelPipelineRequest): Promise<ChannelPipelineHandle> {
     if (request.sequence.length === 0) throw new Error('Continuous HLS pipeline needs at least one source')
-    const audioByPath = new Map<string, boolean>()
-    const sequence: ChannelTimelinePosition[] = []
-    for (const item of request.sequence) {
-      let hasAudio = item.hasAudio
-      if (hasAudio === undefined) {
-        hasAudio = audioByPath.get(item.sourcePath)
-        if (hasAudio === undefined) {
-          hasAudio = await this.audioProbe.hasAudio(item.sourcePath)
-          audioByPath.set(item.sourcePath, hasAudio)
-        }
-      }
-      sequence.push({ ...item, hasAudio })
-    }
+    const sequence = await Promise.all(
+      request.sequence.map(async (item) => ({
+        ...item,
+        hasAudio:
+          item.hasAudio === undefined
+            ? await this.probeAudio(item.sourcePath)
+            : item.hasAudio,
+      }))
+    )
     const command = this.command({ ...request, sequence, position: sequence[0] ?? request.position })
     const process = this.spawner.spawn(command)
     let stopping = false
+    let stopPromise: Promise<void> | null = null
     return {
       completed: process.exited.then((code) => ({
         code,
         signal: stopping ? 'SIGTERM' : undefined,
         error: code === 0 || stopping ? undefined : `FFmpeg exited with code ${code}`,
       })),
-      stop: async () => {
-        if (stopping) return
-        stopping = true
-        process.kill('SIGTERM')
-        await process.exited
+      stop: () => {
+        if (!stopPromise) {
+          stopping = true
+          process.kill('SIGTERM')
+          stopPromise = process.exited.then(() => undefined)
+        }
+        return stopPromise
       },
     }
   }
 
   command(request: ChannelPipelineRequest): string[] {
     const args: string[] = [this.ffmpegPath, '-hide_banner', '-nostdin', '-loglevel', 'warning']
+    const qsv = this.transcodingStatus.activeBackend === 'intel-qsv'
+    if (qsv) {
+      const device = this.transcodingStatus.device ?? '/dev/dri/renderD128'
+      args.push(
+        '-init_hw_device', `vaapi=va:${device}`,
+        '-init_hw_device', 'qsv=qs@va',
+        '-filter_hw_device', 'qs'
+      )
+    }
     const streams: Array<{ video: number; audio: number; overlay?: number }> = []
     let inputIndex = 0
     for (const item of request.sequence) {
@@ -156,7 +178,14 @@ export class FfmpegContinuousHlsPipelineFactory implements ChannelPipelineFactor
     // it faster than real time. `realtime`/`arealtime` see one continuous PTS
     // timeline and keep the HLS live edge aligned with wall clock.
     chains.push(`${pads}concat=n=${streams.length}:v=1:a=1[joinedv][joineda]`)
-    chains.push('[joinedv]realtime=speed=1[outv]')
+    // Keep normalization and overlays in system memory for now. Uploading only
+    // at the encoder boundary is compatible with the existing mixed-codec,
+    // per-item overlay graph while still moving the costly H.264 encode to QSV.
+    chains.push(
+      qsv
+        ? '[joinedv]realtime=speed=1,format=nv12[outv]'
+        : '[joinedv]realtime=speed=1[outv]'
+    )
     chains.push('[joineda]arealtime=speed=1[outa]')
 
     const gop = Math.max(30, Math.round(request.profile.segmentSeconds * 30))
@@ -173,10 +202,25 @@ export class FfmpegContinuousHlsPipelineFactory implements ChannelPipelineFactor
       'program_date_time',
       ...(request.appendToExistingPlaylist ? ['append_list', 'discont_start'] : []),
     ].join('+')
+    const videoEncoderArgs = qsv
+      ? [
+          '-c:v', 'h264_qsv',
+          '-preset', 'veryfast',
+          '-global_quality', '23',
+          '-look_ahead', '0',
+          '-bf', '0',
+          '-pix_fmt', 'nv12',
+        ]
+      : [
+          '-c:v', 'libx264',
+          '-preset', 'superfast',
+          '-tune', 'zerolatency',
+          '-pix_fmt', 'yuv420p',
+        ]
     args.push(
       '-filter_complex', chains.join(';'),
       '-map', '[outv]', '-map', '[outa]',
-      '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p',
+      ...videoEncoderArgs,
       '-g', String(gop), '-keyint_min', String(gop), '-sc_threshold', '0',
       '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', String(request.profile.audioChannels),
       '-f', 'hls', '-hls_time', decimal(request.profile.segmentSeconds),
@@ -187,6 +231,29 @@ export class FfmpegContinuousHlsPipelineFactory implements ChannelPipelineFactor
       request.playlistPath
     )
     return args
+  }
+
+  private async probeAudio(sourcePath: string): Promise<boolean> {
+    const now = this.now()
+    const cached = this.audioProbeCache.get(sourcePath)
+    if (cached && cached.expiresAt > now) return cached.promise
+    if (cached) this.audioProbeCache.delete(sourcePath)
+    const pending = this.audioProbe.hasAudio(sourcePath).catch((error) => {
+      if (this.audioProbeCache.get(sourcePath)?.promise === pending) {
+        this.audioProbeCache.delete(sourcePath)
+      }
+      throw error
+    })
+    this.audioProbeCache.set(sourcePath, {
+      expiresAt: now + AUDIO_PROBE_CACHE_TTL_MS,
+      promise: pending,
+    })
+    // Keep this process-local optimization bounded for very large libraries.
+    if (this.audioProbeCache.size > 2_048) {
+      const oldest = this.audioProbeCache.keys().next().value
+      if (oldest && oldest !== sourcePath) this.audioProbeCache.delete(oldest)
+    }
+    return pending
   }
 }
 

@@ -65,6 +65,12 @@ export interface ChannelWorkerFiles {
   sourceExists(path: string): Promise<boolean> | boolean
   /** Remove orphaned/expired output while preserving the active rolling window. */
   cleanupOutput(directory: string): Promise<void> | void
+  /** Wait until this FFmpeg generation has emitted at least one new segment. */
+  waitForFreshSegment?(
+    directory: string,
+    minimumModifiedAt: number,
+    isCurrent?: () => boolean
+  ): Promise<void> | void
 }
 
 export interface ChannelPipelineExit {
@@ -140,6 +146,7 @@ export interface ContinuousChannelWorkerManagerOptions {
 interface WorkerRecord {
   state: ContinuousChannelWorkerState
   pipeline?: ChannelPipelineHandle
+  stopping?: Promise<void>
   generation: number
   startup?: Promise<void>
   idleTimer?: unknown
@@ -148,6 +155,7 @@ interface WorkerRecord {
   leases: Map<string, { expiresAt: number; timer: unknown }>
   warmLeases: Map<string, { expiresAt: number; timer: unknown }>
   lastWarmedAt?: number
+  appendNextStart: boolean
 }
 
 const SYSTEM_CLOCK: ChannelWorkerClock = {
@@ -160,8 +168,8 @@ const DEFAULT_PROFILE: ContinuousHlsProfile = {
   videoCodec: 'h264',
   audioCodec: 'aac',
   audioChannels: 2,
-  segmentSeconds: 2,
-  playlistWindowSegments: 20,
+  segmentSeconds: 1,
+  playlistWindowSegments: 12,
   maximumWidth: 1920,
   maximumHeight: 1080,
 }
@@ -172,6 +180,7 @@ const DEFAULT_PROFILE: ContinuousHlsProfile = {
  */
 export class ContinuousChannelWorkerManager {
   private readonly records = new Map<string, WorkerRecord>()
+  private warmQueue: Promise<void> = Promise.resolve()
   private readonly idleTimeoutMs: number
   private readonly restartDelayMs: number
   private readonly profile: ContinuousHlsProfile
@@ -221,6 +230,7 @@ export class ContinuousChannelWorkerManager {
       this.clock.clearTimeout(record.idleTimer)
       record.idleTimer = undefined
     }
+    if (record.stopping) await record.stopping
     if (!record.pipeline && record.restartTimer === undefined) {
       await this.ensureStarted(record)
     }
@@ -257,6 +267,7 @@ export class ContinuousChannelWorkerManager {
       this.clock.clearTimeout(record.idleTimer)
       record.idleTimer = undefined
     }
+    if (record.stopping) await record.stopping
     if (!record.pipeline && record.restartTimer === undefined) {
       await this.ensureStarted(record)
     }
@@ -283,18 +294,35 @@ export class ContinuousChannelWorkerManager {
     channelIds: readonly string[],
     clientId: string
   ): Promise<ContinuousChannelWorkerState[]> {
+    let release!: () => void
+    const predecessor = this.warmQueue
+    this.warmQueue = new Promise<void>((resolve) => (release = resolve))
+    await predecessor
+    try {
+      return await this.reconcileWarm(channelIds, clientId)
+    } finally {
+      release()
+    }
+  }
+
+  private async reconcileWarm(
+    channelIds: readonly string[],
+    clientId: string
+  ): Promise<ContinuousChannelWorkerState[]> {
     if (!/^[a-zA-Z0-9._:-]{1,160}$/.test(clientId)) {
       throw new Error('Client ID is not a safe warm lease identifier')
     }
     const desired = new Set(channelIds.slice(0, 2))
+    const released: Promise<void>[] = []
     for (const record of this.records.values()) {
       if (!desired.has(record.state.channelId)) {
-        this.removeWarmLease(record, clientId)
+        released.push(this.removeWarmLease(record, clientId))
       }
     }
+    await Promise.all(released)
     if (this.maximumWarmChannels === 0) return []
 
-    const warmed: ContinuousChannelWorkerState[] = []
+    const desiredRecords: WorkerRecord[] = []
     for (const channelId of desired) {
       const record = this.record(channelId)
       if (record.state.viewerCount === 0 && record.warmLeases.size === 0) {
@@ -313,17 +341,25 @@ export class ContinuousChannelWorkerManager {
         this.clock.clearTimeout(record.idleTimer)
         record.idleTimer = undefined
       }
-      if (!record.pipeline && record.restartTimer === undefined) {
-        await this.ensureStarted(record)
-      }
-      // A previous speculative start may have been cancelled while this warm
-      // request was arriving. Re-check after its startup promise settles.
-      if (!record.pipeline && record.restartTimer === undefined) {
-        await this.ensureStarted(record)
-      }
-      warmed.push(this.snapshot(record))
+      desiredRecords.push(record)
     }
-    return warmed
+    // Starting NAS-backed FFmpeg workers can involve source checks and probes.
+    // Start both bounded neighbours concurrently so one slow mount cannot make
+    // the other side of the channel list cold.
+    await Promise.all(
+      desiredRecords.map(async (record) => {
+        if (record.stopping) await record.stopping
+        if (!record.pipeline && record.restartTimer === undefined) {
+          await this.ensureStarted(record)
+        }
+        // A previous speculative start can be invalidated while this warm
+        // request is waiting for it. Re-check after that startup settles.
+        if (!record.pipeline && record.restartTimer === undefined) {
+          await this.ensureStarted(record)
+        }
+      })
+    )
+    return desiredRecords.map((record) => this.snapshot(record))
   }
 
   /** Explicit crash/configuration recovery hook; position is recalculated at restart time. */
@@ -331,8 +367,23 @@ export class ContinuousChannelWorkerManager {
     const record = this.records.get(channelId)
     if (!record) return null
     record.state = { ...record.state, status: 'transitioning', lastError: reason }
+    record.appendNextStart = false
     await this.stopPipeline(record)
     if (this.hasDemand(record)) await this.ensureStarted(record)
+    return this.snapshot(record)
+  }
+
+  /** Stops a removed, disabled, or off-air channel and drops all leases. */
+  async deactivate(channelId: string): Promise<ContinuousChannelWorkerState | null> {
+    const record = this.records.get(channelId)
+    if (!record) return null
+    for (const lease of record.leases.values()) this.clock.clearTimeout(lease.timer)
+    for (const lease of record.warmLeases.values()) this.clock.clearTimeout(lease.timer)
+    record.leases.clear()
+    record.warmLeases.clear()
+    record.anonymousViewers = 0
+    record.state = { ...record.state, viewerCount: 0 }
+    await this.stopRecord(record, 'stopped', false)
     return this.snapshot(record)
   }
 
@@ -354,7 +405,11 @@ export class ContinuousChannelWorkerManager {
       }
       record.warmLeases.clear()
     }
-    await Promise.all([...this.records.values()].map((record) => this.stopRecord(record, 'stopped')))
+    await Promise.all(
+      [...this.records.values()].map((record) =>
+        this.stopRecord(record, 'stopped', false)
+      )
+    )
   }
 
   private record(channelId: string): WorkerRecord {
@@ -368,6 +423,7 @@ export class ContinuousChannelWorkerManager {
       anonymousViewers: 0,
       leases: new Map(),
       warmLeases: new Map(),
+      appendNextStart: false,
       state: {
         channelId,
         status: 'stopped',
@@ -382,6 +438,7 @@ export class ContinuousChannelWorkerManager {
   }
 
   private async ensureStarted(record: WorkerRecord): Promise<void> {
+    if (record.stopping) await record.stopping
     if (record.pipeline) return
     if (record.startup) return record.startup
     record.startup = this.startRecord(record).finally(() => {
@@ -393,7 +450,8 @@ export class ContinuousChannelWorkerManager {
   private async startRecord(record: WorkerRecord): Promise<void> {
     const generation = ++record.generation
     const startedAt = this.clock.now()
-    const appendToExistingPlaylist = record.state.status !== 'stopped'
+    const appendToExistingPlaylist = record.appendNextStart
+    record.appendNextStart = false
     record.state = {
       ...record.state,
       status: 'starting',
@@ -449,6 +507,7 @@ export class ContinuousChannelWorkerManager {
           ? item
           : { ...item, overlay: null }
       }))
+      const outputReadyAfter = this.clock.now().getTime()
       const pipeline = await this.pipelines.start({
         channelId: record.state.channelId,
         outputDirectory,
@@ -465,6 +524,33 @@ export class ContinuousChannelWorkerManager {
         return
       }
       record.pipeline = pipeline
+      let waitingForFreshOutput = true
+      const readiness = Promise.resolve(
+        this.files.waitForFreshSegment?.(
+          outputDirectory,
+          outputReadyAfter,
+          () => waitingForFreshOutput && generation === record.generation
+        )
+      ).then(() => ({ kind: 'ready' as const }))
+      const earlyExit = pipeline.completed.then((exit) => ({
+        kind: 'exit' as const,
+        exit,
+      }))
+      const startup = await Promise.race([readiness, earlyExit])
+      waitingForFreshOutput = false
+      if (startup.kind === 'exit') {
+        if (record.pipeline === pipeline) record.pipeline = undefined
+        if (generation !== record.generation) return
+        throw new Error(
+          startup.exit.error ??
+            `Channel encoder exited before producing a segment (code ${startup.exit.code ?? 'unknown'})`
+        )
+      }
+      if (generation !== record.generation) {
+        await pipeline.stop()
+        if (record.pipeline === pipeline) record.pipeline = undefined
+        return
+      }
       record.state = {
         ...record.state,
         status: record.state.viewerCount > 0 ? 'live' : 'idle',
@@ -477,6 +563,19 @@ export class ContinuousChannelWorkerManager {
       }
       void pipeline.completed.then((exit) => this.onPipelineExit(record, generation, exit))
     } catch (error) {
+      const failedPipeline = record.pipeline
+      record.pipeline = undefined
+      if (failedPipeline) {
+        try {
+          await failedPipeline.stop()
+        } catch {
+          // Preserve the original startup/readiness error below.
+        }
+      }
+      // stop/restart deliberately invalidates an in-flight startup. Its late
+      // completion must not overwrite the replacement generation with an
+      // error state.
+      if (generation !== record.generation) return
       record.state = {
         ...record.state,
         status: 'error',
@@ -496,6 +595,7 @@ export class ContinuousChannelWorkerManager {
       transcoding: false,
       lastError: exit.code === 0 ? undefined : exit.error ?? `FFmpeg exited with code ${exit.code}`,
     }
+    record.appendNextStart = exit.code === 0
     await this.files.cleanupOutput(this.outputDirectory(record.state.channelId))
     if (this.hasDemand(record)) {
       if (exit.code === 0) await this.ensureStarted(record)
@@ -511,14 +611,22 @@ export class ContinuousChannelWorkerManager {
     }, this.restartDelayMs)
   }
 
-  private async stopRecord(record: WorkerRecord, status: 'stopped'): Promise<void> {
+  private async stopRecord(
+    record: WorkerRecord,
+    status: 'stopped',
+    restartIfDemand = true
+  ): Promise<void> {
     if (record.idleTimer !== undefined) this.clock.clearTimeout(record.idleTimer)
     if (record.restartTimer !== undefined) this.clock.clearTimeout(record.restartTimer)
     record.idleTimer = undefined
     record.restartTimer = undefined
     await this.stopPipeline(record)
+    record.appendNextStart = false
     record.state = { ...record.state, status, transcoding: false, idleSince: undefined }
     await this.files.cleanupOutput(this.outputDirectory(record.state.channelId))
+    if (restartIfDemand && this.hasDemand(record) && !record.pipeline) {
+      await this.ensureStarted(record)
+    }
   }
 
   private expireLease(record: WorkerRecord, clientId: string, expectedExpiry: number): void {
@@ -542,13 +650,13 @@ export class ContinuousChannelWorkerManager {
     }
   }
 
-  private removeWarmLease(record: WorkerRecord, clientId: string): void {
+  private async removeWarmLease(record: WorkerRecord, clientId: string): Promise<void> {
     const lease = record.warmLeases.get(clientId)
     if (!lease) return
     this.clock.clearTimeout(lease.timer)
     record.warmLeases.delete(clientId)
     if (record.warmLeases.size === 0 && record.state.viewerCount === 0) {
-      void this.stopRecord(record, 'stopped')
+      await this.stopRecord(record, 'stopped')
     }
   }
 
@@ -591,10 +699,26 @@ export class ContinuousChannelWorkerManager {
   }
 
   private async stopPipeline(record: WorkerRecord): Promise<void> {
+    if (record.stopping) return record.stopping
+    const stopping = this.performStopPipeline(record)
+    const wrapped = stopping.finally(() => {
+      if (record.stopping === wrapped) record.stopping = undefined
+    })
+    record.stopping = wrapped
+    return wrapped
+  }
+
+  private async performStopPipeline(record: WorkerRecord): Promise<void> {
     record.generation += 1
+    const startup = record.startup
     const pipeline = record.pipeline
-    record.pipeline = undefined
-    if (pipeline) await pipeline.stop()
+    // Keep the handle visible until FFmpeg has actually exited. A concurrent
+    // tune must never start a second writer in the same HLS directory.
+    if (pipeline) {
+      await pipeline.stop()
+      if (record.pipeline === pipeline) record.pipeline = undefined
+    }
+    if (startup) await startup.catch(() => undefined)
   }
 
   private outputDirectory(channelId: string): string {

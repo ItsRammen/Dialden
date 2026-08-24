@@ -19,6 +19,8 @@ services:
       TOASTTV_MOVIE_MEDIA: /media/movies
       TOASTTV_LIBRARY_POLICY: /app/config/kids-7.library.json
       TOASTTV_MEDIA_READ_ONLY: "true"
+      TOASTTV_TRANSCODING_MODE: "${TOASTTV_TRANSCODING_MODE:-software}"
+      TOASTTV_QSV_DEVICE: "${TOASTTV_QSV_DEVICE:-/dev/dri/renderD128}"
       TOASTTV_UPDATES_ENABLED: "false"
       TMDB_API_KEY: "${TMDB_API_KEY:-}"
       TMDB_LANGUAGE: "${TMDB_LANGUAGE:-en-US}"

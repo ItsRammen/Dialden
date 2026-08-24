@@ -54,6 +54,7 @@ describe('ChannelController', () => {
 
   test('publishes one stable channel HLS URL independently of the current item', async () => {
     const channels = mock<ChannelService>()
+    const presentationCalls: Array<{ channelId: string; at: Date }> = []
     channels.getNow.mockResolvedValue({
       channelId: 'kids-club',
       serverTime: '2026-08-24T12:00:00.000Z',
@@ -63,17 +64,40 @@ describe('ChannelController', () => {
       program: null,
       next: null,
     })
-    const app = new Hono().route('/', createChannelController({ channels }))
+    const app = new Hono().route(
+      '/',
+      createChannelController({
+        channels,
+        branding: {
+          presentation: async (channelId, at) => {
+            if (!at) throw new Error('Expected the response server time')
+            presentationCalls.push({ channelId, at })
+            return { enabled: true, logoUrl: '/channels/kids-club/logo' }
+          },
+        },
+      })
+    )
 
     const response = await app.request('/api/v1/channels/kids-club/now')
     const payload = (await response.json()) as {
       liveStream: { mode: string; url: string }
+      branding: { enabled: boolean; logoUrl?: string }
     }
 
     expect(payload.liveStream).toEqual({
       mode: 'hls',
       url: '/api/v1/channels/kids-club/live/index.m3u8',
     })
+    expect(payload.branding).toEqual({
+      enabled: true,
+      logoUrl: '/channels/kids-club/logo',
+    })
+    expect(presentationCalls).toEqual([
+      {
+        channelId: 'kids-club',
+        at: new Date(1787572800000),
+      },
+    ])
   })
 
   test('validates and creates channels through the guarded admin surface', async () => {
@@ -132,6 +156,7 @@ describe('ChannelController', () => {
           preset: 'custom',
           airtime: 'evening',
           collectionIds: [42],
+          marathon: { enabled: true, frequency: 10, episodeCount: 5 },
         }),
       }
     )
@@ -142,6 +167,7 @@ describe('ChannelController', () => {
         collectionIds: [42],
         preset: 'custom',
         airtime: 'evening',
+        marathon: { enabled: true, frequency: 10, episodeCount: 5 },
       })
     )
   })
@@ -156,6 +182,9 @@ describe('ChannelController', () => {
       timezone: 'Asia/Taipei',
       preset: 'all-approved-tv',
       airtime: 'all-day',
+      marathonEnabled: 'true',
+      marathonFrequency: '12',
+      marathonEpisodeCount: '4',
     })
 
     const response = await app.request('/channels/auto-build', {
@@ -171,12 +200,14 @@ describe('ChannelController', () => {
         id: 'all-shows',
         preset: 'all-approved-tv',
         airtime: 'all-day',
+        marathon: { enabled: true, frequency: 12, episodeCount: 4 },
       })
     )
   })
 
   test('applies a confirmed Auto setup preset to an existing channel', async () => {
     const channels = mock<ChannelService>()
+    const changes: Array<{ id: string; mode: string }> = []
     channels.updateAutomatedStation.mockResolvedValue({
       channel: {
         id: 'kids-club',
@@ -189,7 +220,29 @@ describe('ChannelController', () => {
       collectionCount: 1,
       eligibleFiles: 12,
     })
-    const app = new Hono().route('/', createChannelController({ channels }))
+    channels.list.mockReturnValue({
+      serverTime: new Date(0).toISOString(),
+      serverTimeMs: 0,
+      channels: [
+        {
+          id: 'kids-club',
+          name: 'Kids Club',
+          enabled: true,
+          timezone: 'Asia/Taipei',
+          onAir: true,
+          manuallyOffAir: false,
+        },
+      ],
+    })
+    const app = new Hono().route(
+      '/',
+      createChannelController({
+        channels,
+        onChannelChanged: (id, mode) => {
+          changes.push({ id, mode })
+        },
+      })
+    )
     const body = new URLSearchParams({
       action: 'update',
       targetChannelId: 'kids-club',
@@ -217,6 +270,44 @@ describe('ChannelController', () => {
         airtime: 'all-day',
       })
     )
+    expect(changes).toEqual([{ id: 'kids-club', mode: 'restart' }])
+  })
+
+  test('deactivates the stream immediately when a channel is taken off air', async () => {
+    const channels = mock<ChannelService>()
+    const changes: Array<{ id: string; mode: string }> = []
+    channels.setOnAir.mockReturnValue(true)
+    channels.list.mockReturnValue({
+      serverTime: new Date(0).toISOString(),
+      serverTimeMs: 0,
+      channels: [
+        {
+          id: 'kids-club',
+          name: 'Kids Club',
+          enabled: true,
+          timezone: 'UTC',
+          onAir: false,
+          manuallyOffAir: true,
+        },
+      ],
+    })
+    const app = new Hono().route(
+      '/',
+      createChannelController({
+        channels,
+        onChannelChanged: (id, mode) => {
+          changes.push({ id, mode })
+        },
+      })
+    )
+
+    const response = await app.request(
+      '/api/admin/v1/channels/kids-club/off-air',
+      { method: 'POST' }
+    )
+
+    expect(response.status).toBe(200)
+    expect(changes).toEqual([{ id: 'kids-club', mode: 'deactivate' }])
   })
 
   test('uploads channel branding and restarts only the edited channel', async () => {
@@ -257,11 +348,15 @@ describe('ChannelController', () => {
     body.set('enabled', 'on')
     body.set('slots', 'mon | 06:00-08:00 | kids')
     body.set('brandingMode', 'custom')
+    body.set('brandingBurnIn', 'true')
     body.set('brandingOpacity', '204')
     body.set('brandingPosition', '8')
     body.set('brandingX', '20')
     body.set('brandingY', '20')
     body.set('brandingSizePercent', '14')
+    body.set('marathonEnabled', 'true')
+    body.set('marathonFrequency', '8')
+    body.set('marathonEpisodeCount', '3')
     body.set(
       'brandingLogo',
       new File(
@@ -281,10 +376,83 @@ describe('ChannelController', () => {
     expect(channels.update).toHaveBeenCalledWith(
       'kids-club',
       expect.objectContaining({
-        branding: expect.objectContaining({ mode: 'custom', position: 8 }),
+        branding: expect.objectContaining({
+          mode: 'custom',
+          burnIn: true,
+          position: 8,
+        }),
+        marathon: { enabled: true, frequency: 8, episodeCount: 3 },
       })
     )
     expect(restarted).toEqual(['kids-club'])
+  })
+
+  test('saves the dedicated branding modal without replacing schedule settings', async () => {
+    const channels = mock<ChannelService>()
+    const logos = mock<ChannelLogoStore>()
+    const existing = {
+      id: 'kids-club',
+      name: 'Kids Club',
+      enabled: true,
+      timezone: 'UTC',
+      slots: [
+        { days: ['mon' as const], start: '06:00', end: '08:00', groups: ['kids'] },
+      ],
+    }
+    channels.administrationSnapshot.mockReturnValue({
+      channels: [existing],
+      manuallyOffAir: [],
+      programmingGroups: ['kids'],
+      configurationError: null,
+    })
+    channels.update.mockImplementation((_id, channel) => channel)
+    const restarted: string[] = []
+    const app = new Hono().route(
+      '/',
+      createChannelController({
+        channels,
+        logos,
+        onBrandingUpdated: (id) => {
+          restarted.push(id)
+        },
+      })
+    )
+    const body = new FormData()
+    body.set('brandingMode', 'custom')
+    body.set('brandingOpacity', '180')
+    body.set('brandingPosition', '8')
+    body.set('brandingX', '16')
+    body.set('brandingY', '20')
+    body.set('brandingSizePercent', '15')
+    body.set(
+      'brandingLogo',
+      new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'kids.png', {
+        type: 'image/png',
+      })
+    )
+
+    const response = await app.request('/channels/kids-club/branding', {
+      method: 'POST',
+      body,
+    })
+
+    expect(response.status).toBe(303)
+    expect(response.headers.get('location')).toBe(
+      '/channels?changed=updated&edit=kids-club#editor'
+    )
+    expect(logos.save).toHaveBeenCalledWith('kids-club', expect.any(File))
+    expect(channels.update).toHaveBeenCalledWith(
+      'kids-club',
+      expect.objectContaining({
+        slots: existing.slots,
+        branding: expect.objectContaining({
+          mode: 'custom',
+          opacity: 180,
+          position: 8,
+        }),
+      })
+    )
+    expect(restarted).toEqual([])
   })
 
   test('keeps channel administration available when automation catalog loading fails', async () => {

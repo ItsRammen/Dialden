@@ -50,7 +50,13 @@ const position = (overrides: Partial<ChannelTimelinePosition> = {}): ChannelTime
   ...overrides,
 })
 
-function fixture(options: { missing?: boolean; noFallback?: boolean; overlay?: boolean } = {}) {
+function fixture(options: {
+  missing?: boolean
+  noFallback?: boolean
+  overlay?: boolean
+  readiness?: Promise<void>
+  stopGate?: Promise<void>
+} = {}) {
   const clock = new FakeClock()
   const requests: ChannelPipelineRequest[] = []
   const exits: ReturnType<typeof deferred<ChannelPipelineExit>>[] = []
@@ -83,8 +89,9 @@ function fixture(options: { missing?: boolean; noFallback?: boolean; overlay?: b
         exits.push(exit)
         const handle: ChannelPipelineHandle = {
           completed: exit.promise,
-          stop: () => {
+          stop: async () => {
             stops += 1
+            await options.stopGate
           },
         }
         return handle
@@ -94,6 +101,9 @@ function fixture(options: { missing?: boolean; noFallback?: boolean; overlay?: b
       prepareOutput: () => {},
       cleanupOutput: () => {},
       sourceExists: (path) => !options.missing || path === '/fallback.mp4',
+      ...(options.readiness
+        ? { waitForFreshSegment: () => options.readiness! }
+        : {}),
     },
     { outputRoot: '/data/streams', idleTimeoutMs: 60_000, restartDelayMs: 10 },
     clock
@@ -113,6 +123,49 @@ describe('ContinuousChannelWorkerManager', () => {
     expect(f.requests[0]?.playlistPath).toBe('/data/streams/kids/live/index.m3u8')
     expect(f.requests[0]?.appendToExistingPlaylist).toBe(false)
     expect(f.requests[0]?.profile).toMatchObject({ videoCodec: 'h264', audioCodec: 'aac', audioChannels: 2 })
+  })
+
+  test('does not advertise a worker as live until its new generation emits a segment', async () => {
+    const ready = deferred<void>()
+    const f = fixture({ readiness: ready.promise })
+    let completed = false
+    const acquiring = f.manager.acquire('kids').then((state) => {
+      completed = true
+      return state
+    })
+
+    await settle()
+    expect(f.requests).toHaveLength(1)
+    expect(f.manager.getState('kids')?.status).toBe('starting')
+    expect(completed).toBe(false)
+
+    ready.resolve()
+    expect((await acquiring).status).toBe('live')
+  })
+
+  test('surfaces an encoder exit immediately instead of waiting for readiness timeout', async () => {
+    const manager = new ContinuousChannelWorkerManager(
+      { resolve: async () => position() },
+      {
+        start: async () => ({
+          completed: Promise.resolve({ code: 1, error: 'unsupported codec' }),
+          stop: () => {},
+        }),
+      },
+      {
+        prepareOutput: () => {},
+        cleanupOutput: () => {},
+        sourceExists: () => true,
+        waitForFreshSegment: () => new Promise<void>(() => {}),
+      },
+      { outputRoot: '/data/streams', idleTimeoutMs: 60_000 },
+      new FakeClock()
+    )
+
+    const state = await manager.acquire('kids')
+
+    expect(state.status).toBe('error')
+    expect(state.lastError).toBe('unsupported codec')
   })
 
   test('passes an available channel overlay to the pipeline', async () => {
@@ -154,7 +207,9 @@ describe('ContinuousChannelWorkerManager', () => {
     await settle()
     expect(f.requests).toHaveLength(2)
     expect(f.requests[1]?.position.sourceOffsetSeconds).toBe(782)
-    expect(f.requests[1]?.appendToExistingPlaylist).toBe(true)
+    // Crash recovery starts a fresh playlist so stale programme segments are
+    // never appended into the replacement generation.
+    expect(f.requests[1]?.appendToExistingPlaylist).toBe(false)
     expect(f.manager.getState('kids')?.status).toBe('live')
   })
 
@@ -203,6 +258,147 @@ describe('ContinuousChannelWorkerManager', () => {
     expect(f.manager.getState('preschool')?.status).toBe('stopped')
     expect(f.manager.getState('cartoons')?.status).toBe('stopped')
     expect(f.stops).toBe(2)
+  })
+
+  test('starts both adjacent warm workers concurrently', async () => {
+    const slowStart = deferred<void>()
+    const starts: string[] = []
+    const neverExits = new Promise<ChannelPipelineExit>(() => {})
+    const manager = new ContinuousChannelWorkerManager(
+      { resolve: async (channelId) => position({ scheduleItemId: channelId }) },
+      {
+        start: async (request) => {
+          starts.push(request.channelId)
+          if (request.channelId === 'preschool') await slowStart.promise
+          return { completed: neverExits, stop: () => {} }
+        },
+      },
+      {
+        prepareOutput: () => {},
+        cleanupOutput: () => {},
+        sourceExists: () => true,
+      },
+      { outputRoot: '/data/streams', idleTimeoutMs: 60_000 },
+      new FakeClock()
+    )
+
+    const warming = manager.warm(['preschool', 'cartoons'], 'living-room')
+    await settle()
+    expect(starts.sort()).toEqual(['cartoons', 'preschool'])
+
+    slowStart.resolve()
+    await warming
+  })
+
+  test('waits for an old encoder to stop before starting a replacement writer', async () => {
+    const stopped = deferred<void>()
+    const f = fixture({ stopGate: stopped.promise })
+    await f.manager.acquire('kids')
+    f.manager.release('kids')
+    f.clock.advance(60_000)
+    await settle()
+
+    expect(f.stops).toBe(1)
+    let returned = false
+    const returning = f.manager.touch('kids', 'returning-tv').then((state) => {
+      returned = true
+      return state
+    })
+    await settle()
+    expect(returned).toBe(false)
+    expect(f.requests).toHaveLength(1)
+
+    stopped.resolve()
+    expect((await returning).status).toBe('live')
+    expect(f.requests).toHaveLength(2)
+  })
+
+  test('serializes simultaneous restart requests behind one encoder stop', async () => {
+    const stopped = deferred<void>()
+    const f = fixture({ stopGate: stopped.promise })
+    await f.manager.acquire('kids')
+
+    const first = f.manager.restart('kids', 'first change')
+    const second = f.manager.restart('kids', 'second change')
+    await settle()
+    expect(f.stops).toBe(1)
+    expect(f.requests).toHaveLength(1)
+
+    stopped.resolve()
+    await Promise.all([first, second])
+    expect(f.stops).toBe(1)
+    expect(f.requests).toHaveLength(2)
+  })
+
+  test('serializes concurrent warm sets and never exceeds the global speculative cap', async () => {
+    const clock = new FakeClock()
+    const starts: string[] = []
+    const stops: string[] = []
+    const stopGates = new Map<string, ReturnType<typeof deferred<void>>>()
+    const neverExits = new Promise<ChannelPipelineExit>(() => {})
+    let active = 0
+    let maximumActive = 0
+    const manager = new ContinuousChannelWorkerManager(
+      { resolve: async (channelId) => position({ scheduleItemId: channelId }) },
+      {
+        start: async (request) => {
+          starts.push(request.channelId)
+          active += 1
+          maximumActive = Math.max(maximumActive, active)
+          const gate = deferred<void>()
+          stopGates.set(request.channelId, gate)
+          return {
+            completed: neverExits,
+            stop: async () => {
+              stops.push(request.channelId)
+              await gate.promise
+              active -= 1
+            },
+          }
+        },
+      },
+      {
+        prepareOutput: () => {},
+        cleanupOutput: () => {},
+        sourceExists: () => true,
+      },
+      {
+        outputRoot: '/data/streams',
+        idleTimeoutMs: 60_000,
+        maximumWarmChannels: 2,
+      },
+      clock
+    )
+
+    await manager.warm(['one', 'two'], 'first-tv')
+    const replacing = manager.warm(['three', 'four'], 'second-tv')
+    await settle()
+    expect(starts).toEqual(['one', 'two'])
+    expect(stops).toEqual(['one'])
+
+    stopGates.get('one')?.resolve()
+    for (let attempt = 0; attempt < 200 && !stops.includes('two'); attempt += 1) {
+      await Promise.resolve()
+    }
+    expect(starts).toEqual(['one', 'two'])
+    expect(stops).toEqual(['one', 'two'])
+
+    stopGates.get('two')?.resolve()
+    await replacing
+    expect(starts).toEqual(['one', 'two', 'three', 'four'])
+    expect(maximumActive).toBe(2)
+    expect(active).toBe(2)
+  })
+
+  test('deactivates an off-air worker and removes every viewer and warm lease', async () => {
+    const f = fixture()
+    await f.manager.touch('kids', 'living-room')
+    await f.manager.warm(['kids'], 'living-room')
+
+    const state = await f.manager.deactivate('kids')
+
+    expect(state).toMatchObject({ status: 'stopped', viewerCount: 0 })
+    expect(f.stops).toBe(1)
   })
 
   test('evicts the oldest speculative worker instead of exceeding the global warm cap', async () => {

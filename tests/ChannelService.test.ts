@@ -78,6 +78,22 @@ function interlude(id: number, durationSeconds = 30): MediaItem {
   }
 }
 
+function episode(
+  id: number,
+  collectionTitle: string,
+  episodeNumber: number
+): MediaItem {
+  const token = `S01E${String(episodeNumber).padStart(2, '0')}`
+  return {
+    ...video(id, collectionTitle),
+    path: `/media/tv/${collectionTitle}/Season 01/${collectionTitle} ${token}.mkv`,
+    filename: `${collectionTitle} ${token}.mkv`,
+    relativePath: `${collectionTitle}/Season 01/${collectionTitle} ${token}.mkv`,
+    seasonNumber: 1,
+    episodeNumber,
+  }
+}
+
 describe('ChannelService', () => {
   test('uses provider show and episode metadata for schedule labels', async () => {
     const repository = mock<IMediaRepository>()
@@ -109,6 +125,47 @@ describe('ChannelService', () => {
       title: 'Gets a Bright Idea',
       collectionTitle: 'The Magic School Bus',
       episodeLabel: 'S03E05',
+    })
+  })
+
+  test('keeps combined episode names while hiding filename quality tokens', async () => {
+    const repository = mock<IMediaRepository>()
+    const filename =
+      "Ryan's Mystery Playdate - S01E01-E02 - Ryan's Kick-Flipping Playdate + Ryan's Experimental Playdate-WEB-DL-1080p.mkv"
+    repository.getAll.mockResolvedValue([
+      {
+        ...video(2, "Ryan's Mystery Playdate"),
+        path: `/media/tv/Ryan's Mystery Playdate/Season 01/${filename}`,
+        filename,
+        relativePath: `Ryan's Mystery Playdate/Season 01/${filename}`,
+        seasonNumber: 1,
+        episodeNumber: 1,
+        episodeTitle:
+          "Ryan's Kick-Flipping Playdate + Ryan's Experimental Playdate-WEB-DL-1080p",
+        // A provider may have metadata for only the first part of a combined
+        // file. The current filename remains the complete display source.
+        episodeMetadataTitle: "Ryan's Kick-Flipping Playdate",
+      },
+    ])
+    const ryanPolicy: LibraryPolicyDocument = {
+      ...policy,
+      roots: {
+        tv: {
+          collections: [
+            { name: "Ryan's Mystery Playdate", groups: ['comfort'] },
+          ],
+        },
+      },
+    }
+    const service = new ChannelService(repository, ryanPolicy, {
+      now: () => new Date('2026-08-23T22:35:00.000Z'),
+    })
+
+    expect((await service.getNow('kids-club'))?.program).toMatchObject({
+      title:
+        "Ryan's Kick-Flipping Playdate + Ryan's Experimental Playdate",
+      collectionTitle: "Ryan's Mystery Playdate",
+      episodeLabel: 'S01E01–E02',
     })
   })
 
@@ -222,6 +279,128 @@ describe('ChannelService', () => {
     expect(first?.timelineRevision).toBe(eligibleOnly?.timelineRevision)
     expect(first?.programs.length).toBeGreaterThan(0)
     expect(first?.programs.every((program) => [1, 2].includes(program.mediaId))).toBe(true)
+  })
+
+  test('builds deterministic episode marathons without immediate replays', async () => {
+    const catalog = [
+      episode(1, 'Bluey (2018)', 1),
+      episode(2, 'Bluey (2018)', 2),
+      episode(3, 'Bluey (2018)', 3),
+      episode(4, 'Bluey (2018)', 4),
+      episode(5, 'Numberblocks', 1),
+      episode(6, 'Numberblocks', 2),
+      episode(7, 'Numberblocks', 3),
+      episode(8, 'Numberblocks', 4),
+    ]
+    const marathon = { enabled: true, frequency: 2, episodeCount: 3 }
+    const scenarios = [
+      {
+        now: '2020-01-01T00:00:00.000Z',
+        slots: [
+          {
+            days: ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const,
+            start: '00:00',
+            end: '24:00',
+            groups: ['comfort', 'learning'],
+          },
+        ],
+      },
+      {
+        now: '2026-08-24T00:00:00.000Z',
+        slots: [
+          {
+            days: ['mon'] as const,
+            start: '00:00',
+            end: '02:00',
+            groups: ['comfort', 'learning'],
+          },
+        ],
+      },
+    ]
+
+    for (const scenario of scenarios) {
+      const marathonPolicy: LibraryPolicyDocument = {
+        ...policy,
+        channels: [
+          {
+            id: 'marathon',
+            name: 'Marathon',
+            enabled: true,
+            timezone: 'UTC',
+            slots: scenario.slots,
+            marathon,
+          },
+        ],
+      }
+      const firstRepository = mock<IMediaRepository>()
+      firstRepository.getAll.mockResolvedValue(catalog)
+      const reversedRepository = mock<IMediaRepository>()
+      reversedRepository.getAll.mockResolvedValue([...catalog].reverse())
+      const clock = { now: () => new Date(scenario.now) }
+      const first = await new ChannelService(
+        firstRepository,
+        marathonPolicy,
+        clock
+      ).getGuide('marathon', 2)
+      const repeated = await new ChannelService(
+        reversedRepository,
+        marathonPolicy,
+        clock
+      ).getGuide('marathon', 2)
+      const programs = first?.programs ?? []
+
+      expect(programs.map((program) => program.mediaId)).toEqual(
+        repeated?.programs.map((program) => program.mediaId) ?? []
+      )
+      expect(programs.length).toBeGreaterThan(8)
+      expect(
+        programs.slice(1).every(
+          (program, index) => program.mediaId !== programs[index]?.mediaId
+        )
+      ).toBe(true)
+      expect(
+        programs.some(
+          (program, index) =>
+            program.collectionTitle === programs[index + 1]?.collectionTitle &&
+            program.collectionTitle === programs[index + 2]?.collectionTitle
+        )
+      ).toBe(true)
+    }
+  })
+
+  test('leaves ordinary ordering unchanged when marathon mode is absent or disabled', async () => {
+    const repository = mock<IMediaRepository>()
+    repository.getAll.mockResolvedValue([
+      episode(1, 'Bluey (2018)', 1),
+      episode(2, 'Bluey (2018)', 2),
+      episode(3, 'Numberblocks', 1),
+      episode(4, 'Numberblocks', 2),
+    ])
+    const baseChannel = policy.channels?.[0]
+    expect(baseChannel).toBeDefined()
+    const clock = { now: () => new Date('2026-08-23T22:30:00.000Z') }
+    const ordinary = await new ChannelService(
+      repository,
+      policy,
+      clock
+    ).getGuide('kids-club', 1)
+    const disabled = await new ChannelService(
+      repository,
+      {
+        ...policy,
+        channels: [
+          {
+            ...baseChannel!,
+            marathon: { enabled: false, frequency: 2, episodeCount: 3 },
+          },
+        ],
+      },
+      clock
+    ).getGuide('kids-club', 1)
+
+    expect(disabled?.programs.map((program) => program.mediaId)).toEqual(
+      ordinary?.programs.map((program) => program.mediaId)
+    )
   })
 
   test('returns off-air and not-found states without inventing a program', async () => {
@@ -801,6 +980,7 @@ describe('ChannelService', () => {
         preset: 'custom',
         airtime: 'all-day',
         collectionIds: [8],
+        marathon: { enabled: true, frequency: 12, episodeCount: 4 },
       })
 
       expect(result?.channel).toMatchObject({
@@ -808,6 +988,7 @@ describe('ChannelService', () => {
         name: 'Bluey All Day',
         enabled: false,
         timezone: 'UTC',
+        marathon: { enabled: true, frequency: 12, episodeCount: 4 },
       })
       expect(result?.channel.slots).toHaveLength(1)
       expect(result?.channel.slots[0]).toMatchObject({
@@ -824,14 +1005,31 @@ describe('ChannelService', () => {
         preset: 'custom',
         airtime: 'all-day',
         collectionIds: [8],
+        marathon: { enabled: true, frequency: 12, episodeCount: 4 },
       })
+      expect(
+        (
+          await service.updateAutomatedStation('kids-club', {
+            id: 'kids-club',
+            name: 'Bluey All Day',
+            timezone: 'UTC',
+            preset: 'custom',
+            airtime: 'all-day',
+            collectionIds: [8],
+          })
+        )?.channel.marathon
+      ).toEqual({ enabled: true, frequency: 12, episodeCount: 4 })
 
       const restored = new ChannelService(repository, policy, undefined, store)
       expect(
         restored.administrationSnapshot().channels.find(
           (channel) => channel.id === 'kids-club'
         )
-      ).toMatchObject({ name: 'Bluey All Day', enabled: false })
+      ).toMatchObject({
+        name: 'Bluey All Day',
+        enabled: false,
+        marathon: { enabled: true, frequency: 12, episodeCount: 4 },
+      })
       expect(restored.administrationSnapshot().programmingGroups).toContain(
         generatedGroup as string
       )

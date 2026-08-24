@@ -1,13 +1,18 @@
 import type { IMediaRepository } from '../repositories/IMediaRepository'
 import type { MediaItem } from '../types'
 import type {
+  ChannelMarathonPolicy,
   ChannelScheduleSlot,
   LibraryChannelPolicy,
   LibraryPolicyDocument,
   ScheduleDay,
 } from '../config/library'
 import { validateLibraryChannels } from '../config/library'
-import { cleanFilename } from '../utils/cleanFilename'
+import {
+  parseEpisodeDisplayTitle,
+  parseEpisodeRange,
+} from '../domain/CollectionIdentity'
+import { cleanFilename, cleanMediaTitle } from '../utils/cleanFilename'
 import type {
   ChannelConfigurationSnapshot,
   ChannelConfigurationStore,
@@ -49,6 +54,7 @@ export interface StationBuildRequest extends StationSelectionRequest {
   readonly name: string
   readonly timezone: string
   readonly airtime?: StationAirtimeId
+  readonly marathon?: ChannelMarathonPolicy
 }
 
 export interface StationBuildPreview {
@@ -284,6 +290,7 @@ export class ChannelService {
       preset: 'custom',
       collectionIds,
       ...(airtime ? { airtime } : {}),
+      ...(channel.marathon ? { marathon: channel.marathon } : {}),
     }
   }
 
@@ -583,6 +590,7 @@ export class ChannelService {
         enabled: true,
         timezone: request.timezone,
         slots: stationAirtimeSlots(request.airtime ?? 'all-day', group),
+        ...(request.marathon ? { marathon: request.marathon } : {}),
       },
     ])[0] as LibraryChannelPolicy
   }
@@ -614,6 +622,7 @@ export class ChannelService {
           request.airtime ?? 'all-day',
           group
         ),
+        ...(request.marathon ? { marathon: request.marathon } : {}),
       },
     ])[0] as LibraryChannelPolicy
   }
@@ -729,9 +738,12 @@ export class ChannelService {
     })
     if (eligible.length === 0) return []
 
-    const orderedPrograms = this.deterministicShuffle(
-      eligible,
-      `${channel.id}|continuous|${slot.groups.join(',')}`
+    const orderedPrograms = this.withMarathons(
+      this.deterministicShuffle(
+        eligible,
+        `${channel.id}|continuous|${slot.groups.join(',')}`
+      ),
+      channel
     )
     const ordered = this.withInterludes(
       orderedPrograms,
@@ -821,9 +833,12 @@ export class ChannelService {
       if (eligible.length === 0) continue
 
       const dateKey = `${date.year}-${this.pad(date.month)}-${this.pad(date.day)}`
-      const ordered = this.deterministicShuffle(
-        eligible,
-        `${channel.id}|${dateKey}|${slot.start}|${slot.groups.join(',')}`
+      const ordered = this.withMarathons(
+        this.deterministicShuffle(
+          eligible,
+          `${channel.id}|${dateKey}|${slot.start}|${slot.groups.join(',')}`
+        ),
+        channel
       )
       let cursorMs = start.getTime()
       let sequence = 0
@@ -959,12 +974,24 @@ export class ChannelService {
   }
 
   private programTitle(item: MediaItem): string {
+    const range = parseEpisodeRange(item.relativePath || item.filename)
+    const storedTitle = item.episodeTitle
+      ? cleanMediaTitle(item.episodeTitle)
+          .replace(/[._]+/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+      : null
+    const parsedTitle =
+      parseEpisodeDisplayTitle(item.relativePath || item.filename) ||
+      storedTitle
     const providerTitle = item.episodeMetadataTitle?.trim()
+    // Older indexed rows may contain provider metadata for only the first
+    // segment. Until metadata is refreshed, use the cleaned combined title.
+    if (range?.endEpisodeNumber) {
+      if (providerTitle?.includes(' + ')) return providerTitle
+      if (parsedTitle) return parsedTitle
+    }
     if (providerTitle) return providerTitle
-    const parsedTitle = item.episodeTitle
-      ?.replace(/[._]+/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
     if (parsedTitle) return parsedTitle
     return cleanFilename(item.filename).replace(/[._]+/g, ' ').trim()
   }
@@ -1104,7 +1131,13 @@ export class ChannelService {
       return {}
     }
     return {
-      episodeLabel: `S${String(item.seasonNumber).padStart(2, '0')}E${String(item.episodeNumber).padStart(2, '0')}`,
+      episodeLabel: (() => {
+        const range = parseEpisodeRange(item.relativePath || item.filename)
+        const first = `S${String(item.seasonNumber).padStart(2, '0')}E${String(item.episodeNumber).padStart(2, '0')}`
+        return range?.endEpisodeNumber
+          ? `${first}–E${String(range.endEpisodeNumber).padStart(2, '0')}`
+          : first
+      })(),
     }
   }
 
@@ -1163,6 +1196,103 @@ export class ChannelService {
       output[swapIndex] = value as MediaItem
     }
     return output
+  }
+
+  /**
+   * Reorder one already-deterministic programme cycle into bounded runs from a
+   * TV collection. Every input appears exactly once, so enabling marathons
+   * cannot introduce an immediate replay or expand the schedule indefinitely.
+   */
+  private withMarathons(
+    programs: MediaItem[],
+    channel: LibraryChannelPolicy
+  ): MediaItem[] {
+    const policy = channel.marathon
+    if (!policy?.enabled || programs.length < 2) return programs
+
+    const remaining = new Set(programs)
+    const collectionPrograms = new Map<string, Set<MediaItem>>()
+    for (const program of programs) {
+      const key = this.marathonCollectionKey(program)
+      if (!key) continue
+      const collection = collectionPrograms.get(key) ?? new Set<MediaItem>()
+      collection.add(program)
+      collectionPrograms.set(key, collection)
+    }
+
+    const output: MediaItem[] = []
+    let cursor = 0
+    let ordinaryPrograms = 0
+    while (output.length < programs.length) {
+      while (cursor < programs.length && !remaining.has(programs[cursor] as MediaItem)) {
+        cursor++
+      }
+      const candidate = programs[cursor]
+      if (!candidate) break
+      const key = this.marathonCollectionKey(candidate)
+      const collection = key ? collectionPrograms.get(key) : undefined
+
+      if (ordinaryPrograms >= policy.frequency && collection && collection.size >= 2) {
+        const episodes = [...collection].sort((left, right) =>
+          this.compareMarathonEpisodes(left, right)
+        )
+        const blockSize = Math.min(policy.episodeCount, episodes.length)
+        const candidateIndex = episodes.indexOf(candidate)
+        const blockStart = Math.min(
+          Math.max(0, candidateIndex),
+          episodes.length - blockSize
+        )
+        for (const episode of episodes.slice(blockStart, blockStart + blockSize)) {
+          output.push(episode)
+          remaining.delete(episode)
+          collection.delete(episode)
+        }
+        ordinaryPrograms = 0
+        continue
+      }
+
+      output.push(candidate)
+      remaining.delete(candidate)
+      if (collection) collection.delete(candidate)
+      ordinaryPrograms++
+    }
+    return output
+  }
+
+  private marathonCollectionKey(item: MediaItem): string | null {
+    if (item.libraryKind !== 'tv') return null
+    if (!this.marathonEpisodeOrder(item)) return null
+    const title = item.collectionTitle?.trim()
+    if (!title) return null
+    return this.collectionKey(item.rootId ?? 'legacy', title)
+  }
+
+  private compareMarathonEpisodes(left: MediaItem, right: MediaItem): number {
+    const leftOrder = this.marathonEpisodeOrder(left)
+    const rightOrder = this.marathonEpisodeOrder(right)
+    const seasonDifference =
+      (leftOrder?.season ?? Number.MAX_SAFE_INTEGER) -
+      (rightOrder?.season ?? Number.MAX_SAFE_INTEGER)
+    if (seasonDifference !== 0) return seasonDifference
+    const episodeDifference =
+      (leftOrder?.episode ?? Number.MAX_SAFE_INTEGER) -
+      (rightOrder?.episode ?? Number.MAX_SAFE_INTEGER)
+    if (episodeDifference !== 0) return episodeDifference
+    return this.compareText(
+      `${left.relativePath ?? left.path}\u0000${left.id}`,
+      `${right.relativePath ?? right.path}\u0000${right.id}`
+    )
+  }
+
+  private marathonEpisodeOrder(
+    item: MediaItem
+  ): { season: number; episode: number } | null {
+    const parsed = parseEpisodeRange(item.relativePath || item.filename)
+    const season = item.seasonNumber ?? parsed?.seasonNumber
+    const episode = item.episodeNumber ?? parsed?.episodeNumber
+    return Number.isInteger(season) && Number.isInteger(episode)
+      ? { season: season as number, episode: episode as number }
+      : null
   }
 
   private hash(value: string): number {

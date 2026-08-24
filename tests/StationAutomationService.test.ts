@@ -177,6 +177,52 @@ describe('station automation', () => {
     ).toEqual(['Bluey'])
   })
 
+  test('keeps recognized Nick Jr. preschool titles out of the Nickelodeon-style preset', async () => {
+    const records = [
+      collection(1, 'SpongeBob SquarePants', {
+        networks: ['Nickelodeon'],
+        studios: ['Nickelodeon Animation Studio'],
+      }),
+      collection(2, "Blue's Clues", {
+        networks: ['Nickelodeon'],
+        studios: ['Nickelodeon Productions'],
+      }),
+      collection(3, "Ryan's Mystery Playdate", {
+        networks: ['Nickelodeon'],
+      }),
+    ]
+    const catalog = await loadStationAutomationCatalog({
+      async getCollections(options) {
+        const offset = options?.offset ?? 0
+        return records.slice(offset, offset + (options?.limit ?? 250))
+      },
+    })
+
+    expect(catalog.networks).toEqual([
+      { name: 'Nickelodeon', collections: 3 },
+    ])
+    expect(
+      catalog.presets.find((preset) => preset.id === 'nick-jr-style')
+    ).toMatchObject({
+      name: 'Nick Jr.-style preschool mix',
+      matchedCollections: 2,
+      description: expect.stringContaining('raw Network facets stay unchanged'),
+    })
+    expect(
+      catalog.presets.find((preset) => preset.id === 'nickelodeon-style')
+    ).toMatchObject({ name: 'Nickelodeon-style mix', matchedCollections: 1 })
+    expect(
+      selectStationCollections(catalog, { preset: 'nickelodeon-style' }).map(
+        (item) => item.displayTitle
+      )
+    ).toEqual(['SpongeBob SquarePants'])
+    expect(
+      selectStationCollections(catalog, { preset: 'nick-jr-style' }).map(
+        (item) => item.displayTitle
+      )
+    ).toEqual(["Blue's Clues", "Ryan's Mystery Playdate"])
+  })
+
   test('includes a review collection when a parent approved one file', async () => {
     const playableFileOnly = collection(9, 'Parent Pick', {
       policyDecision: 'review',
@@ -304,8 +350,14 @@ describe('station automation', () => {
         name: 'Family Animation',
         timezone: 'UTC',
         preset: 'family-animation',
+        marathon: { enabled: true, frequency: 12, episodeCount: 4 },
       })
       expect(result.channel.enabled).toBe(true)
+      expect(result.channel.marathon).toEqual({
+        enabled: true,
+        frequency: 12,
+        episodeCount: 4,
+      })
       const generatedGroup = result.channel.slots[0]?.groups[0]
       expect(generatedGroup).toMatch(/^toasttv-auto-[0-9a-f]{8}$/)
       expect(
@@ -334,6 +386,9 @@ describe('station automation', () => {
       ])
 
       const restored = new ChannelService(repository, policy, clock, store)
+      expect(
+        restored.administrationSnapshot().channels[0]?.marathon
+      ).toEqual({ enabled: true, frequency: 12, episodeCount: 4 })
       expect(
         (await restored.getGuide('family-animation', 1))?.programs[0]?.mediaId
       ).toBe(501)

@@ -166,6 +166,8 @@ const NICK_TITLES = new Set(
 const NICK_JR_TITLES = new Set(
   [
     'blaze and the monster machines',
+    "blue's clues",
+    "blue's clues and you",
     'blues clues',
     'blues clues and you',
     'bubble guppies',
@@ -174,6 +176,8 @@ const NICK_JR_TITLES = new Set(
     'max and ruby',
     'ni hao kai lan',
     'paw patrol',
+    "ryan's mystery playdate",
+    'ryans mystery playdate',
     'shimmer and shine',
     'team umizoomi',
     'the backyardigans',
@@ -297,7 +301,7 @@ const presetDefinitions: readonly PresetDefinition[] = [
   },
   {
     id: 'nickelodeon-style',
-    name: 'Nick-style mix',
+    name: 'Nickelodeon-style mix',
     description:
       'Parent-allowed Nickelodeon and Nicktoons titles, excluding titles identified as Nick Jr. preschool programming.',
     unofficial: true,
@@ -307,7 +311,7 @@ const presetDefinitions: readonly PresetDefinition[] = [
     id: 'nick-jr-style',
     name: 'Nick Jr.-style preschool mix',
     description:
-      'Parent-allowed preschool titles matched by Nick Jr. network metadata or a conservative recognized-title list.',
+      'Parent-allowed preschool titles matched by exact Nick Jr. network metadata or a conservative title list when TMDB reports only Nickelodeon; raw Network facets stay unchanged.',
     unofficial: true,
     matches: matchesNickJrStyle,
   },

@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1
 
 ARG BUN_VERSION=1.3.6
+ARG JELLYFIN_FFMPEG_PACKAGE=jellyfin-ffmpeg8
 
 FROM oven/bun:${BUN_VERSION} AS build
 
@@ -25,14 +26,36 @@ FROM oven/bun:${BUN_VERSION} AS runtime
 
 USER root
 
-# The ffmpeg package also provides ffprobe. Both are available on Debian's
-# amd64 and arm64 architectures. tzdata makes the configurable server timezone
-# deterministic on slim container hosts.
+ARG JELLYFIN_FFMPEG_PACKAGE
+
+# Jellyfin's pinned FFmpeg build includes its Intel media-driver and oneVPL /
+# MediaSDK runtime stack on amd64, while retaining arm64 support for the normal
+# software path. ToastTV invokes the binaries directly; it does not embed or
+# require a Jellyfin server. tzdata keeps channel timezones deterministic.
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        ffmpeg \
+        ca-certificates \
+        curl \
+        gnupg \
         gosu \
         tzdata \
+        util-linux \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://repo.jellyfin.org/jellyfin_team.gpg.key \
+        | gpg --dearmor -o /etc/apt/keyrings/jellyfin.gpg \
+    && printf '%s\n' \
+        'Types: deb' \
+        'URIs: https://repo.jellyfin.org/debian' \
+        'Suites: trixie' \
+        'Components: main' \
+        'Signed-By: /etc/apt/keyrings/jellyfin.gpg' \
+        > /etc/apt/sources.list.d/jellyfin.sources \
+    && apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        "${JELLYFIN_FFMPEG_PACKAGE}" \
+    && ln -sf /usr/lib/jellyfin-ffmpeg/ffmpeg /usr/local/bin/ffmpeg \
+    && ln -sf /usr/lib/jellyfin-ffmpeg/ffprobe /usr/local/bin/ffprobe \
+    && apt-get purge -y --auto-remove curl gnupg \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -50,6 +73,8 @@ ENV NODE_ENV=production \
     TOASTTV_MOVIE_MEDIA=/media/movies \
     TOASTTV_LIBRARY_POLICY=/app/data/kids-7.library.json \
     TOASTTV_MEDIA_READ_ONLY=true \
+    TOASTTV_TRANSCODING_MODE=software \
+    TOASTTV_QSV_DEVICE=/dev/dri/renderD128 \
     TOASTTV_UPDATES_ENABLED=false
 
 COPY --from=build --chown=bun:bun /app/bin/server.js ./bin/server.js

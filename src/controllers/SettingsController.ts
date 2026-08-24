@@ -13,12 +13,14 @@ import type { MediaService } from '../services/MediaService'
 import type { IHardwareDetectionService } from '../services/HardwareDetectionService'
 import type { UpdateService } from '../services/UpdateService'
 import type { ChannelInterludePolicy } from '../services/ChannelService'
+import type { FfmpegTranscodingStatus } from '../services/FfmpegTranscodingBackend'
 
 interface SettingsControllerDeps {
   config: ConfigService
   media: MediaService
   hardware?: IHardwareDetectionService
   update: UpdateService
+  transcodingStatus?: FfmpegTranscodingStatus
   onInterludeUpdated?: (
     policy: ChannelInterludePolicy
   ) => Promise<void> | void
@@ -44,6 +46,7 @@ export function createSettingsController(deps: SettingsControllerDeps) {
         updateAvailable: updateInfo?.updateAvailable,
         currentVersion: updateInfo?.currentVersion ?? update.currentVersion,
         latestVersion: updateInfo?.latestVersion,
+        transcodingStatus: deps.transcodingStatus,
       })
     )
   })

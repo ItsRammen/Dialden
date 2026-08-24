@@ -17,10 +17,12 @@ type MetadataSettingsService = Pick<
   | 'updateConfiguration'
   | 'testConfiguration'
   | 'runPending'
+  | 'reevaluateLibrary'
 >
 
 export function createMetadataSettingsController(
-  metadata: MetadataSettingsService
+  metadata: MetadataSettingsService,
+  onLibraryReevaluated?: () => Promise<void> | void
 ) {
   const controller = new Hono()
 
@@ -29,6 +31,7 @@ export function createMetadataSettingsController(
     return c.html(
       renderMetadataSettings(metadata.getPublicConfig(), metadata.getState(), {
         saved: c.req.query('saved') === '1',
+        reevaluationStarted: c.req.query('reevaluate') === 'started',
         testResult:
           result === 'success' || result === 'failed' ? result : undefined,
       })
@@ -114,6 +117,22 @@ export function createMetadataSettingsController(
         502
       )
     }
+  })
+
+  controller.post('/settings/metadata/reevaluate', (c) => {
+    if (!metadata.getPublicConfig().configured) {
+      return c.html(
+        renderMetadataSettings(metadata.getPublicConfig(), metadata.getState(), {
+          reevaluationUnavailable: true,
+        }),
+        409
+      )
+    }
+    void metadata
+      .reevaluateLibrary()
+      .then(() => onLibraryReevaluated?.())
+      .catch(() => {})
+    return c.redirect('/settings/metadata?reevaluate=started', 303)
   })
 
   return controller

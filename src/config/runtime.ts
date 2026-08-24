@@ -1,12 +1,22 @@
+export type TranscodingMode = 'software' | 'auto' | 'intel-qsv'
+
 export interface RuntimeConfig {
   readonly port: number
   readonly hostname: string
   readonly configPath: string
   readonly headless: boolean
   readonly mediaReadOnly: boolean
+  readonly transcodingMode: TranscodingMode
+  readonly qsvDevice: string
 }
 
 const TRUTHY_VALUES = new Set(['1', 'true', 'yes', 'on'])
+
+function transcodingMode(value: string | undefined): TranscodingMode {
+  const normalized = value?.trim().toLowerCase()
+  if (normalized === 'auto' || normalized === 'intel-qsv') return normalized
+  return 'software'
+}
 
 /**
  * Resolve process-level settings that must be known before the database-backed
@@ -31,5 +41,11 @@ export function loadRuntimeConfig(
     mediaReadOnly: TRUTHY_VALUES.has(
       (environment.TOASTTV_MEDIA_READ_ONLY ?? '').trim().toLowerCase()
     ),
+    // Software remains the default so an upgrade never silently changes the
+    // output encoder. `auto` and `intel-qsv` both probe the configured render
+    // node and fall back safely when the device or driver is unavailable.
+    transcodingMode: transcodingMode(environment.TOASTTV_TRANSCODING_MODE),
+    qsvDevice:
+      environment.TOASTTV_QSV_DEVICE?.trim() || '/dev/dri/renderD128',
   }
 }

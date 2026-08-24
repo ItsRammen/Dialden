@@ -2,6 +2,12 @@ import { describe, expect, test } from 'bun:test'
 import { FfmpegContinuousHlsPipelineFactory } from '../src/services/FfmpegContinuousHlsPipelineFactory'
 import type { ChannelPipelineRequest } from '../src/services/ContinuousChannelWorkerManager'
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => (resolve = done))
+  return { promise, resolve }
+}
+
 const request = (): ChannelPipelineRequest => ({
   channelId: 'kids',
   outputDirectory: '/data/streams/kids/live',
@@ -33,7 +39,47 @@ describe('FfmpegContinuousHlsPipelineFactory', () => {
     expect(graph).toContain('[joinedv]realtime=speed=1[outv]')
     expect(graph).toContain('[joineda]arealtime=speed=1[outa]')
     expect(command).toContain('libx264')
+    expect(command.slice(command.indexOf('-preset'), command.indexOf('-preset') + 2)).toEqual([
+      '-preset',
+      'superfast',
+    ])
     expect(command).toContain('aac')
+  })
+
+  test('uses Intel QSV for encode-only acceleration while preserving software overlays', () => {
+    const factory = new FfmpegContinuousHlsPipelineFactory(
+      'ffmpeg',
+      undefined,
+      undefined,
+      () => 1_787_500_000_000,
+      {
+        configuredMode: 'intel-qsv',
+        activeBackend: 'intel-qsv',
+        hardwareAcceleration: true,
+        device: '/dev/dri/renderD129',
+      }
+    )
+    const command = factory.command({
+      ...request(),
+      overlay: {
+        sourcePath: '/data/channel-logos/kids.png',
+        opacity: 0.8,
+        position: 8,
+        x: 32,
+        y: 24,
+        sizePercent: 12,
+      },
+    })
+    const graph = command[command.indexOf('-filter_complex') + 1] ?? ''
+
+    expect(command).toContain('vaapi=va:/dev/dri/renderD129')
+    expect(command).toContain('qsv=qs@va')
+    expect(command).toContain('h264_qsv')
+    expect(command).not.toContain('libx264')
+    expect(command).not.toContain('zerolatency')
+    expect(graph).toContain('overlay=x=W-w-32:y=H-h-24:shortest=1')
+    expect(graph).toContain('[joinedv]realtime=speed=1,format=nv12[outv]')
+    expect(command[command.indexOf('-pix_fmt') + 1]).toBe('nv12')
   })
 
   test('paces the joined timeline instead of independently pacing lookahead inputs', () => {
@@ -100,9 +146,10 @@ describe('FfmpegContinuousHlsPipelineFactory', () => {
     expect(graph.indexOf('[brand0]')).toBeLessThan(graph.indexOf('concat=n=3'))
   })
 
-  test('probes unknown audio layouts once per source before spawning', async () => {
+  test('probes unknown audio layouts concurrently and caches them per source', async () => {
     const commands: Array<readonly string[]> = []
     const probed: string[] = []
+    const probes = new Map<string, ReturnType<typeof deferred<boolean>>>()
     const factory = new FfmpegContinuousHlsPipelineFactory(
       'ffmpeg',
       {
@@ -112,16 +159,80 @@ describe('FfmpegContinuousHlsPipelineFactory', () => {
         },
       },
       {
-        hasAudio: async (path) => {
+        hasAudio: (path) => {
           probed.push(path)
-          return !path.includes('bumper')
+          const pending = deferred<boolean>()
+          probes.set(path, pending)
+          return pending.promise
         },
       },
       () => 1_787_500_000_000
     )
-    await factory.start(request())
+    const starting = factory.start(request())
+    await Promise.resolve()
     expect(probed).toEqual(['/media/a.mkv', '/media/bumper.mp4', '/media/b.mkv'])
+    for (const [path, pending] of probes) pending.resolve(!path.includes('bumper'))
+    await starting
+    await factory.start(request())
+    expect(probed).toHaveLength(3)
     expect(commands[0]).toContain('anullsrc=r=48000:cl=stereo')
+  })
+
+  test('expires cached audio layouts so an in-place media replacement is re-probed', async () => {
+    let now = 1_787_500_000_000
+    let probes = 0
+    const factory = new FfmpegContinuousHlsPipelineFactory(
+      'ffmpeg',
+      {
+        spawn: () => ({ exited: Promise.resolve(0), kill: () => {} }),
+      },
+      {
+        hasAudio: async () => {
+          probes += 1
+          return true
+        },
+      },
+      () => now
+    )
+
+    await factory.start(request())
+    await factory.start(request())
+    expect(probes).toBe(3)
+
+    now += 10 * 60_000 + 1
+    await factory.start(request())
+    expect(probes).toBe(6)
+  })
+
+  test('shares one stop promise until the FFmpeg process has actually exited', async () => {
+    const exited = deferred<number>()
+    let kills = 0
+    const value = request()
+    const sequence = value.sequence.map((item) => ({ ...item, hasAudio: true }))
+    const factory = new FfmpegContinuousHlsPipelineFactory(
+      'ffmpeg',
+      {
+        spawn: () => ({
+          exited: exited.promise,
+          kill: () => {
+            kills += 1
+          },
+        }),
+      }
+    )
+    const handle = await factory.start({
+      ...value,
+      position: sequence[0]!,
+      sequence,
+    })
+
+    const first = handle.stop()
+    const second = handle.stop()
+    expect(kills).toBe(1)
+
+    exited.resolve(0)
+    await Promise.all([first, second])
+    expect(kills).toBe(1)
   })
 
   test('synthesizes stereo audio for a known silent bumper', () => {

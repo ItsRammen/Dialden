@@ -6,6 +6,7 @@
  */
 
 import type { AppConfig } from '../repositories/ConfigRepository'
+import type { FfmpegTranscodingStatus } from '../services/FfmpegTranscodingBackend'
 import { renderLayout } from './layout'
 import { escapeHtml } from './utils'
 
@@ -17,6 +18,8 @@ export interface SettingsProps {
   updateAvailable?: boolean
   currentVersion?: string
   latestVersion?: string | null
+  /** Resolved once at startup from the container's transcoding environment. */
+  transcodingStatus?: FfmpegTranscodingStatus
 }
 
 export function renderSettings(props: SettingsProps): string {
@@ -49,10 +52,10 @@ export function renderSettings(props: SettingsProps): string {
           <div class="card-header">
             <div>
               <p class="settings-card-kicker">Channel identity</p>
-              <h2>Default logo overlay</h2>
-              <p class="settings-card-description">Shown over playback when a channel does not provide its own branding.</p>
+              <h2>Default channel logo</h2>
+              <p class="settings-card-description">Shown in TV app info bars when a channel uses global branding. Each channel can separately opt into permanent video burn-in.</p>
             </div>
-            <label class="toggle" aria-label="Enable default logo overlay">
+            <label class="toggle" aria-label="Enable default channel logo">
               <input type="checkbox" id="logoEnabled" name="logoEnabled" value="true" ${config.logo.enabled ? 'checked' : ''}>
               <span class="toggle-slider"></span>
             </label>
@@ -68,7 +71,7 @@ export function renderSettings(props: SettingsProps): string {
             
             ${renderLogoPreview(hasLogo, config.logo.opacity, config.logo.position, config.logo.x, config.logo.y)}
           </div>
-          <p class="settings-restart-note">Active channels using the default overlay refresh automatically after saving.</p>
+          <p class="settings-restart-note">Position, offsets, and opacity apply only when a channel opts into video burn-in. App-only logos remain clean and client-controlled.</p>
         </section>
 
         <section class="settings-group" id="playback">
@@ -153,6 +156,8 @@ export function renderSettings(props: SettingsProps): string {
                 <span class="hint">Device capabilities are detected automatically.</span>
               </div>
             </div>
+
+            ${renderTranscodingStatus(props.transcodingStatus)}
           </section>
           </div>
         </section>
@@ -312,6 +317,49 @@ export function renderSettings(props: SettingsProps): string {
   `,
     { updateAvailable: props.updateAvailable }
   )
+}
+
+function renderTranscodingStatus(
+  status: FfmpegTranscodingStatus | undefined
+): string {
+  if (!status) return ''
+
+  const configuredLabel =
+    status.configuredMode === 'intel-qsv'
+      ? 'Intel Quick Sync (QSV)'
+      : status.configuredMode === 'auto'
+        ? 'Automatic (Intel QSV with CPU fallback)'
+        : 'CPU software encoding'
+  const activeLabel = status.hardwareAcceleration
+    ? 'Intel Quick Sync (QSV)'
+    : 'CPU software encoding'
+  const stateLabel = status.hardwareAcceleration
+    ? 'Enabled'
+    : status.configuredMode === 'software'
+      ? 'Disabled'
+      : 'Unavailable'
+  const summary = status.hardwareAcceleration
+    ? 'Hardware transcoding is enabled and active.'
+    : status.configuredMode === 'software'
+      ? 'Hardware transcoding is disabled; CPU software encoding is active.'
+      : 'Hardware transcoding is unavailable; CPU fallback is active.'
+
+  return `
+    <div class="form-group" id="transcoding-status">
+      <label>Transcoding</label>
+      <div class="hardware-profile-display">
+        <span class="profile-badge">Hardware ${stateLabel}</span>
+        <span class="hint">${summary}</span>
+      </div>
+      <dl class="settings-status-list">
+        <div><dt>Configured</dt><dd>${configuredLabel}</dd></div>
+        <div><dt>Active encoder</dt><dd>${activeLabel}</dd></div>
+        ${status.device ? `<div><dt>Device</dt><dd><code>${escapeHtml(status.device)}</code></dd></div>` : ''}
+      </dl>
+      ${status.fallbackReason ? `<p class="settings-restart-note" role="status">Fallback reason: ${escapeHtml(status.fallbackReason)}</p>` : ''}
+      <p class="hint">Read-only container setting. Change <code>TOASTTV_TRANSCODING_MODE</code> in the deployment environment, then restart ToastTV.</p>
+    </div>
+  `
 }
 
 function renderHourOptions(selectedHour: number): string {

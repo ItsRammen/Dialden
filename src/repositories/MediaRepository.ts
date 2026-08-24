@@ -26,6 +26,7 @@ import type {
   PolicyDecision,
 } from '../types'
 import type { IMediaRepository, MediaItemInput } from './IMediaRepository'
+import { parseEpisodeRange } from '../domain/CollectionIdentity'
 import { resolveEffectiveDecision } from '../policy/PolicyEngine'
 
 // Base schema without media_type (for backwards compatibility)
@@ -1165,6 +1166,59 @@ export class MediaRepository implements IMediaRepository {
           episode.seasonNumber,
           episode.episodeNumber
         ).changes
+      }
+
+      // Sonarr/Plex may place two numbered broadcast segments in one physical
+      // file (for example S01E01-E02). The ordinary update above associates
+      // the file with E01; replace that single title with the provider titles
+      // for the complete range so clients do not have to show a release name.
+      const metadataByEpisode = new Map(
+        episodes.map((episode) => [
+          `${episode.seasonNumber}:${episode.episodeNumber}`,
+          episode,
+        ])
+      )
+      const multiEpisodeFiles = this.db!
+        .prepare(`
+          SELECT id, relative_path, filename
+          FROM media
+          WHERE collection_id = ?
+        `)
+        .all(collectionId) as Array<{
+        id: number
+        relative_path: string
+        filename: string
+      }>
+      const updateMultiEpisode = this.db!.prepare(`
+        UPDATE media
+        SET episode_metadata_title = ?, episode_overview = ?,
+            episode_air_date = ?, episode_still_path = ?
+        WHERE id = ?
+      `)
+      for (const file of multiEpisodeFiles) {
+        const range = parseEpisodeRange(file.relative_path || file.filename)
+        if (!range?.endEpisodeNumber) continue
+        const parts: EpisodeMetadataUpdate[] = []
+        for (
+          let number = range.episodeNumber;
+          number <= range.endEpisodeNumber;
+          number += 1
+        ) {
+          const episode = metadataByEpisode.get(`${range.seasonNumber}:${number}`)
+          if (episode) parts.push(episode)
+        }
+        if (parts.length < 2) continue
+        const first = parts[0]!
+        updateMultiEpisode.run(
+          parts.map((episode) => episode.title.trim()).join(' + '),
+          parts
+            .map((episode) => episode.overview?.trim())
+            .filter((overview): overview is string => Boolean(overview))
+            .join('\n\n') || null,
+          first.airDate?.trim() || null,
+          first.stillPath?.trim() || null,
+          file.id
+        )
       }
       return changed
     })()

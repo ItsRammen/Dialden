@@ -42,4 +42,24 @@ else
   chown "$requested_owner" /app/data/thumbnails /app/data/artwork /app/data/transcode /app/data/streams
 fi
 
+# A mapped DRM render node normally belongs to a host-specific numeric group.
+# Add only that device group while dropping privileges so Unraid/Linux users do
+# not need to guess a distribution-specific render GID in the container config.
+qsv_device="${TOASTTV_QSV_DEVICE:-/dev/dri/renderD128}"
+qsv_mode="${TOASTTV_TRANSCODING_MODE:-software}"
+if { [ "$qsv_mode" = "auto" ] || [ "$qsv_mode" = "intel-qsv" ]; } && [ -c "$qsv_device" ]; then
+  qsv_gid="$(stat -c '%g' "$qsv_device" 2>/dev/null || true)"
+  case "$qsv_gid" in
+    '' | *[!0-9]*) ;;
+    0) ;;
+    *)
+      exec setpriv \
+        --reuid "$toasttv_uid" \
+        --regid "$toasttv_gid" \
+        --groups "$qsv_gid" \
+        -- "$@"
+      ;;
+  esac
+fi
+
 exec gosu "$requested_owner" "$@"

@@ -186,6 +186,33 @@ describe('ChannelStreamController', () => {
     expect(await response.json()).toEqual({ error: 'encoder failed' })
   })
 
+  test('checks worker failure before accepting a fresh-looking playlist', async () => {
+    const response = await app({ workerError: 'encoder exited early' }).request(
+      '/api/v1/channels/kids/live/index.m3u8?clientId=tv'
+    )
+
+    expect(response.status).toBe(503)
+    expect(await response.json()).toEqual({ error: 'encoder exited early' })
+  })
+
+  test('stops serving playlists and segments as soon as a channel is off air', async () => {
+    expect(
+      (
+        await app().request(
+          '/api/v1/channels/offline/live/index.m3u8?clientId=tv'
+        )
+      ).status
+    ).toBe(404)
+    expect(
+      (
+        await app().request(
+          '/api/v1/channels/offline/live/segment-0000000000001.ts'
+        )
+      ).status
+    ).toBe(404)
+    expect(touches).toEqual([])
+  })
+
   test('rejects unknown channels and unsafe segment names', async () => {
     expect(
       (

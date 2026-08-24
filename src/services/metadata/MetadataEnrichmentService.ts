@@ -182,6 +182,89 @@ export class MetadataEnrichmentService {
     return run
   }
 
+  /**
+   * Queue every present show/movie for a fresh metadata and policy pass.
+   * Automatically selected identities are searched again; manually confirmed
+   * identities stay locked and are refreshed in place. Parent allow/block
+   * overrides live in a separate column and are deliberately never changed.
+   */
+  reevaluateLibrary(): Promise<MetadataJobState> {
+    if (this.activeRun) return this.activeRun
+    const run = this.withExclusiveOperation(async () => {
+      await this.queueLibraryReevaluationUnlocked()
+      const state = await this.processPending()
+      await this.reapplyCachedPoliciesUnlocked()
+      return state
+    })
+    this.activeRun = run
+    void run.finally(() => {
+      if (this.activeRun === run) this.activeRun = null
+    })
+    return run
+  }
+
+  private async queueLibraryReevaluationUnlocked(): Promise<number> {
+    let offset = 0
+    let queued = 0
+    const pageSize = 250
+    while (true) {
+      const collections = await this.repository.getCollections({
+        presentOnly: true,
+        limit: pageSize,
+        offset,
+      })
+      if (collections.length === 0) break
+      for (const collection of collections) {
+        if (collection.libraryKind === 'other') continue
+        const keepManualIdentity =
+          collection.metadataLocked && Boolean(collection.metadataExternalId)
+        const policyUpdated = await this.repository.updateCollectionPolicy(
+          collection.id,
+          'review',
+          'library_reevaluation_requested',
+          this.profileId()
+        )
+        if (!policyUpdated) continue
+        const metadataUpdated = await this.repository.updateCollectionMetadata(
+          collection.id,
+          {
+            provider: collection.metadataProvider ?? this.provider.id,
+            externalId: keepManualIdentity
+              ? collection.metadataExternalId
+              : null,
+            status: 'pending',
+            locked: keepManualIdentity,
+            title: null,
+            originalTitle: null,
+            year: null,
+            overview: null,
+            posterPath: null,
+            backdropPath: null,
+            genres: [],
+            networks: [],
+            studios: [],
+            certification: null,
+            certificationRegion: null,
+            ratingStatus: 'missing',
+            matchConfidence: null,
+            candidates: [],
+            error: null,
+            matchedAt: null,
+          }
+        )
+        if (!metadataUpdated) {
+          throw new Error(
+            'A library collection changed while queuing re-evaluation'
+          )
+        }
+        queued++
+      }
+      offset += collections.length
+      if (collections.length < pageSize) break
+    }
+    return queued
+  }
+
   testConnection(signal?: AbortSignal): Promise<void> {
     return this.withExclusiveOperation(() =>
       this.testConnectionUnlocked(signal)
