@@ -84,6 +84,37 @@ describe('strict metadata title matching', () => {
     expect(result.status).toBe('ambiguous')
   })
 
+  test('matches a unique exact title with a one-year regional release drift', () => {
+    const result = matchMetadata(parseCollectionTitle('A Close Shave (1995)'), [
+      candidate('1', 'A Close Shave', 1996),
+      candidate('2', 'The Digital Special Effects in "A Close Shave"', 1995),
+    ])
+
+    expect(result.status).toBe('matched')
+    expect(result.candidate?.externalId).toBe('1')
+    expect(result.confidence).toBe(0.98)
+  })
+
+  test('prefers an exact-year title over an adjacent-year title', () => {
+    const result = matchMetadata(parseCollectionTitle('Shared Title (2020)'), [
+      candidate('1', 'Shared Title', 2020),
+      candidate('2', 'Shared Title', 2021),
+    ])
+
+    expect(result.status).toBe('matched')
+    expect(result.candidate?.externalId).toBe('1')
+  })
+
+  test('requires review when adjacent-year exact titles are not unique', () => {
+    const result = matchMetadata(parseCollectionTitle('Shared Title (2020)'), [
+      candidate('1', 'Shared Title', 2019),
+      candidate('2', 'Shared Title', 2021),
+    ])
+
+    expect(result.status).toBe('ambiguous')
+    expect(result.candidate).toBeNull()
+  })
+
   test('fuzzy similarity only creates review candidates', () => {
     const result = matchMetadata(parseCollectionTitle('Bluye (2018)'), [
       candidate('1', 'Bluey', 2018),

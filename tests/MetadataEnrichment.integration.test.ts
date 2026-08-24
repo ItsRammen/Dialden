@@ -36,6 +36,9 @@ interface ProviderScenario {
   readonly ratingStatus?: CertificationLookup['status']
   readonly searchError?: Error
   readonly connectionError?: Error
+  readonly candidatesForSearch?: (
+    input: MetadataSearchInput
+  ) => readonly MetadataCandidate[]
   readonly detailsForLanguage?: (
     language: string,
     candidate: MetadataCandidate
@@ -87,13 +90,13 @@ function providerFor(scenario: ProviderScenario): MetadataProvider {
     async testConnection() {
       if (scenario.connectionError) throw scenario.connectionError
     },
-    async searchMovie(_input: MetadataSearchInput) {
+    async searchMovie(input: MetadataSearchInput) {
       if (scenario.searchError) throw scenario.searchError
-      return candidates
+      return [...(scenario.candidatesForSearch?.(input) ?? candidates)]
     },
-    async searchTV(_input: MetadataSearchInput) {
+    async searchTV(input: MetadataSearchInput) {
       if (scenario.searchError) throw scenario.searchError
-      return candidates
+      return [...(scenario.candidatesForSearch?.(input) ?? candidates)]
     },
     async getMovie(externalId: string, input) {
       return detailsFor(externalId, input.language)
@@ -240,6 +243,46 @@ describe('metadata enrichment and policy integration', () => {
       scheduleEligibleCount: 1,
     })
     expect(await repository.getAllVideos()).toHaveLength(1)
+  })
+
+  test('retries without the year when a regional release year hides the exact title', async () => {
+    const collection = await addCollection('A Close Shave', 1995)
+    const exact: MetadataCandidate = {
+      provider: 'tmdb',
+      externalId: '532',
+      mediaType: 'tv',
+      title: 'A Close Shave',
+      year: 1996,
+    }
+    const derivative: MetadataCandidate = {
+      provider: 'tmdb',
+      externalId: '999',
+      mediaType: 'tv',
+      title: 'The Digital Special Effects in "A Close Shave"',
+      year: 1995,
+    }
+    const searchedYears: Array<number | undefined> = []
+    const service = new MetadataEnrichmentService(
+      repository,
+      providerFor({
+        candidates: [exact, derivative],
+        candidatesForSearch(input) {
+          searchedYears.push(input.year)
+          return input.year === 1995 ? [derivative] : [exact, derivative]
+        },
+        certification: 'TV-Y7',
+      }),
+      runtimeConfig
+    )
+
+    await service.runPending()
+
+    expect(searchedYears).toEqual([1995, undefined])
+    expect(await repository.getCollectionById(collection.id)).toMatchObject({
+      metadataExternalId: '532',
+      metadataStatus: 'matched',
+      matchConfidence: 0.98,
+    })
   })
 
   test('stores TMDB episode titles separately from filename-derived titles', async () => {

@@ -116,20 +116,20 @@ describe("UpdateService", () => {
 	});
 
 	test("should return cached info from getUpdateInfo after check", async () => {
-		client.fetchLatestVersion.mockResolvedValue("0.7.2");
+		client.fetchLatestVersion.mockResolvedValue("0.7.3");
 
 		const service = new UpdateService(client);
 		await service.checkForUpdate();
 		const cached = service.getUpdateInfo();
 
 		expect(cached).not.toBeNull();
-		expect(cached?.latestVersion).toBe("0.7.2");
+		expect(cached?.latestVersion).toBe("0.7.3");
 		expect(cached?.updateAvailable).toBe(false);
 	});
 
 	test("should report isUpdating as false initially", () => {
 		const service = new UpdateService(client);
 		expect(service.isUpdating).toBe(false);
-		expect(service.currentVersion).toBe("0.7.2");
+		expect(service.currentVersion).toBe("0.7.3");
 	});
 });

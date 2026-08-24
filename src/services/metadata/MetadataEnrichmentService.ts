@@ -552,7 +552,7 @@ export class MetadataEnrichmentService {
       language: this.config.language,
       region: this.config.preferredRatingRegion,
     }
-    const candidates =
+    let candidates =
       collection.libraryKind === 'movie'
         ? await this.provider.searchMovie(searchInput)
         : await this.provider.searchTV(searchInput)
@@ -561,7 +561,31 @@ export class MetadataEnrichmentService {
       normalizedTitle: normalizeTitle(collection.parsedTitle),
       ...(collection.year === null ? {} : { year: collection.year }),
     }
-    const result = matchMetadata(parsed, candidates)
+    let result = matchMetadata(parsed, candidates)
+
+    // TMDB's year filters use a single primary release/air year. A title can
+    // legitimately be dated one year earlier in the library because of a
+    // festival, broadcast, or regional release. Retry without the hard year
+    // filter only when the filtered response contains no exact title at all;
+    // the strict matcher still requires a unique exact title and permits at
+    // most a one-year drift.
+    if (
+      collection.year !== null &&
+      result.status !== 'matched' &&
+      !result.candidates.some((candidate) => candidate.exactTitle)
+    ) {
+      const fallbackInput = {
+        title: collection.parsedTitle,
+        language: this.config.language,
+        region: this.config.preferredRatingRegion,
+      }
+      const fallbackCandidates =
+        collection.libraryKind === 'movie'
+          ? await this.provider.searchMovie(fallbackInput)
+          : await this.provider.searchTV(fallbackInput)
+      candidates = [...candidates, ...fallbackCandidates]
+      result = matchMetadata(parsed, candidates)
+    }
     const candidateRecords = this.toCandidateRecords(result.candidates)
 
     if (result.status !== 'matched' || !result.candidate) {

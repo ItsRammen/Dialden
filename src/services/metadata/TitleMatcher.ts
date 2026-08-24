@@ -87,10 +87,23 @@ export function matchMetadata(
 ): MetadataMatchResult {
   const ranked = rankMetadataCandidates(collection, candidates)
 
-  const automatic = ranked.filter((item) => {
-    if (!item.exactTitle) return false
-    return collection.year === undefined || item.yearMatches
-  })
+  const exactTitles = ranked.filter((item) => item.exactTitle)
+  const exactYears = exactTitles.filter((item) => item.yearMatches)
+  // Primary release years can differ by one across countries and festivals.
+  // Only tolerate that drift for an exact normalized title, never for fuzzy
+  // similarity, and prefer a true exact-year result whenever one exists.
+  const adjacentYears = exactTitles.filter(
+    (item) =>
+      collection.year !== undefined &&
+      item.candidate.year !== undefined &&
+      Math.abs(item.candidate.year - collection.year) === 1
+  )
+  const automatic =
+    collection.year === undefined
+      ? exactTitles
+      : exactYears.length > 0
+        ? exactYears
+        : adjacentYears
 
   if (automatic.length === 1) {
     const selected = automatic[0]
@@ -98,7 +111,8 @@ export function matchMetadata(
       return {
         status: 'matched',
         candidate: selected.candidate,
-        confidence: collection.year === undefined ? 0.95 : 1,
+        confidence:
+          collection.year === undefined ? 0.95 : selected.yearMatches ? 1 : 0.98,
         candidates: ranked,
       }
     }
