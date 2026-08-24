@@ -290,6 +290,40 @@ describe('ContinuousChannelWorkerManager', () => {
     await warming
   })
 
+  test('honors a reduced speculative cap before starting any warm workers', async () => {
+    const clock = new FakeClock()
+    const starts: string[] = []
+    const manager = new ContinuousChannelWorkerManager(
+      { resolve: async (channelId) => position({ scheduleItemId: channelId }) },
+      {
+        start: async (request) => {
+          starts.push(request.channelId)
+          return {
+            completed: new Promise<ChannelPipelineExit>(() => {}),
+            stop: () => {},
+          }
+        },
+      },
+      {
+        prepareOutput: () => {},
+        cleanupOutput: () => {},
+        sourceExists: () => true,
+      },
+      {
+        outputRoot: '/data/streams',
+        idleTimeoutMs: 60_000,
+        maximumWarmChannels: 1,
+      },
+      clock
+    )
+
+    const warmed = await manager.warm(['previous', 'next'], 'living-room')
+
+    expect(starts).toEqual(['previous'])
+    expect(warmed.map((state) => state.channelId)).toEqual(['previous'])
+    expect(manager.getState('next')).toBeNull()
+  })
+
   test('waits for an old encoder to stop before starting a replacement writer', async () => {
     const stopped = deferred<void>()
     const f = fixture({ stopGate: stopped.promise })

@@ -312,7 +312,9 @@ export class ContinuousChannelWorkerManager {
     if (!/^[a-zA-Z0-9._:-]{1,160}$/.test(clientId)) {
       throw new Error('Client ID is not a safe warm lease identifier')
     }
-    const desired = new Set(channelIds.slice(0, 2))
+    const desired = new Set(
+      channelIds.slice(0, Math.min(2, this.maximumWarmChannels))
+    )
     const released: Promise<void>[] = []
     for (const record of this.records.values()) {
       if (!desired.has(record.state.channelId)) {

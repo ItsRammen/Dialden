@@ -263,6 +263,11 @@ describe('channel administration template', () => {
     expect(markup).toContain('Preview lineup')
     expect(markup).toContain('name="networks" value="ABC Kids"')
     expect(markup).toContain('Network and studio checkboxes show TMDB’s exact stored values')
+    expect(markup).toContain('auto-details-heading')
+    expect(markup).toContain('auto-programming-heading')
+    expect(markup).toContain('auto-schedule-heading')
+    expect(markup).toContain('auto-review-heading')
+    expect(markup).toContain('Fine-tune the library mix')
   })
 
   test('search exposes a specific collection beyond the bounded initial picker', () => {
@@ -344,7 +349,54 @@ describe('channel administration template', () => {
     expect(defaultMarkup).not.toContain('role="dialog"')
     expect(defaultMarkup).not.toContain('id="editor"')
     expect(modalMarkup).toContain('role="dialog"')
+    expect(modalMarkup).toContain('data-channel-modal-panel')
+    expect(modalMarkup).toContain('tabindex="-1"')
+    expect(modalMarkup).toContain('class="channel-modal-backdrop" href="/channels" aria-hidden="true" tabindex="-1"')
     expect(modalMarkup).toContain('Create an automatic station')
+    expect(modalMarkup).toContain('aria-label="Station setup sections"')
+    expect(modalMarkup).toContain('<span aria-current="page">Auto setup</span>')
+    expect(modalMarkup).toContain('href="/channels?new=manual#channel-editor"')
+  })
+
+  test('opens manual creation and existing configuration as grouped single modals', () => {
+    const snapshot = {
+      channels: [
+        {
+          id: 'kids',
+          name: 'Kids Club',
+          enabled: true,
+          timezone: 'UTC',
+          slots: [],
+        },
+      ],
+      manuallyOffAir: [],
+      programmingGroups: ['learning'],
+      configurationError: null,
+    }
+    const creation = renderChannelAdministration(snapshot, { newChannel: true })
+    const edit = renderChannelAdministration(snapshot, { editId: 'kids' })
+    const brandingFromEdit = renderChannelAdministration(snapshot, {
+      editId: 'kids',
+      brandingId: 'kids',
+    })
+
+    expect(creation).toContain('id="channel-editor"')
+    expect(creation).toContain('aria-label="Create a station manually"')
+    expect(creation).toContain('action="/channels"')
+    expect(creation).toContain('<span aria-current="page">Manual setup</span>')
+    expect(creation).toContain('href="/channels?builder=create#station-builder"')
+    expect(edit).toContain('aria-label="Configure Kids Club"')
+    expect(edit).toContain('action="/channels/kids"')
+    expect(edit).toContain('station-details-heading')
+    expect(edit).toContain('station-branding-heading')
+    expect(edit).toContain('station-pattern-heading')
+    expect(edit).toContain('station-schedule-heading')
+    expect(edit).toContain('Save station')
+    expect(edit).toContain('href="/channels?builder=kids#station-builder"')
+    expect(edit).toContain('href="/channels?branding=kids#branding-modal"')
+    expect((brandingFromEdit.match(/role="dialog"/g) ?? []).length).toBe(1)
+    expect(brandingFromEdit).toContain('id="branding-modal"')
+    expect(brandingFromEdit).not.toContain('id="channel-editor"')
   })
 
   test('offers guarded Auto setup for an existing channel', () => {
@@ -396,7 +448,9 @@ describe('channel administration template', () => {
     expect(markup).toContain('readonly')
     expect(markup).toContain('name="confirmReplace" value="yes" required')
     expect(markup).toContain('name="action" value="update"')
-    expect(markup).toContain('Edit lineup')
+    expect(markup).toContain('Auto lineup')
+    expect(markup).toContain('<span aria-current="page">Auto lineup</span>')
+    expect(markup).toContain('Fine-tune the library mix')
   })
 
   test('loads an existing generated lineup as editable checked collections', () => {
@@ -453,5 +507,102 @@ describe('channel administration template', () => {
     expect(markup).toContain('1 selected collection')
     expect(markup).toContain('name="preset" value="custom" checked')
     expect(markup).toContain('name="collectionIds" value="4" checked')
+  })
+
+  test('shows era dayparts, owned coverage, modern guests, and a media wishlist', () => {
+    const markup = renderChannelAdministration(
+      {
+        channels: [],
+        manuallyOffAir: [],
+        programmingGroups: [],
+        configurationError: null,
+      },
+      {
+        automationOpen: true,
+        automationDraft: {
+          id: 'cn-mix',
+          name: 'Cartoon Mix',
+          timezone: 'UTC',
+          preset: 'cartoon-network-1997-2004',
+          airtime: 'all-day',
+        },
+        automation: {
+          collections: [
+            {
+              id: 1,
+              rootId: 'tv',
+              identityKey: 'bluey',
+              collectionTitle: 'Bluey',
+              displayTitle: 'Bluey',
+              libraryKind: 'tv',
+              genres: ['Animation', 'Family'],
+              networks: ['ABC Kids'],
+              studios: ['Ludo Studio'],
+              firstAirYear: 2018,
+              eligibleFiles: 12,
+            },
+          ],
+          genres: [],
+          networks: [],
+          studios: [],
+          presets: [],
+          eraTemplates: [
+            {
+              id: 'cartoon-network-1997-2004',
+              name: 'Cartoon Network inspired · 1997–2004',
+              networkFamily: 'Cartoon Network',
+              description: 'Classic comedy, action, and primetime.',
+              eraStartYear: 1997,
+              eraEndYear: 2004,
+              blocks: [
+                { id: 'morning', name: 'Morning', start: '06:00', end: '09:00' },
+                { id: 'daytime', name: 'Daytime', start: '09:00', end: '15:30' },
+              ],
+              matches: [
+                {
+                  collectionId: 1,
+                  title: 'Bluey',
+                  libraryKind: 'tv',
+                  blockIds: ['morning', 'daytime'],
+                  playbackOrder: 'random',
+                  score: 50,
+                  relationship: 'family-guest',
+                },
+              ],
+              missingSuggestions: [
+                {
+                  title: "Dexter's Laboratory",
+                  libraryKind: 'tv',
+                  firstYear: 1996,
+                  tags: ['comedy'],
+                },
+              ],
+              matchedShows: 1,
+              matchedMovies: 0,
+              movieCadence: 'weekly',
+              marathonCadence: 'monthly',
+            },
+          ],
+          familyMixSuggestions: [
+            {
+              title: 'Bluey',
+              firstYear: 2018,
+              tags: ['family'],
+              available: true,
+            },
+          ],
+          truncated: false,
+        },
+      }
+    )
+
+    expect(markup).toContain('Build a network-era station')
+    expect(markup).toContain('Period-inspired, not a historical recording.')
+    expect(markup).toContain('name="preset" value="cartoon-network-1997-2004" checked')
+    expect(markup).toContain('06:00–09:00')
+    expect(markup).toContain('Modern family guests')
+    expect(markup).toContain('Bluey')
+    expect(markup).toContain("Dexter&#39;s Laboratory")
+    expect(markup).toContain('ToastTV never downloads or links to media')
   })
 })

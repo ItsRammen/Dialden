@@ -4,13 +4,81 @@
   var modal = document.querySelector('.channel-modal')
   if (modal) {
     document.documentElement.classList.add('channel-modal-open')
+    var modalPanel = modal.querySelector('[data-channel-modal-panel]')
+    var focusableSelector = [
+      'a[href]',
+      'button:not([disabled])',
+      'input:not([disabled]):not([type="hidden"])',
+      'select:not([disabled])',
+      'textarea:not([disabled])',
+      'summary',
+      '[tabindex]:not([tabindex="-1"])'
+    ].join(',')
+    var modalControls = function () {
+      return Array.prototype.filter.call(
+        modal.querySelectorAll(focusableSelector),
+        function (control) {
+          return control.getAttribute('tabindex') !== '-1' && !control.hidden && control.getAttribute('aria-hidden') !== 'true' && control.offsetParent !== null
+        }
+      )
+    }
+    var closeModal = function () {
+      window.location.href = modal.getAttribute('data-modal-close-href') || '/channels'
+    }
     document.addEventListener('keydown', function (event) {
       if (event.key === 'Escape') {
-        window.location.href = modal.getAttribute('data-modal-close-href') || '/channels'
+        event.preventDefault()
+        closeModal()
+        return
+      }
+      if (event.key === 'Tab') {
+        var controls = modalControls()
+        if (!controls.length) {
+          event.preventDefault()
+          if (modalPanel) modalPanel.focus()
+          return
+        }
+        var first = controls[0]
+        var last = controls[controls.length - 1]
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault()
+          last.focus()
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault()
+          first.focus()
+        }
       }
     })
-    var firstControl = modal.querySelector('input:not([type="hidden"]), button, select, textarea')
-    if (firstControl) firstControl.focus()
+    var firstControl = modal.querySelector('[autofocus], input:not([type="hidden"]):not([disabled]), button:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [data-modal-close]')
+    if (firstControl && firstControl.offsetParent !== null) firstControl.focus()
+    else if (modalPanel) modalPanel.focus()
+    if (window.requestAnimationFrame) {
+      window.requestAnimationFrame(function () {
+        if (
+          firstControl &&
+          firstControl.offsetParent !== null &&
+          (document.activeElement === modalPanel || document.activeElement === document.body)
+        ) {
+          firstControl.focus()
+        }
+      })
+    }
+
+    Array.prototype.forEach.call(
+      modal.querySelectorAll('.channel-builder-navigation'),
+      function (navigation) {
+        navigation.addEventListener('keydown', function (event) {
+          if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+          var links = Array.prototype.slice.call(navigation.querySelectorAll('a[href]'))
+          if (!links.length) return
+          var index = links.indexOf(document.activeElement)
+          if (index < 0) return
+          event.preventDefault()
+          var direction = event.key === 'ArrowRight' ? 1 : -1
+          links[(index + direction + links.length) % links.length].focus()
+        })
+      }
+    )
   }
 
   var branding = document.querySelector('[data-branding-editor]')
@@ -147,6 +215,30 @@
       refreshMarathon()
     }
   )
+
+  var eraPicker = document.querySelector('[data-era-picker]')
+  if (eraPicker) {
+    var refreshEraTemplate = function () {
+      var selected = document.querySelector('input[name="preset"]:checked')
+      var selectedId = selected ? selected.value : ''
+      var hasEraSelection = false
+      Array.prototype.forEach.call(
+        eraPicker.querySelectorAll('[data-era-template-panel]'),
+        function (panel) {
+          var visible = panel.getAttribute('data-era-template-panel') === selectedId
+          panel.hidden = !visible
+          if (visible) hasEraSelection = true
+        }
+      )
+      if (hasEraSelection) eraPicker.open = true
+    }
+    document.addEventListener('change', function (event) {
+      if (event.target && event.target.name === 'preset') {
+        refreshEraTemplate()
+      }
+    })
+    refreshEraTemplate()
+  }
 
   var editor = document.querySelector('[data-schedule-editor]')
   if (!editor) return

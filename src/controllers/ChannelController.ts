@@ -9,9 +9,11 @@ import type { ChannelService } from '../services/ChannelService'
 import type { ChannelLogoStore } from '../services/ChannelLogoStore'
 import type { ChannelTimelineResolverService } from '../services/ChannelTimelineResolverService'
 import type { StationBuildRequest } from '../services/ChannelService'
-import type {
-  StationAirtimeId,
-  StationPresetId,
+/* Keep parsing tied to the catalog so new era recipes work in every endpoint. */
+import {
+  isStationPresetId,
+  type StationAirtimeId,
+  type StationPresetId,
 } from '../services/StationAutomationService'
 import { renderChannelAdministration } from '../templates/channelAdministration'
 
@@ -578,15 +580,7 @@ function readArray(value: unknown, label: string): unknown[] {
 }
 
 function isStationPreset(value: string): value is StationPresetId {
-  return [
-    'all-approved-tv',
-    'family-animation',
-    'nature-documentaries',
-    'nickelodeon-style',
-    'nick-jr-style',
-    'movie-night',
-    'custom',
-  ].includes(value)
+  return isStationPresetId(value)
 }
 
 function isStationAirtime(value: string): value is StationAirtimeId {

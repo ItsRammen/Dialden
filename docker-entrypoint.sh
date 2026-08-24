@@ -42,24 +42,91 @@ else
   chown "$requested_owner" /app/data/thumbnails /app/data/artwork /app/data/transcode /app/data/streams
 fi
 
-# A mapped DRM render node normally belongs to a host-specific numeric group.
-# Add only that device group while dropping privileges so Unraid/Linux users do
-# not need to guess a distribution-specific render GID in the container config.
+# Preserve numeric supplemental groups injected with Docker `group_add`. A
+# privilege-drop helper that rebuilds groups from /etc/group would silently
+# discard host/NAS media-share GIDs because those groups need not have names in
+# the image.
+supplemental_groups=""
+append_supplemental_group() {
+  candidate_gid="$1"
+  case "$candidate_gid" in
+    '' | *[!0-9]* | 0) return 0 ;;
+  esac
+  [ "$candidate_gid" = "$toasttv_gid" ] && return 0
+  case ",$supplemental_groups," in
+    *",$candidate_gid,"*) return 0 ;;
+  esac
+  if [ -n "$supplemental_groups" ]; then
+    supplemental_groups="$supplemental_groups,$candidate_gid"
+  else
+    supplemental_groups="$candidate_gid"
+  fi
+  return 0
+}
+
+for inherited_gid in $(id -G 2>/dev/null || true); do
+  append_supplemental_group "$inherited_gid"
+done
+
+# A mapped DRM directory can contain multiple render nodes, potentially backed
+# by different GPUs and numeric host groups. Grant every exact renderD<number>
+# candidate when ToastTV is configured to probe a directory; the backend will
+# select the first node that passes its Intel QSV encode test. A concrete device
+# setting grants only that node's group.
 qsv_device="${TOASTTV_QSV_DEVICE:-/dev/dri/renderD128}"
 qsv_mode="${TOASTTV_TRANSCODING_MODE:-software}"
-if { [ "$qsv_mode" = "auto" ] || [ "$qsv_mode" = "intel-qsv" ]; } && [ -c "$qsv_device" ]; then
-  qsv_gid="$(stat -c '%g' "$qsv_device" 2>/dev/null || true)"
-  case "$qsv_gid" in
-    '' | *[!0-9]*) ;;
-    0) ;;
-    *)
-      exec setpriv \
-        --reuid "$toasttv_uid" \
-        --regid "$toasttv_gid" \
-        --groups "$qsv_gid" \
-        -- "$@"
-      ;;
-  esac
+qsv_nodes=""
+append_qsv_node() {
+  candidate_node="$1"
+  [ -c "$candidate_node" ] || return 0
+  candidate_node_gid="$(stat -c '%g' "$candidate_node" 2>/dev/null || true)"
+  append_supplemental_group "$candidate_node_gid"
+  if [ -n "$qsv_nodes" ]; then
+    qsv_nodes="$qsv_nodes, $candidate_node"
+  else
+    qsv_nodes="$candidate_node"
+  fi
+  return 0
+}
+
+if [ "$qsv_mode" = "auto" ] || [ "$qsv_mode" = "intel-qsv" ]; then
+  if [ -d "$qsv_device" ]; then
+    qsv_directory="${qsv_device%/}"
+    [ -n "$qsv_directory" ] || qsv_directory="/"
+    for candidate_node in "$qsv_directory"/renderD*; do
+      candidate_name="${candidate_node##*/}"
+      candidate_suffix="${candidate_name#renderD}"
+      case "$candidate_suffix" in
+        '' | *[!0-9]*) continue ;;
+        *) append_qsv_node "$candidate_node" ;;
+      esac
+    done
+  else
+    qsv_concrete_device="$qsv_device"
+    while [ "$qsv_concrete_device" != "/" ] && [ "$qsv_concrete_device" != "${qsv_concrete_device%/}" ]; do
+      qsv_concrete_device="${qsv_concrete_device%/}"
+    done
+    append_qsv_node "$qsv_concrete_device"
+  fi
+
+  if [ -n "$qsv_nodes" ]; then
+    echo "ToastTV: Intel QSV render access prepared for $qsv_nodes"
+  else
+    echo "ToastTV: Intel QSV requested, but no render node is available at $qsv_device; the startup probe will use CPU fallback" >&2
+  fi
 fi
 
-exec gosu "$requested_owner" "$@"
+echo "ToastTV: starting as $requested_owner with supplemental groups ${supplemental_groups:-none}"
+if [ -n "$supplemental_groups" ]; then
+  exec setpriv \
+    --reuid "$toasttv_uid" \
+    --regid "$toasttv_gid" \
+    --groups "$supplemental_groups" \
+    -- "$@"
+fi
+
+exec setpriv \
+  --reuid "$toasttv_uid" \
+  --regid "$toasttv_gid" \
+  --clear-groups \
+  -- "$@"

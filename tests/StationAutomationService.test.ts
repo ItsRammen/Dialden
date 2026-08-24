@@ -10,6 +10,8 @@ import {
   loadStationAutomationCatalog,
   selectStationCollections,
   stationAirtimeSlots,
+  stationCollectionProgrammingGroups,
+  stationScheduleSlots,
 } from '../src/services/StationAutomationService'
 import type { MediaCollection, MediaItem } from '../src/types'
 
@@ -271,6 +273,67 @@ describe('station automation', () => {
     ).toEqual(['Planet Earth III'])
   })
 
+  test('builds era dayparts while allowing modern family guest programming', async () => {
+    const records = [
+      collection(1, "Dexter's Laboratory", {
+        metadataYear: 1996,
+        genres: ['Animation', 'Comedy'],
+        networks: ['Cartoon Network'],
+      }),
+      collection(2, 'Bluey', {
+        metadataYear: 2018,
+        genres: ['Animation', 'Family'],
+        networks: ['ABC Kids'],
+      }),
+    ]
+    const catalog = await loadStationAutomationCatalog({
+      async getCollections(options) {
+        const offset = options?.offset ?? 0
+        return records.slice(offset, offset + (options?.limit ?? 250))
+      },
+    })
+
+    const era = catalog.eraTemplates?.find(
+      (template) => template.id === 'cartoon-network-1997-2004'
+    )
+    expect(era).toMatchObject({ matchedShows: 2, matchedMovies: 0 })
+    expect(era?.matches).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          title: 'Bluey',
+          relationship: 'family-guest',
+        }),
+      ])
+    )
+    expect(
+      selectStationCollections(catalog, {
+        preset: 'cartoon-network-1997-2004',
+      }).map((item) => item.displayTitle)
+    ).toEqual(['Bluey', "Dexter's Laboratory"])
+
+    const group = 'toasttv-auto-12345678'
+    const slots = stationScheduleSlots(
+      'all-day',
+      group,
+      'cartoon-network-1997-2004'
+    )
+    expect(slots.length).toBeGreaterThan(3)
+    expect(slots[0]?.groups[0]).toStartWith(`${group}-`)
+    expect(
+      stationCollectionProgrammingGroups(
+        'cartoon-network-1997-2004',
+        catalog.collections.find((item) => item.displayTitle === 'Bluey')!,
+        group
+      )
+    ).toEqual(
+      expect.arrayContaining([
+        group,
+        `${group}-morning`,
+        `${group}-daytime`,
+      ])
+    )
+  })
+
   test('distinguishes an exact 5,000-collection catalog from an unsafe overflow', async () => {
     const repositoryWith = (total: number) => ({
       async getCollections(options: { offset?: number; limit?: number }) {
@@ -431,6 +494,96 @@ describe('station automation', () => {
       expect(
         rebuiltGuide?.programs.every((program) => program.mediaId === 502)
       ).toBe(true)
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  test('materializes era dayparts and restores the selected Auto recipe', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'toasttv-era-station-'))
+    try {
+      const bluey = collection(1, 'Bluey', {
+        metadataYear: 2018,
+        genres: ['Animation', 'Family'],
+        networks: ['ABC Kids'],
+      })
+      const dexter = collection(2, "Dexter's Laboratory", {
+        metadataYear: 1996,
+        genres: ['Animation', 'Comedy'],
+        networks: ['Cartoon Network'],
+      })
+      const repository = {
+        async getCollections() {
+          return [bluey, dexter]
+        },
+        async getAll() {
+          return [video('Bluey'), video("Dexter's Laboratory", 502)]
+        },
+      } as unknown as IMediaRepository
+      const policy: LibraryPolicyDocument = {
+        version: 1,
+        roots: {
+          tv: {
+            collections: [{ name: 'Bluey' }, { name: "Dexter's Laboratory" }],
+          },
+        },
+        channels: [],
+      }
+      const store = new ChannelConfigurationStore(join(directory, 'channels.json'))
+      const service = new ChannelService(
+        repository,
+        policy,
+        { now: () => new Date('2026-08-24T07:05:00.000Z') },
+        store
+      )
+
+      const result = await service.createAutomatedStation({
+        id: 'cn-family-mix',
+        name: 'Cartoon Family Mix',
+        timezone: 'UTC',
+        preset: 'cartoon-network-1997-2004',
+        airtime: 'all-day',
+      })
+
+      expect(result.channel.automation).toEqual({
+        preset: 'cartoon-network-1997-2004',
+        airtime: 'all-day',
+      })
+      expect(result.channel.slots.length).toBeGreaterThan(3)
+      expect(result.channel.slots.map((slot) => slot.groups[0])).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(/-morning$/),
+          expect.stringMatching(/-daytime$/),
+          expect.stringMatching(/-primetime$/),
+        ])
+      )
+      expect(
+        (await service.getGuide('cn-family-mix', 1))?.programs.every(
+          (program) => program.collectionTitle === 'Bluey'
+        )
+      ).toBe(true)
+
+      const restored = new ChannelService(
+        repository,
+        policy,
+        { now: () => new Date('2026-08-24T07:05:00.000Z') },
+        store
+      )
+      expect(await restored.stationAutomationDraft('cn-family-mix')).toMatchObject({
+        id: 'cn-family-mix',
+        preset: 'cartoon-network-1997-2004',
+        airtime: 'all-day',
+        collectionIds: expect.arrayContaining([1, 2]),
+      })
+      const lateNight = new ChannelService(
+        repository,
+        policy,
+        { now: () => new Date('2026-08-24T23:05:00.000Z') },
+        store
+      )
+      expect(
+        (await lateNight.getGuide('cn-family-mix', 1))?.programs.length
+      ).toBeGreaterThan(0)
     } finally {
       rmSync(directory, { recursive: true, force: true })
     }

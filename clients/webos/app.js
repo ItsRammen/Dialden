@@ -16,7 +16,6 @@
   var LIVE_STREAM_RETRY_DELAYS = [750, 1500, 3000, 5000, 8000];
   var TUNING_STABLE_MS = 850;
   var LIVE_EDGE_TOLERANCE_SECONDS = 3;
-  var LIVE_EDGE_LOCK_TIMEOUT_MS = 4000;
   var RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 15000, 30000];
 
   var state = {
@@ -34,7 +33,6 @@
     failedLiveUrl: null,
     liveRetryAttempt: 0,
     tuning: false,
-    tuningStartedAt: 0,
     hlsSeekPending: false,
     tuneGeneration: 0,
     clockOffsetMs: 0,
@@ -697,13 +695,7 @@
     state.hlsSeekPending = false;
     state.activeSource = source;
     state.playToken += 1;
-    replaceVideoElement();
-    try {
-      elements.video.src = source.url;
-      elements.video.load();
-    } catch (error) {
-      handleMediaError();
-    }
+    if (!window.ToastTVPlaybackPolicy.loadMediaElement(elements.video, source.url)) handleMediaError();
   }
 
   function joinLive() {
@@ -764,7 +756,6 @@
 
   function beginTuning(message) {
     state.tuning = true;
-    state.tuningStartedAt = Date.now();
     clearTuningTimer();
     elements.playerScreen.classList.remove('has-video');
     elements.playerBackdrop.classList.remove('hidden');
@@ -775,18 +766,23 @@
   function stabilizeTuning() {
     clearTuningTimer();
     setPlayerStatus('Locking onto live broadcast…');
+    var generation = state.tuneGeneration;
+    var video = elements.video;
+    var sourceUrl = state.activeSource && state.activeSource.url;
     tuningTimer = window.setTimeout(function () {
       tuningTimer = null;
-      if (!state.tuning || elements.video.paused || elements.video.readyState < 3) return;
-      if (state.activeSource && state.activeSource.mode === 'channel-hls' && !seekHlsLiveEdge()) {
-        if (Date.now() - state.tuningStartedAt < LIVE_EDGE_LOCK_TIMEOUT_MS) {
-          setPlayerStatus('Tuning — synchronizing live position…');
-          stabilizeTuning();
-          return;
-        }
-        retryLiveStream('Tuning — reacquiring the live position…');
-        return;
-      }
+      if (
+        generation !== state.tuneGeneration ||
+        video !== elements.video ||
+        !state.activeSource ||
+        state.activeSource.url !== sourceUrl ||
+        !state.tuning ||
+        !window.ToastTVPlaybackPolicy.isPlaybackStable(video)
+      ) return;
+      /* Some LG HLS players expose no seekable range (or remain in seeking)
+         while playback is healthy. Joining the live edge is best-effort; actual
+         stable playback must never be torn down just because it cannot be proven. */
+      if (state.activeSource.mode === 'channel-hls') seekHlsLiveEdge();
       state.tuning = false;
       state.liveRetryAttempt = 0;
       state.failedLiveUrl = null;
@@ -798,7 +794,14 @@
       queuePresenceHeartbeat();
       scheduleAdjacentWarm();
       window.setTimeout(function () {
-        if (state.view === 'player' && !state.tuning) syncNow(false);
+        if (
+          generation === state.tuneGeneration &&
+          video === elements.video &&
+          state.activeSource &&
+          state.activeSource.url === sourceUrl &&
+          state.view === 'player' &&
+          !state.tuning
+        ) syncNow(false);
       }, 300);
     }, TUNING_STABLE_MS);
   }
@@ -967,7 +970,7 @@
     state.pendingJoin = false;
     state.playToken += 1;
     state.activeSource = null;
-    replaceVideoElement();
+    window.ToastTVPlaybackPolicy.resetMediaElement(elements.video);
     elements.playerScreen.classList.remove('has-video');
     elements.offAirPanel.classList.remove('hidden');
     elements.offAirNext.textContent = nextProgram ? 'Next: ' + nextProgram.title + ' at ' + formatTime(nextProgram.scheduledStart) : 'Check the guide for what’s next.';
@@ -1385,24 +1388,7 @@
   function detachVideoForTune() {
     state.pendingJoin = false;
     state.playToken += 1;
-    replaceVideoElement();
-  }
-
-  function replaceVideoElement() {
-    var previous = elements.video;
-    if (!previous || !previous.parentNode) return;
-    var replacement = previous.cloneNode(false);
-    replacement.removeAttribute('src');
-    replacement.muted = true;
-    previous.parentNode.replaceChild(replacement, previous);
-    elements.video = replacement;
-    bindVideoEvents(replacement);
-    try {
-      previous.muted = true;
-      previous.pause();
-      previous.removeAttribute('src');
-      previous.load();
-    } catch (ignore) {}
+    window.ToastTVPlaybackPolicy.resetMediaElement(elements.video);
   }
 
   function retryLiveStream(message) {
@@ -1415,7 +1401,7 @@
     state.activeSource = null;
     state.pendingJoin = false;
     state.playToken += 1;
-    replaceVideoElement();
+    window.ToastTVPlaybackPolicy.resetMediaElement(elements.video);
     beginTuning(message);
     scheduleLiveRetry(failedUrl, channel.id);
   }
@@ -1447,7 +1433,6 @@
     state.localPaused = false;
     state.awaitingGesture = false;
     state.tuning = false;
-    state.tuningStartedAt = 0;
     state.hlsSeekPending = false;
     state.liveRetryAttempt = 0;
     clearTuningTimer();
@@ -1460,7 +1445,7 @@
         3000
       );
     }
-    replaceVideoElement();
+    window.ToastTVPlaybackPolicy.resetMediaElement(elements.video);
     elements.playerScreen.classList.remove('has-video');
     hideChannelLogo();
     hideOffAir();

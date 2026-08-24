@@ -63,7 +63,17 @@ describe('settings template', () => {
         configuredMode: 'intel-qsv',
         activeBackend: 'software',
         hardwareAcceleration: false,
+        requestedDevice: '<svg onload=requested()>',
         device: '<img src=x onerror=device()>',
+        deviceCandidates: ['<script>candidate()</script>'],
+        probeAttempts: [
+          {
+            device: '<script>attemptDevice()</script>',
+            exitCode: 1,
+            timedOut: false,
+            detail: '<img src=x onerror=attemptDetail()>',
+          },
+        ],
         fallbackReason: '<script>fallback()</script>',
       },
     })
@@ -74,6 +84,10 @@ describe('settings template', () => {
     expect(html).not.toContain('<script>version()</script>')
     expect(html).not.toContain('<script>latest()</script>')
     expect(html).not.toContain('<img src=x onerror=device()>')
+    expect(html).not.toContain('<svg onload=requested()>')
+    expect(html).not.toContain('<script>candidate()</script>')
+    expect(html).not.toContain('<script>attemptDevice()</script>')
+    expect(html).not.toContain('<img src=x onerror=attemptDetail()>')
     expect(html).not.toContain('<script>fallback()</script>')
     expect(html).toContain('&lt;script&gt;profile()&lt;/script&gt;')
   })
@@ -86,7 +100,16 @@ describe('settings template', () => {
         configuredMode: 'auto',
         activeBackend: 'intel-qsv',
         hardwareAcceleration: true,
+        requestedDevice: '/dev/dri',
         device: '/dev/dri/renderD128',
+        deviceCandidates: ['/dev/dri/renderD128'],
+        probeAttempts: [
+          {
+            device: '/dev/dri/renderD128',
+            exitCode: 0,
+            timedOut: false,
+          },
+        ],
       },
     })
 
@@ -94,7 +117,12 @@ describe('settings template', () => {
     expect(html).toContain('Hardware transcoding is enabled and active.')
     expect(html).toContain('Automatic (Intel QSV with CPU fallback)')
     expect(html).toContain('Intel Quick Sync (QSV)')
+    expect(html).toContain('Requested path')
+    expect(html).toContain('Resolved render node')
     expect(html).toContain('/dev/dri/renderD128')
+    expect(html).toContain('1 probe attempt')
+    expect(html).toContain('Passed')
+    expect(html).toContain('browser developer console stays empty')
     expect(html).toContain('TOASTTV_TRANSCODING_MODE')
   })
 
@@ -106,7 +134,17 @@ describe('settings template', () => {
         configuredMode: 'intel-qsv',
         activeBackend: 'software',
         hardwareAcceleration: false,
+        requestedDevice: '/dev/dri',
         device: '/dev/dri/renderD128',
+        deviceCandidates: ['/dev/dri/renderD128'],
+        probeAttempts: [
+          {
+            device: '/dev/dri/renderD128',
+            exitCode: 234,
+            timedOut: false,
+            detail: 'No VA display found',
+          },
+        ],
         fallbackReason: 'QSV smoke test failed',
       },
     })
@@ -115,6 +153,30 @@ describe('settings template', () => {
     expect(html).toContain('Hardware Unavailable')
     expect(html).toContain('Active encoder</dt><dd>CPU software encoding')
     expect(html).toContain('Fallback reason: QSV smoke test failed')
+    expect(html).toContain('Exit 234')
+    expect(html).toContain('No VA display found')
+    expect(html).toContain('Docker → ToastTV → Logs')
+  })
+
+  test('explains when the container has no mapped render nodes', () => {
+    const html = renderSettings({
+      config,
+      mediaDirectory: '/media',
+      transcodingStatus: {
+        configuredMode: 'auto',
+        activeBackend: 'software',
+        hardwareAcceleration: false,
+        requestedDevice: '/dev/dri',
+        deviceCandidates: [],
+        probeAttempts: [],
+        fallbackReason: 'No DRM render nodes found under /dev/dri',
+      },
+    })
+
+    expect(html).toContain('Requested path')
+    expect(html).toContain('Render nodes found</dt><dd>None')
+    expect(html).toContain('Map the host /dev/dri directory')
+    expect(html).toContain('0 probe attempts')
   })
 
   test('shows concise CPU status when hardware transcoding is disabled', () => {

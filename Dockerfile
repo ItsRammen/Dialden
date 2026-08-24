@@ -37,7 +37,6 @@ RUN apt-get update \
         ca-certificates \
         curl \
         gnupg \
-        gosu \
         tzdata \
         util-linux \
     && mkdir -p /etc/apt/keyrings \

@@ -33,6 +33,12 @@ not this Docker/Unraid fork.
 Preview the TV client at `http://127.0.0.1:1993/tv/`. To package and sideload it
 on an LG TV, follow the [LG webOS client guide](./docs/WEBOS.md).
 
+The channel builder also includes period-inspired Cartoon Network,
+Nickelodeon/Nick Jr., Disney/Playhouse Disney, Toon Disney/Jetix, Toonami, and
+classic-cartoon layouts. They compare the playable library with curated show
+and movie suggestions while allowing approved modern family guests such as
+Bluey. See the [era-station design and research notes](./docs/era-stations.md).
+
 ## Getting Started
 
 The Raspberry Pi playback features below describe the inherited upstream
@@ -184,6 +190,14 @@ TOASTTV_TRANSCODING_MODE=auto
 TOASTTV_QSV_DEVICE=/dev/dri/renderD128
 ```
 
+The Docker device mapping and the FFmpeg setting are intentionally different:
+map the host directory as `/dev/dri:/dev/dri`, as Plex and Jellyfin commonly
+do, but point `TOASTTV_QSV_DEVICE` at a VA-API render node inside that directory.
+Passing `/dev/dri` or `/dev/dri/` directly to FFmpeg as if it were a render node
+causes a `No VA display found` probe failure. ToastTV also accepts `/dev/dri` as
+the setting when a multi-GPU host needs it to enumerate and test every
+`renderD<number>` node; a known single-GPU node is the clearer default.
+
 `software` always uses `libx264`; `auto` and `intel-qsv` run a real one-frame
 Quick Sync encode test at server startup. If the device, permissions, driver,
 or encoder is unavailable, ToastTV stays online with CPU encoding and shows
@@ -199,20 +213,35 @@ graph less reliable. A later zero-copy pipeline can move compatible decode and
 filters to the GPU as a separate optimization.
 
 For native Linux Compose, confirm that the render node exists, select `auto` in
-`.env`, and include the optional device override:
+`.env`, and include the optional device override. The override maps the whole
+DRM directory while `.env` keeps the concrete render-node setting above:
 
 ```bash
-ls -l /dev/dri/renderD128
+ls -l /dev/dri
 docker compose -f docker-compose.yml -f docker-compose.qsv.yml up -d --build
 ```
 
 For Unraid, enable the iGPU on the host, edit the ToastTV template's advanced
-settings, select `/dev/dri/renderD128` for **Intel GPU Render Device**, and set
-**Transcoding Mode** to `auto` or `intel-qsv`. The container adds the mapped
-render node's numeric group when it drops root privileges; privileged mode is
-not required. If the host uses another render node, set both device fields to
-that same path. Intel Quick Sync is not available to this Linux container
-through Docker Desktop on Windows/WSL.
+settings, select the host `/dev/dri` directory for **Intel GPU Device Mapping**,
+keep **Quick Sync Device** at `/dev/dri/renderD128` (or the actual render node),
+and set **Transcoding Mode** to `auto` or `intel-qsv`. The container preserves
+Unraid supplemental media groups and adds the mapped render-node group when it
+drops root privileges; privileged mode is not required. Intel Quick Sync is not
+available to this Linux container through Docker Desktop on Windows/WSL.
+
+After applying the template changes, force an image update and restart the
+container because these settings are read only at process startup. To verify
+what the container received, run:
+
+```bash
+docker exec toasttv sh -c 'printf "TOASTTV_QSV_DEVICE=%s\n" "$TOASTTV_QSV_DEVICE"; ls -l /dev/dri'
+docker logs toasttv 2>&1 | grep -Ei 'qsv|render|va display|supplemental groups'
+```
+
+The first command should show one or more `renderD*` character devices and a
+concrete `TOASTTV_QSV_DEVICE` unless directory auto-discovery is intentional.
+The startup log states which nodes had access prepared and whether the QSV
+encode probe succeeded or fell back to CPU.
 
 SQLite, thumbnails, cached artwork, parent overrides, editable channel
 definitions, and manual off-air state use the `toasttv-data` Docker volume.
@@ -345,6 +374,11 @@ still supports HTTP Range requests for seeking. **Go off air** only
 pauses a valid schedule. An enabled channel with no eligible items is shown as
 **No programming** and links to its configuration instead of offering a false
 "Go on air" remedy.
+
+When Intel QSV is active, the LG client may keep the two adjacent channels hot
+for faster channel surfing. CPU fallback deliberately runs only the watched
+channel: each hot channel is another complete 1080p software encode, and letting
+several compete can turn a channel switch into a repeating buffer loop.
 
 `/api/v1/health` currently checks SQLite and FFmpeg only. It does not prove the
 mounts are readable or that the first scan finished. Watch the Dashboard or

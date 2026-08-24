@@ -9,6 +9,7 @@ import type {
 } from '../config/library'
 import type {
   StationAutomationCatalog,
+  StationEraTemplateSummary,
   StationFacet,
 } from '../services/StationAutomationService'
 import { STATION_AIRTIME_OPTIONS } from '../services/StationAutomationService'
@@ -89,7 +90,7 @@ export function renderChannelAdministration(
       </section>
 
       ${
-        options.automation && options.automationOpen
+        options.automation && options.automationOpen && !options.brandingId
           ? renderModal(
               'station-builder',
               renderAutomationBuilder(
@@ -127,51 +128,121 @@ export function renderChannelAdministration(
       }
 
       ${
-        edit || options.newChannel
-          ? `${options.newChannel ? '<div class="channel-modal" role="dialog" aria-modal="true" aria-labelledby="manual-editor-title"><a class="channel-modal-backdrop" href="/channels" aria-label="Close station creator"></a><div class="channel-modal-panel"><a class="channel-modal-close" href="/channels" aria-label="Close station creator">×</a>' : ''}<section class="channel-admin-editor" id="editor">
-        <header>
-          <div>
-            <p class="channel-admin-eyebrow">${edit ? 'Edit channel' : 'New channel'}</p>
-            <h2 id="manual-editor-title">${edit ? escapeHtml(edit.name) : 'Add a channel manually'}</h2>
-          </div>
-          <div class="channel-admin-editor-actions">
-            ${edit ? `<a href="/channels?builder=${encodeURIComponent(edit.id)}#station-builder">Edit channel lineup</a>` : ''}
-            <a href="/channels">Cancel</a>
-          </div>
-        </header>
-        <form method="post" enctype="multipart/form-data" action="${edit ? `/channels/${encodeURIComponent(edit.id)}` : '/channels'}">
-          <div class="channel-admin-fields">
-            <label>Channel ID
-              <input type="text" name="id" required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_-]*" value="${escapeHtml(edit?.id ?? '')}" ${edit ? 'readonly' : ''} placeholder="cartoon-classics">
-              <small>Stable identifier used by TV clients; it cannot be renamed.</small>
-            </label>
-            <label>Display name
-              <input type="text" name="name" required maxlength="100" value="${escapeHtml(edit?.name ?? '')}" placeholder="Cartoon Classics">
-            </label>
-            <label>Timezone
-              <input type="text" name="timezone" required maxlength="100" value="${escapeHtml(edit?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone)}" placeholder="America/New_York">
-              <small>Use an IANA timezone such as America/New_York or Asia/Taipei.</small>
-            </label>
-            <label class="channel-admin-checkbox"><input type="checkbox" name="enabled" ${edit?.enabled === false ? '' : 'checked'}> Enabled and visible to TV clients</label>
-          </div>
-          ${renderBrandingSummary(edit, new Set(options.channelLogoIds ?? []))}
-          ${renderMarathonSettings(edit?.marathon)}
-          ${renderScheduleDesigner(edit?.slots ?? [], groups, edit ? options.channelLogoVariants?.[edit.id] ?? [] : [])}
-          <div class="channel-admin-groups">
-            <strong>Groups currently assigned by the library policy</strong>
-            ${
-              groups.length > 0
-                ? `<div>${groups.map((group) => `<code>${escapeHtml(group)}</code>`).join('')}</div>`
-                : '<p>No collection programming groups are configured. A channel can be saved, but it will have no eligible programming until collections have group assignments.</p>'
-            }
-          </div>
-          <button type="submit">${edit ? 'Save channel' : 'Create channel'}</button>
-        </form>
-      </section>${options.newChannel ? '</div></div>' : ''}`
+        (edit || options.newChannel) && !options.brandingId && !options.automationOpen
+          ? renderModal(
+              'channel-editor',
+              renderManualEditor(
+                edit,
+                groups,
+                new Set(options.channelLogoIds ?? []),
+                edit ? options.channelLogoVariants?.[edit.id] ?? [] : []
+              ),
+              '/channels',
+              edit ? `Configure ${edit.name}` : 'Create a station manually'
+            )
           : ''
       }
     </div>`
   )
+}
+
+function renderManualEditor(
+  edit: LibraryChannelPolicy | undefined,
+  groups: readonly string[],
+  uploadedLogoIds: ReadonlySet<string>,
+  scheduledLogoIds: readonly string[]
+): string {
+  const editorTitle = edit ? escapeHtml(edit.name) : 'Create a station manually'
+  return `<section class="channel-admin-editor" id="editor" data-channel-editor>
+    <header class="channel-builder-heading">
+      <div>
+        <p class="channel-admin-eyebrow">${edit ? 'Station configuration' : 'New station'}</p>
+        <h2 id="manual-editor-title">${editorTitle}</h2>
+        <p>${edit ? 'Update station details, marathons, and the weekly schedule.' : 'Build a station directly from programming groups and time blocks.'}</p>
+      </div>
+    </header>
+    ${renderBuilderNavigation(edit, 'manual')}
+    <form method="post" enctype="multipart/form-data" action="${edit ? `/channels/${encodeURIComponent(edit.id)}` : '/channels'}">
+      <section class="channel-builder-step" aria-labelledby="station-details-heading">
+        ${renderStepHeading(1, 'Station details', 'Name the station, choose its timezone, and control whether TV clients can tune it.', 'station-details-heading')}
+        <div class="channel-admin-fields">
+          <label>Channel ID
+            <input type="text" name="id" required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_-]*" value="${escapeHtml(edit?.id ?? '')}" ${edit ? 'readonly' : ''} placeholder="cartoon-classics">
+            <small>Stable identifier used by TV clients; it cannot be renamed.</small>
+          </label>
+          <label>Display name
+            <input type="text" name="name" required maxlength="100" value="${escapeHtml(edit?.name ?? '')}" placeholder="Cartoon Classics">
+          </label>
+          <label>Timezone
+            <input type="text" name="timezone" required maxlength="100" value="${escapeHtml(edit?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone)}" placeholder="America/New_York">
+            <small>Use an IANA timezone such as America/New_York or Asia/Taipei.</small>
+          </label>
+          <label class="channel-admin-checkbox"><input type="checkbox" name="enabled" ${edit?.enabled === false ? '' : 'checked'}> Enabled and visible to TV clients</label>
+        </div>
+      </section>
+      <section class="channel-builder-step" aria-labelledby="station-branding-heading">
+        ${renderStepHeading(2, 'Channel identity', 'Preview the current logo choice or open the dedicated logo editor.', 'station-branding-heading')}
+        ${renderBrandingSummary(edit, uploadedLogoIds)}
+      </section>
+      <section class="channel-builder-step" aria-labelledby="station-pattern-heading">
+        ${renderStepHeading(3, 'Programming pattern', 'Optionally add recurring episode marathons to the normal mix.', 'station-pattern-heading')}
+        ${renderMarathonSettings(edit?.marathon)}
+      </section>
+      <section class="channel-builder-step" aria-labelledby="station-schedule-heading">
+        ${renderStepHeading(4, 'Weekly schedule', 'Place programming groups into editable time blocks.', 'station-schedule-heading')}
+        ${renderScheduleDesigner(edit?.slots ?? [], groups, scheduledLogoIds)}
+      </section>
+      <details class="channel-admin-groups">
+        <summary>Available programming groups</summary>
+        ${
+          groups.length > 0
+            ? `<div>${groups.map((group) => `<code>${escapeHtml(group)}</code>`).join('')}</div>`
+            : '<p>No collection programming groups are configured. A channel can be saved, but it will have no eligible programming until collections have group assignments.</p>'
+        }
+      </details>
+      <footer class="channel-builder-footer">
+        <a class="channel-admin-link" href="/channels">Cancel</a>
+        <button type="submit">${edit ? 'Save station' : 'Create station'}</button>
+      </footer>
+    </form>
+  </section>`
+}
+
+function renderBuilderNavigation(
+  channel: LibraryChannelPolicy | undefined,
+  active: 'auto' | 'manual' | 'branding'
+): string {
+  const items = channel
+    ? [
+        ['manual', `/channels?edit=${encodeURIComponent(channel.id)}#channel-editor`, 'Details & schedule'],
+        ['auto', `/channels?builder=${encodeURIComponent(channel.id)}#station-builder`, 'Auto lineup'],
+        ['branding', `/channels?branding=${encodeURIComponent(channel.id)}#branding-modal`, 'Logo & branding'],
+      ] as const
+    : [
+        ['auto', '/channels?builder=create#station-builder', 'Auto setup'],
+        ['manual', '/channels?new=manual#channel-editor', 'Manual setup'],
+      ] as const
+  return `<nav class="channel-builder-navigation" aria-label="Station setup sections">
+    ${items
+      .map(([id, href, label]) =>
+        id === active
+          ? `<span aria-current="page">${escapeHtml(label)}</span>`
+          : `<a href="${escapeHtml(href)}">${escapeHtml(label)}</a>`
+      )
+      .join('')}
+  </nav>`
+}
+
+function renderStepHeading(
+  step: number,
+  title: string,
+  description: string,
+  id: string
+): string {
+  return `<header class="channel-builder-step-heading">
+    <span aria-hidden="true">${step}</span>
+    <div><h3 id="${escapeHtml(id)}">${escapeHtml(title)}</h3><p>${escapeHtml(description)}</p></div>
+  </header>`
 }
 
 function renderBrandingSummary(
@@ -223,6 +294,7 @@ function renderBrandingEditor(
       <div><p class="channel-admin-eyebrow">Channel identity</p><h2>${escapeHtml(channel.name)} logo</h2></div>
       <p>Choose where this channel’s logo appears. Video burn-in is optional and separate from app artwork.</p>
     </header>
+    ${renderBuilderNavigation(channel, 'branding')}
     <form method="post" enctype="multipart/form-data" action="/channels/${encodeURIComponent(channel.id)}/branding">
     <div class="channel-branding-section-heading">
       <strong>Logo shown in apps</strong>
@@ -372,6 +444,7 @@ function renderAutomationBuilder(
       </div>
       <span class="channel-auto-count">${countLabel(catalog.collections.length, 'playable collection')}</span>
     </header>
+    ${renderBuilderNavigation(target, 'auto')}
     <p class="channel-auto-disclaimer"><strong>Personal library mix—not an official network feed.</strong> Brand-style presets use your own parent-allowed files and metadata. They do not reproduce, impersonate, or claim affiliation with a broadcaster or its historic schedule.</p>
     ${
       catalog.truncated
@@ -387,95 +460,223 @@ function renderAutomationBuilder(
           </div>`
         : `<form method="post" action="/channels/auto-build" class="channel-auto-form">
             ${target ? `<input type="hidden" name="targetChannelId" value="${escapeHtml(target.id)}">` : ''}
-            <div class="channel-auto-search">
-              <label for="catalog-search">Find a show, network, studio, or genre</label>
-              <div>
-                <input id="catalog-search" type="search" name="catalogSearch" maxlength="100" value="${escapeHtml(catalogSearch)}" placeholder="Bluey, Nickelodeon, Ludo Studio…">
-                <button type="submit" name="action" value="search" formnovalidate class="btn-secondary">Search catalog</button>
-                ${catalogSearch ? '<button type="submit" name="action" value="clear-search" formnovalidate class="channel-auto-clear">Clear</button>' : ''}
-              </div>
-              <small>Search narrows the selectors below while keeping your checked collections. Presets always evaluate the full playable catalog.</small>
-            </div>
-            <div class="channel-admin-fields">
-              <label>Station ID
-                <input type="text" name="id" required maxlength="59" pattern="[A-Za-z0-9][A-Za-z0-9_-]*" value="${escapeHtml(draft?.id ?? target?.id ?? '')}" ${target ? 'readonly' : ''} placeholder="saturday-cartoons">
-                <small>Used by TV clients. The generated group uses the same stable ID.</small>
-              </label>
-              <label>Display name
-                <input type="text" name="name" required maxlength="100" value="${escapeHtml(draft?.name ?? target?.name ?? '')}" placeholder="Saturday Cartoons">
-              </label>
-              <label>Timezone
-                <input type="text" name="timezone" required maxlength="100" value="${escapeHtml(timezone)}" placeholder="America/New_York">
-              </label>
-            </div>
-
-            <fieldset class="channel-auto-presets">
-              <legend>Start with a preset</legend>
-              ${target && draft?.preset === 'custom' ? `<p class="channel-admin-help"><strong>Current lineup loaded:</strong> ${countLabel(selectedIds.size, 'selected collection')}. Change the checks below, choose metadata facets, or switch to another preset.</p>` : ''}
-              <div class="channel-auto-preset-grid">
-                ${catalog.presets
-                  .map(
-                    (preset) => `<label class="channel-auto-preset">
-                      <input type="radio" name="preset" value="${escapeHtml(preset.id)}" ${selectedPreset === preset.id ? 'checked' : ''}>
-                      <span><strong>${escapeHtml(preset.name)}</strong><small>${escapeHtml(preset.description)}</small><em>${countLabel(preset.matchedCollections, 'matching collection')}${preset.unofficial ? ' · unofficial style mix' : ''}</em></span>
-                    </label>`
-                  )
-                  .join('')}
-                <label class="channel-auto-preset">
-                  <input type="radio" name="preset" value="custom" ${selectedPreset === 'custom' ? 'checked' : ''}>
-                  <span><strong>Custom mix</strong><small>Use only the facets and individual collections selected below.</small><em>You control every selector</em></span>
+            <section class="channel-builder-step" aria-labelledby="auto-details-heading">
+              ${renderStepHeading(1, 'Station details', 'Choose the stable station identity and local broadcast timezone.', 'auto-details-heading')}
+              <div class="channel-admin-fields">
+                <label>Station ID
+                  <input type="text" name="id" required maxlength="59" pattern="[A-Za-z0-9][A-Za-z0-9_-]*" value="${escapeHtml(draft?.id ?? target?.id ?? '')}" ${target ? 'readonly' : ''} placeholder="saturday-cartoons">
+                  <small>Used by TV clients. The generated group uses the same stable ID.</small>
+                </label>
+                <label>Display name
+                  <input type="text" name="name" required maxlength="100" value="${escapeHtml(draft?.name ?? target?.name ?? '')}" placeholder="Saturday Cartoons">
+                </label>
+                <label>Timezone
+                  <input type="text" name="timezone" required maxlength="100" value="${escapeHtml(timezone)}" placeholder="America/New_York">
                 </label>
               </div>
-            </fieldset>
+            </section>
 
-            <fieldset class="channel-auto-presets">
-              <legend>Choose airtime</legend>
-              <div class="channel-auto-airtime-grid">
-                ${STATION_AIRTIME_OPTIONS.map(
-                  (airtime) => `<label class="channel-auto-airtime">
-                    <input type="radio" name="airtime" value="${airtime.id}" ${selectedAirtime === airtime.id ? 'checked' : ''}>
-                    <span><strong>${escapeHtml(airtime.name)}</strong><small>${escapeHtml(airtime.description)}</small></span>
-                  </label>`
-                ).join('')}
-              </div>
-              <p class="channel-admin-help">These become ordinary editable schedule slots ${target ? 'when Auto setup is applied' : 'after creation'}.</p>
-            </fieldset>
+            <section class="channel-builder-step" aria-labelledby="auto-programming-heading">
+              ${renderStepHeading(2, 'Choose programming', 'Start with a preset, then optionally fine-tune it with metadata or individual titles.', 'auto-programming-heading')}
+              <fieldset class="channel-auto-presets">
+                <legend>Start with a preset</legend>
+                ${target && draft?.preset === 'custom' ? `<p class="channel-admin-help"><strong>Current lineup loaded:</strong> ${countLabel(selectedIds.size, 'selected collection')}. Change the checks below, choose metadata facets, or switch to another preset.</p>` : ''}
+                <div class="channel-auto-preset-grid">
+                  ${catalog.presets
+                    .map(
+                      (preset) => `<label class="channel-auto-preset">
+                        <input type="radio" name="preset" value="${escapeHtml(preset.id)}" ${selectedPreset === preset.id ? 'checked' : ''}>
+                        <span><strong>${escapeHtml(preset.name)}</strong><small>${escapeHtml(preset.description)}</small><em>${countLabel(preset.matchedCollections, 'matching collection')}${preset.unofficial ? ' · unofficial style mix' : ''}</em></span>
+                      </label>`
+                    )
+                    .join('')}
+                  <label class="channel-auto-preset">
+                    <input type="radio" name="preset" value="custom" ${selectedPreset === 'custom' ? 'checked' : ''}>
+                    <span><strong>Custom mix</strong><small>Use only the facets and individual collections selected below.</small><em>You control every selector</em></span>
+                  </label>
+                </div>
+              </fieldset>
+              ${renderEraTemplatePicker(
+                catalog.eraTemplates ?? [],
+                catalog.familyMixSuggestions ?? [],
+                selectedPreset
+              )}
+              <details class="channel-builder-tuning" ${selectedIds.size > 0 || selectedGenres.size > 0 || selectedNetworks.size > 0 || selectedStudios.size > 0 || normalizedSearch ? 'open' : ''}>
+                <summary><span><strong>Fine-tune the library mix</strong><small>Search, metadata facets, and individual titles</small></span></summary>
+                <div class="channel-builder-tuning-content">
+                  <div class="channel-auto-search">
+                    <label for="catalog-search">Find a show, network, studio, or genre</label>
+                    <div>
+                      <input id="catalog-search" type="search" name="catalogSearch" maxlength="100" value="${escapeHtml(catalogSearch)}" placeholder="Bluey, Nickelodeon, Ludo Studio…">
+                      <button type="submit" name="action" value="search" formnovalidate class="btn-secondary">Search catalog</button>
+                      ${catalogSearch ? '<button type="submit" name="action" value="clear-search" formnovalidate class="channel-auto-clear">Clear</button>' : ''}
+                    </div>
+                    <small>Search narrows the selectors below while keeping your checked collections. Presets always evaluate the full playable catalog.</small>
+                  </div>
+                  <div class="channel-auto-facets">
+                    ${renderFacet('Genres', 'genres', matchingGenres, selectedGenres, 50)}
+                    ${renderFacet('Networks', 'networks', matchingNetworks, selectedNetworks, 75)}
+                    ${renderFacet('Studios', 'studios', matchingStudios, selectedStudios, 75)}
+                  </div>
+                  <p class="channel-admin-help">Facet and show selections are added to a preset. Choose <strong>Custom mix</strong> if they should be the only selectors. Network and studio checkboxes show TMDB’s exact stored values; the Nick Jr.-style preset can still recognize known preschool titles when TMDB reports only Nickelodeon.${normalizedSearch && matchingGenres.length + matchingNetworks.length + matchingStudios.length === 0 ? ' No matching metadata facets were found.' : ''}</p>
+                  <details class="channel-auto-collections" ${selectedIds.size > 0 ? 'open' : ''}>
+                    <summary>Add individual shows or movies</summary>
+                    <div class="channel-auto-collection-grid">
+                      ${visibleCollections
+                        .map(
+                          (collection) => `<label>
+                            <input type="checkbox" name="collectionIds" value="${collection.id}" ${selectedIds.has(collection.id) ? 'checked' : ''}>
+                            <span><strong>${escapeHtml(collection.displayTitle)}</strong><small>${escapeHtml(collection.libraryKind.toUpperCase())} · ${countLabel(collection.eligibleFiles, 'playable file')}</small></span>
+                          </label>`
+                        )
+                        .join('')}
+                    </div>
+                    ${matchingCollections.length === 0 ? '<p class="channel-admin-help">No collection matches this catalog search. Clear it to browse the full catalog.</p>' : ''}
+                    ${matchingCollections.length > 250 ? `<p class="channel-admin-help">Showing the first 250 of ${matchingCollections.length} matching collections. Refine the catalog search to reach any remaining title.</p>` : normalizedSearch ? `<p class="channel-admin-help">Showing ${countLabel(matchingCollections.length, 'matching collection')}.</p>` : catalog.collections.length > 250 ? '<p class="channel-admin-help">Showing the first 250 collections. Search by title to reach any other collection without loading the entire catalog.</p>' : ''}
+                  </details>
+                </div>
+              </details>
+            </section>
 
-            ${renderMarathonSettings(draft?.marathon ?? target?.marathon)}
-
-            <div class="channel-auto-facets">
-              ${renderFacet('Genres', 'genres', matchingGenres, selectedGenres, 50)}
-              ${renderFacet('Networks', 'networks', matchingNetworks, selectedNetworks, 75)}
-              ${renderFacet('Studios', 'studios', matchingStudios, selectedStudios, 75)}
-            </div>
-            <p class="channel-admin-help">Facet and show selections are added to a preset. Choose <strong>Custom mix</strong> if they should be the only selectors. Network and studio checkboxes show TMDB’s exact stored values; the Nick Jr.-style preset can still recognize known preschool titles when TMDB reports only Nickelodeon.${normalizedSearch && matchingGenres.length + matchingNetworks.length + matchingStudios.length === 0 ? ' No matching metadata facets were found.' : ''}</p>
-
-            <details class="channel-auto-collections" ${selectedIds.size > 0 ? 'open' : ''}>
-              <summary>Add individual shows or movies</summary>
-              <div class="channel-auto-collection-grid">
-                ${visibleCollections
-                  .map(
-                    (collection) => `<label>
-                      <input type="checkbox" name="collectionIds" value="${collection.id}" ${selectedIds.has(collection.id) ? 'checked' : ''}>
-                      <span><strong>${escapeHtml(collection.displayTitle)}</strong><small>${escapeHtml(collection.libraryKind.toUpperCase())} · ${countLabel(collection.eligibleFiles, 'playable file')}</small></span>
+            <section class="channel-builder-step" aria-labelledby="auto-schedule-heading">
+              ${renderStepHeading(3, 'Choose airtime and marathons', 'Set when this station appears and whether it occasionally runs a single-show marathon.', 'auto-schedule-heading')}
+              <fieldset class="channel-auto-presets">
+                <legend>Choose airtime</legend>
+                <div class="channel-auto-airtime-grid">
+                  ${STATION_AIRTIME_OPTIONS.map(
+                    (airtime) => `<label class="channel-auto-airtime">
+                      <input type="radio" name="airtime" value="${airtime.id}" ${selectedAirtime === airtime.id ? 'checked' : ''}>
+                      <span><strong>${escapeHtml(airtime.name)}</strong><small>${escapeHtml(airtime.description)}</small></span>
                     </label>`
-                  )
-                  .join('')}
-              </div>
-              ${matchingCollections.length === 0 ? '<p class="channel-admin-help">No collection matches this catalog search. Clear it to browse the full catalog.</p>' : ''}
-              ${matchingCollections.length > 250 ? `<p class="channel-admin-help">Showing the first 250 of ${matchingCollections.length} matching collections. Refine the catalog search to reach any remaining title.</p>` : normalizedSearch ? `<p class="channel-admin-help">Showing ${countLabel(matchingCollections.length, 'matching collection')}.</p>` : catalog.collections.length > 250 ? '<p class="channel-admin-help">Showing the first 250 collections. Search by title to reach any other collection without loading the entire catalog.</p>' : ''}
-            </details>
+                  ).join('')}
+                </div>
+                <p class="channel-admin-help">All-day era layouts become their displayed morning, daytime, action, primetime, and repeat blocks. Other presets and reduced airtimes use the simpler editable windows ${target ? 'when Auto setup is applied' : 'after creation'}.</p>
+              </fieldset>
+              ${renderMarathonSettings(draft?.marathon ?? target?.marathon)}
+            </section>
 
-            ${renderAutomationPreview(preview)}
-            ${target ? `<label class="channel-auto-replace"><input type="checkbox" name="confirmReplace" value="yes" required><span><strong>Replace this station’s current programming setup</strong><small>This replaces its schedule blocks, automated library selection, and marathon pattern. The station ID, enabled state, and manual on/off state are preserved.</small></span></label>` : ''}
-            <div class="channel-auto-actions">
-              ${target ? '' : '<a class="channel-admin-link" href="/channels?new=manual#editor">Create manually</a>'}
-              <button type="submit" name="action" value="preview" formnovalidate class="btn-secondary">Preview lineup</button>
-              <button type="submit" name="action" value="${target ? 'update' : 'create'}">${target ? 'Apply Auto setup' : `Create ${escapeHtml(airtimeActionLabel(selectedAirtime))} station`}</button>
-            </div>
+            <section class="channel-builder-step channel-builder-review" aria-labelledby="auto-review-heading">
+              ${renderStepHeading(4, 'Preview and apply', 'Check the eligible lineup before saving changes to the live station list.', 'auto-review-heading')}
+              ${renderAutomationPreview(preview)}
+              ${target ? `<label class="channel-auto-replace"><input type="checkbox" name="confirmReplace" value="yes" required><span><strong>Replace this station’s current programming setup</strong><small>This replaces its schedule blocks, automated library selection, and marathon pattern. The station ID, enabled state, and manual on/off state are preserved.</small></span></label>` : ''}
+              <footer class="channel-builder-footer channel-auto-actions">
+                ${target ? '' : '<a class="channel-admin-link" href="/channels?new=manual#channel-editor">Create manually</a>'}
+                <button type="submit" name="action" value="preview" formnovalidate class="btn-secondary">Preview lineup</button>
+                <button type="submit" name="action" value="${target ? 'update' : 'create'}">${target ? 'Apply Auto setup' : `Create ${escapeHtml(airtimeActionLabel(selectedAirtime))} station`}</button>
+              </footer>
+            </section>
           </form>
           `
     }
+  </section>`
+}
+
+function renderEraTemplatePicker(
+  templates: readonly StationEraTemplateSummary[],
+  familyMix: NonNullable<StationAutomationCatalog['familyMixSuggestions']>,
+  selectedPreset: string
+): string {
+  if (templates.length === 0) return ''
+  const selectedTemplate = templates.some(
+    (template) => template.id === selectedPreset
+  )
+  return `<details class="channel-era-picker" ${selectedTemplate ? 'open' : ''} data-era-picker>
+    <summary>
+      <span><strong>Build a network-era station</strong><small>Use a familiar TV-day layout, with modern family favourites allowed as guest programming.</small></span>
+      <em>${templates.length} layouts</em>
+    </summary>
+    <div class="channel-era-picker-body">
+      <p class="channel-admin-help"><strong>Period-inspired, not a historical recording.</strong> The era controls dayparts, rotation character, movie guidance, and show suggestions. Parent-approved newer titles such as Bluey can still appear in the most suitable block.</p>
+      <div class="channel-era-grid">
+        ${templates
+          .map(
+            (template) => `<label class="channel-era-card">
+              <input type="radio" name="preset" value="${escapeHtml(template.id)}" ${selectedPreset === template.id ? 'checked' : ''} data-era-template-radio>
+              <span>
+                <em>${escapeHtml(template.networkFamily)} · ${template.eraStartYear}–${template.eraEndYear}</em>
+                <strong>${escapeHtml(template.name)}</strong>
+                <small>${escapeHtml(template.description)}</small>
+                <b>${countLabel(template.matchedShows, 'owned show')} · ${countLabel(template.matchedMovies, 'owned movie')} · ${countLabel(template.missingSuggestions.length, 'suggested addition')}</b>
+              </span>
+            </label>`
+          )
+          .join('')}
+      </div>
+      <div class="channel-era-detail-stack" aria-live="polite">
+        ${templates
+          .map((template) =>
+            renderEraTemplateDetail(
+              template,
+              familyMix,
+              selectedPreset === template.id
+            )
+          )
+          .join('')}
+      </div>
+    </div>
+  </details>`
+}
+
+function renderEraTemplateDetail(
+  template: StationEraTemplateSummary,
+  familyMix: NonNullable<StationAutomationCatalog['familyMixSuggestions']>,
+  visible: boolean
+): string {
+  const historical = template.matches.filter(
+    (match) => match.relationship === 'historical'
+  )
+  const guests = template.matches.filter(
+    (match) => match.relationship === 'family-guest'
+  )
+  return `<section class="channel-era-detail" data-era-template-panel="${escapeHtml(template.id)}" ${visible ? '' : 'hidden'}>
+    <header>
+      <div><p class="channel-admin-eyebrow">Selected layout</p><h4>${escapeHtml(template.name)}</h4></div>
+      <span>${escapeHtml(template.movieCadence)} movies · ${escapeHtml(template.marathonCadence)} marathon guidance</span>
+    </header>
+    <div class="channel-era-dayparts" aria-label="Template dayparts">
+      ${template.blocks
+        .map(
+          (block) => `<span><b>${escapeHtml(block.start)}–${escapeHtml(block.end)}</b><small>${escapeHtml(block.name)}</small></span>`
+        )
+        .join('')}
+    </div>
+    <div class="channel-era-coverage">
+      <section>
+        <h5>Already in your library</h5>
+        ${historical.length > 0
+          ? `<div class="channel-era-chips">${historical
+              .slice(0, 12)
+              .map(
+                (match) => `<span>${escapeHtml(match.title)}<small>${escapeHtml(match.playbackOrder)}</small></span>`
+              )
+              .join('')}</div>`
+          : '<p>No era-anchor title is playable yet.</p>'}
+        ${guests.length > 0
+          ? `<h5>Modern family guests</h5><div class="channel-era-chips is-guest">${guests
+              .slice(0, 8)
+              .map((match) => `<span>${escapeHtml(match.title)}<small>family mix</small></span>`)
+              .join('')}</div>`
+          : ''}
+      </section>
+      <section>
+        <h5>Suggestions to improve this station</h5>
+        <p>Wishlist only—ToastTV never downloads or links to media.</p>
+        <div class="channel-era-chips is-missing">${template.missingSuggestions
+          .slice(0, 12)
+          .map(
+            (suggestion) => `<span>${escapeHtml(suggestion.title)}<small>${escapeHtml(suggestion.libraryKind)} · ${suggestion.firstYear}</small></span>`
+          )
+          .join('') || '<span>Core era coverage is complete</span>'}</div>
+      </section>
+    </div>
+    <details class="channel-era-family-list">
+      <summary>Popular family-mix ideas</summary>
+      <div class="channel-era-chips">${familyMix
+        .map(
+          (suggestion) => `<span class="${suggestion.available ? 'is-owned' : ''}">${escapeHtml(suggestion.title)}<small>${suggestion.available ? 'available now' : `optional · ${suggestion.firstYear}`}</small></span>`
+        )
+        .join('')}</div>
+    </details>
   </section>`
 }
 
@@ -486,9 +687,9 @@ function renderModal(
   label = 'Station setup'
 ): string {
   return `<div class="channel-modal" id="${escapeHtml(id)}" role="dialog" aria-modal="true" aria-label="${escapeHtml(label)}" data-modal-close-href="${escapeHtml(closeHref)}">
-    <a class="channel-modal-backdrop" href="${escapeHtml(closeHref)}" aria-label="Close ${escapeHtml(label)}"></a>
-    <div class="channel-modal-panel">
-      <a class="channel-modal-close" href="${escapeHtml(closeHref)}" aria-label="Close ${escapeHtml(label)}">×</a>
+    <a class="channel-modal-backdrop" href="${escapeHtml(closeHref)}" aria-hidden="true" tabindex="-1"></a>
+    <div class="channel-modal-panel" tabindex="-1" data-channel-modal-panel>
+      <a class="channel-modal-close" href="${escapeHtml(closeHref)}" aria-label="Close ${escapeHtml(label)}" data-modal-close>×</a>
       ${content}
     </div>
   </div>`
@@ -589,9 +790,9 @@ function renderChannelCard(
       <div><dt>Marathons</dt><dd>${escapeHtml(marathonSummary(channel.marathon))}</dd></div>
     </dl>
     <div class="channel-admin-actions">
-      <a href="/channels?edit=${encodeURIComponent(channel.id)}#editor">Edit</a>
-      <a href="/channels?branding=${encodeURIComponent(channel.id)}#branding-modal">Branding</a>
-      <a href="/channels?builder=${encodeURIComponent(channel.id)}#station-builder">Edit lineup</a>
+      <a class="channel-admin-primary" href="/channels?edit=${encodeURIComponent(channel.id)}#channel-editor">Configure</a>
+      <a href="/channels?builder=${encodeURIComponent(channel.id)}#station-builder">Auto lineup</a>
+      <a href="/channels?branding=${encodeURIComponent(channel.id)}#branding-modal">Logo</a>
       <form method="post" action="/channels/${encodeURIComponent(channel.id)}/enabled">
         <input type="hidden" name="enabled" value="${channel.enabled ? 'false' : 'true'}">
         <button type="submit">${channel.enabled ? 'Disable' : 'Enable'}</button>

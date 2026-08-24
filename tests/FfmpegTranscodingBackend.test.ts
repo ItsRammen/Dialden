@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { basename, join } from 'node:path'
 import {
+  discoverQsvDeviceCandidates,
   resolveFfmpegTranscodingBackend,
   type FfmpegProbeRunner,
 } from '../src/services/FfmpegTranscodingBackend'
@@ -47,8 +51,109 @@ describe('resolveFfmpegTranscodingBackend', () => {
       configuredMode: 'auto',
       activeBackend: 'intel-qsv',
       hardwareAcceleration: true,
+      requestedDevice: '/dev/dri/renderD129',
       device: '/dev/dri/renderD129',
+      deviceCandidates: ['/dev/dri/renderD129'],
+      probeAttempts: [
+        {
+          device: '/dev/dri/renderD129',
+          exitCode: 0,
+          timedOut: false,
+        },
+      ],
     })
+  })
+
+  test('discovers render nodes in numeric order from a DRM directory', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'toasttv-qsv-'))
+    try {
+      await Promise.all([
+        writeFile(join(directory, 'renderD130'), ''),
+        writeFile(join(directory, 'card0'), ''),
+        writeFile(join(directory, 'renderD128'), ''),
+        writeFile(join(directory, 'renderD9-not-a-node'), ''),
+      ])
+
+      const candidates = await discoverQsvDeviceCandidates(directory)
+      expect(candidates.map((candidate) => basename(candidate))).toEqual([
+        'renderD128',
+        'renderD130',
+      ])
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  test('distinguishes a missing DRM directory from a missing concrete node', async () => {
+    expect(
+      await discoverQsvDeviceCandidates('/toasttv-test-missing/dev/dri')
+    ).toEqual([])
+    expect(
+      await discoverQsvDeviceCandidates('/toasttv-test-missing/dev/dri/')
+    ).toEqual([])
+    expect(
+      await discoverQsvDeviceCandidates(
+        '/toasttv-test-missing/dev/dri/renderD128/'
+      )
+    ).toEqual(['/toasttv-test-missing/dev/dri/renderD128'])
+  })
+
+  test('probes every discovered render node until an Intel device succeeds', async () => {
+    const commands: Array<readonly string[]> = []
+    const status = await resolveFfmpegTranscodingBackend(
+      { mode: 'auto', qsvDevice: '/dev/dri/' },
+      async (command) => {
+        commands.push(command)
+        return command.includes('vaapi=va:/dev/dri/renderD129')
+          ? { code: 0, stderr: '' }
+          : {
+              code: 234,
+              stderr: 'No VA display found for device /dev/dri/renderD128.',
+            }
+      },
+      async () => ['/dev/dri/renderD128', '/dev/dri/renderD129']
+    )
+
+    expect(commands).toHaveLength(2)
+    expect(status.activeBackend).toBe('intel-qsv')
+    expect(status.requestedDevice).toBe('/dev/dri/')
+    expect(status.device).toBe('/dev/dri/renderD129')
+    expect(status.deviceCandidates).toEqual([
+      '/dev/dri/renderD128',
+      '/dev/dri/renderD129',
+    ])
+    expect(status.probeAttempts).toEqual([
+      {
+        device: '/dev/dri/renderD128',
+        exitCode: 234,
+        timedOut: false,
+        detail: 'No VA display found for device /dev/dri/renderD128.',
+      },
+      {
+        device: '/dev/dri/renderD129',
+        exitCode: 0,
+        timedOut: false,
+      },
+    ])
+  })
+
+  test('reports an empty DRM directory without passing it to FFmpeg', async () => {
+    let probes = 0
+    const status = await resolveFfmpegTranscodingBackend(
+      { mode: 'auto', qsvDevice: '/dev/dri/' },
+      async () => {
+        probes += 1
+        return { code: 0, stderr: '' }
+      },
+      async () => []
+    )
+
+    expect(probes).toBe(0)
+    expect(status.activeBackend).toBe('software')
+    expect(status.requestedDevice).toBe('/dev/dri/')
+    expect(status.deviceCandidates).toEqual([])
+    expect(status.probeAttempts).toEqual([])
+    expect(status.fallbackReason).toContain('contains no renderD devices')
   })
 
   test('falls back to software and exposes a bounded diagnostic', async () => {
@@ -86,6 +191,16 @@ describe('resolveFfmpegTranscodingBackend', () => {
       'No VA display found for device /dev/dri/renderD128.'
     )
     expect(status.fallbackReason).not.toContain('Error parsing global options')
+    expect(status.requestedDevice).toBe('/dev/dri/renderD128')
+    expect(status.deviceCandidates).toEqual(['/dev/dri/renderD128'])
+    expect(status.probeAttempts).toEqual([
+      {
+        device: '/dev/dri/renderD128',
+        exitCode: 234,
+        timedOut: false,
+        detail: 'No VA display found for device /dev/dri/renderD128.',
+      },
+    ])
   })
 
   test('falls back cleanly when ffmpeg cannot be spawned', async () => {

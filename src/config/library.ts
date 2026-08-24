@@ -59,6 +59,16 @@ export interface ChannelMarathonPolicy {
   readonly episodeCount: number
 }
 
+export interface ChannelAutomationPolicy {
+  /** Preset/template identifier used to reconstruct the modal Auto editor. */
+  readonly preset: string
+  readonly airtime:
+    | 'all-day'
+    | 'school-day'
+    | 'evening'
+    | 'weekend-mornings'
+}
+
 export interface LibraryChannelPolicy {
   readonly id: string
   readonly name: string
@@ -69,6 +79,8 @@ export interface LibraryChannelPolicy {
   readonly branding?: ChannelBrandingPolicy
   /** Absent/disabled preserves the ordinary deterministic programme order. */
   readonly marathon?: ChannelMarathonPolicy
+  /** Optional provenance for an Auto-built station; legacy/manual channels omit it. */
+  readonly automation?: ChannelAutomationPolicy
 }
 
 export interface LibraryPolicyDocument {
@@ -257,6 +269,7 @@ export function validateLibraryChannels(input: unknown): LibraryChannelPolicy[] 
       slots?: unknown
       branding?: unknown
       marathon?: unknown
+      automation?: unknown
     }
     const id = typeof value.id === 'string' ? value.id.trim() : ''
     const name = typeof value.name === 'string' ? value.name.trim() : ''
@@ -381,8 +394,35 @@ export function validateLibraryChannels(input: unknown): LibraryChannelPolicy[] 
       ...(value.marathon === undefined
         ? {}
         : { marathon: validateChannelMarathon(value.marathon, id) }),
+      ...(value.automation === undefined
+        ? {}
+        : { automation: validateChannelAutomation(value.automation, id) }),
     }
   })
+}
+
+function validateChannelAutomation(
+  input: unknown,
+  channelId: string
+): ChannelAutomationPolicy {
+  if (!input || typeof input !== 'object') {
+    throw new Error(`Channel ${channelId} automation must be an object`)
+  }
+  const value = input as Record<string, unknown>
+  const preset = typeof value.preset === 'string' ? value.preset.trim() : ''
+  const airtime = typeof value.airtime === 'string' ? value.airtime.trim() : ''
+  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(preset)) {
+    throw new Error(`Channel ${channelId} automation preset is invalid`)
+  }
+  if (
+    !['all-day', 'school-day', 'evening', 'weekend-mornings'].includes(airtime)
+  ) {
+    throw new Error(`Channel ${channelId} automation airtime is invalid`)
+  }
+  return {
+    preset,
+    airtime: airtime as ChannelAutomationPolicy['airtime'],
+  }
 }
 
 function validateChannelMarathon(

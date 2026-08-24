@@ -140,6 +140,11 @@ export async function createServer(
       outputRoot: getDataPath('streams'),
       clientLeaseTtlMs: 15_000,
       idleTimeoutMs: 60_000,
+      // Every speculative channel is a complete normalized 1080p encoder.
+      // Running two of those beside the watched channel can starve CPU fallback
+      // and make subsequent LG tunes appear to loop. QSV can sustain the two
+      // adjacent hot channels; software mode starts only the requested channel.
+      maximumWarmChannels: transcodingStatus.hardwareAcceleration ? 2 : 0,
     }
   )
   const headlessDashboardService = new HeadlessDashboardService(

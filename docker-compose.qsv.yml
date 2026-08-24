@@ -1,7 +1,9 @@
 services:
   toasttv:
     # Optional native-Linux override for Intel Quick Sync. The entrypoint adds
-    # the mapped node's numeric group while dropping privileges. This is not
-    # supported by Docker Desktop on Windows/WSL.
+    # every mapped render node's numeric group while dropping privileges. Map
+    # the DRM directory here, but keep TOASTTV_QSV_DEVICE set to a concrete
+    # render node (or /dev/dri to let ToastTV probe its renderD* nodes).
+    # This is not supported by Docker Desktop on Windows/WSL.
     devices:
-      - "${TOASTTV_QSV_DEVICE:-/dev/dri/renderD128}:${TOASTTV_QSV_DEVICE:-/dev/dri/renderD128}"
+      - "/dev/dri:/dev/dri"

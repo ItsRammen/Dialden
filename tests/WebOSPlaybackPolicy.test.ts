@@ -9,6 +9,9 @@ const policy = require(join(import.meta.dir, '..', 'clients', 'webos', 'playback
   } | null
   shouldReload: (active: unknown, next: unknown) => boolean
   expectedDirectPosition: (program: unknown, elapsedSinceResponseMs: number) => number
+  isPlaybackStable: (video: unknown) => boolean
+  loadMediaElement: (video: unknown, url: string) => boolean
+  resetMediaElement: (video: unknown) => void
 }
 
 function now(channelId: string, programId: string, offsetMs = 420_000) {
@@ -84,5 +87,54 @@ describe('LG webOS channel playback policy', () => {
       mode: 'direct',
       seekToProgramOffset: true,
     })
+  })
+
+  test('fully releases the existing LG media source before loading another station', () => {
+    const calls: string[] = []
+    let currentSrc = 'http://toasttv:1993/api/v1/channels/kids/live/index.m3u8'
+    const video = {
+      muted: false,
+      pause() {
+        calls.push('pause')
+      },
+      removeAttribute(name: string) {
+        calls.push(`remove:${name}`)
+        if (name === 'src') currentSrc = ''
+      },
+      load() {
+        calls.push(`load:${currentSrc || 'empty'}`)
+      },
+    }
+    Object.defineProperty(video, 'src', {
+      get: () => currentSrc,
+      set: (value: string) => {
+        currentSrc = value
+        calls.push(`src:${value}`)
+      },
+    })
+
+    const movies = 'http://toasttv:1993/api/v1/channels/movies/live/index.m3u8'
+    expect(policy.loadMediaElement(video, movies)).toBe(true)
+    expect(video.muted).toBe(true)
+    expect(calls).toEqual([
+      'pause',
+      'remove:src',
+      'load:empty',
+      `src:${movies}`,
+      `load:${movies}`,
+    ])
+  })
+
+  test('accepts healthy playback even when LG cannot confirm an HLS live-edge seek', () => {
+    expect(
+      policy.isPlaybackStable({
+        paused: false,
+        readyState: 3,
+        seeking: true,
+        seekable: { length: 0 },
+      })
+    ).toBe(true)
+    expect(policy.isPlaybackStable({ paused: true, readyState: 4 })).toBe(false)
+    expect(policy.isPlaybackStable({ paused: false, readyState: 2 })).toBe(false)
   })
 })

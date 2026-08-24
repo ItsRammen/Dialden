@@ -1,5 +1,6 @@
 import type { TranscodingMode } from '../config/runtime'
 import { logger } from '../utils/logger'
+import { readdir } from 'node:fs/promises'
 
 export type FfmpegTranscodingBackend = 'software' | 'intel-qsv'
 
@@ -8,8 +9,22 @@ export interface FfmpegTranscodingStatus {
   readonly configuredMode: TranscodingMode
   readonly activeBackend: FfmpegTranscodingBackend
   readonly hardwareAcceleration: boolean
+  /** The path supplied through TOASTTV_QSV_DEVICE. It may be a DRM directory. */
+  readonly requestedDevice?: string
+  /** The concrete render node selected for QSV, when one was resolved. */
   readonly device?: string
+  /** Concrete render nodes discovered from the requested path. */
+  readonly deviceCandidates?: readonly string[]
+  /** Bounded diagnostics for each concrete node that was tested. */
+  readonly probeAttempts?: readonly FfmpegTranscodingProbeAttempt[]
   readonly fallbackReason?: string
+}
+
+export interface FfmpegTranscodingProbeAttempt {
+  readonly device: string
+  readonly exitCode: number | null
+  readonly timedOut: boolean
+  readonly detail?: string
 }
 
 export interface FfmpegTranscodingBackendOptions {
@@ -29,6 +44,10 @@ export type FfmpegProbeRunner = (
   timeoutMs: number
 ) => Promise<FfmpegProbeResult>
 
+export type QsvDeviceDiscoverer = (
+  requestedDevice: string
+) => Promise<readonly string[]>
+
 const QSV_PROBE_TIMEOUT_MS = 8_000
 
 /**
@@ -38,7 +57,8 @@ const QSV_PROBE_TIMEOUT_MS = 8_000
  */
 export async function resolveFfmpegTranscodingBackend(
   options: FfmpegTranscodingBackendOptions,
-  runProbe: FfmpegProbeRunner = runFfmpegProbe
+  runProbe: FfmpegProbeRunner = runFfmpegProbe,
+  discoverDevices: QsvDeviceDiscoverer = discoverQsvDeviceCandidates
 ): Promise<FfmpegTranscodingStatus> {
   if (options.mode === 'software') {
     return {
@@ -49,43 +69,197 @@ export async function resolveFfmpegTranscodingBackend(
   }
 
   const ffmpegPath = options.ffmpegPath ?? 'ffmpeg'
-  const command = intelQsvProbeCommand(ffmpegPath, options.qsvDevice)
+  let deviceCandidates: readonly string[]
   try {
-    const result = await runProbe(command, QSV_PROBE_TIMEOUT_MS)
-    if (result.code === 0 && !result.timedOut) {
-      logger.info(`Intel QSV transcoding enabled on ${options.qsvDevice}`)
-      return {
-        configuredMode: options.mode,
-        activeBackend: 'intel-qsv',
-        hardwareAcceleration: true,
-        device: options.qsvDevice,
-      }
-    }
-
-    const fallbackReason = result.timedOut
-      ? `Intel QSV probe timed out after ${QSV_PROBE_TIMEOUT_MS}ms`
-      : probeFailureReason(result)
-    logger.warn(`${fallbackReason}; using software transcoding`)
-    return softwareFallback(options, fallbackReason)
+    deviceCandidates = await discoverDevices(options.qsvDevice)
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
-    const fallbackReason = `Intel QSV probe could not start: ${boundedDetail(detail)}`
+    const fallbackReason = `Intel QSV device discovery failed: ${boundedDetail(detail)}`
     logger.warn(`${fallbackReason}; using software transcoding`)
-    return softwareFallback(options, fallbackReason)
+    return softwareFallback(options, fallbackReason, [], [])
   }
+
+  if (deviceCandidates.length === 0) {
+    const fallbackReason =
+      `Intel QSV device directory ${options.qsvDevice} contains no renderD devices`
+    logger.warn(`${fallbackReason}; using software transcoding`)
+    return softwareFallback(options, fallbackReason, deviceCandidates, [])
+  }
+
+  const probeAttempts: FfmpegTranscodingProbeAttempt[] = []
+  for (const device of deviceCandidates) {
+    const command = intelQsvProbeCommand(ffmpegPath, device)
+    try {
+      const result = await runProbe(command, QSV_PROBE_TIMEOUT_MS)
+      probeAttempts.push(probeAttempt(device, result))
+      if (result.code === 0 && !result.timedOut) {
+        logger.info(`Intel QSV transcoding enabled on ${device}`)
+        return {
+          configuredMode: options.mode,
+          activeBackend: 'intel-qsv',
+          hardwareAcceleration: true,
+          requestedDevice: options.qsvDevice,
+          device,
+          deviceCandidates,
+          probeAttempts,
+        }
+      }
+
+      // A directory mount may expose multiple GPUs. Keep looking after a
+      // device-specific failure so the first non-Intel node does not prevent a
+      // later Intel render node from being selected.
+      if (deviceCandidates.length > 1) continue
+
+      const fallbackReason = result.timedOut
+        ? `Intel QSV probe timed out after ${QSV_PROBE_TIMEOUT_MS}ms`
+        : probeFailureReason(result)
+      logger.warn(`${fallbackReason}; using software transcoding`)
+      return softwareFallback(
+        options,
+        fallbackReason,
+        deviceCandidates,
+        probeAttempts
+      )
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      const bounded = boundedDetail(detail)
+      probeAttempts.push({
+        device,
+        exitCode: null,
+        timedOut: false,
+        ...(bounded ? { detail: bounded } : {}),
+      })
+      const fallbackReason = `Intel QSV probe could not start: ${bounded}`
+      logger.warn(`${fallbackReason}; using software transcoding`)
+      return softwareFallback(
+        options,
+        fallbackReason,
+        deviceCandidates,
+        probeAttempts
+      )
+    }
+  }
+
+  const fallbackReason = multipleProbeFailureReason(probeAttempts)
+  logger.warn(`${fallbackReason}; using software transcoding`)
+  return softwareFallback(
+    options,
+    fallbackReason,
+    deviceCandidates,
+    probeAttempts
+  )
 }
 
 function softwareFallback(
   options: FfmpegTranscodingBackendOptions,
-  fallbackReason: string
+  fallbackReason: string,
+  deviceCandidates: readonly string[],
+  probeAttempts: readonly FfmpegTranscodingProbeAttempt[]
 ): FfmpegTranscodingStatus {
+  const device = deviceCandidates.length === 1 ? deviceCandidates[0] : undefined
   return {
     configuredMode: options.mode,
     activeBackend: 'software',
     hardwareAcceleration: false,
-    device: options.qsvDevice,
+    requestedDevice: options.qsvDevice,
+    ...(device ? { device } : {}),
+    deviceCandidates,
+    probeAttempts,
     fallbackReason,
   }
+}
+
+export async function discoverQsvDeviceCandidates(
+  requestedDevice: string
+): Promise<readonly string[]> {
+  try {
+    const entries = await readdir(requestedDevice, { withFileTypes: true })
+    return entries
+      .map((entry) => entry.name)
+      .filter((name) => /^renderD\d+$/.test(name))
+      .sort(compareRenderNodes)
+      .map((name) => joinDevicePath(requestedDevice, name))
+  } catch (error) {
+    const code = errorCode(error)
+    const normalized = stripTrailingSeparators(requestedDevice)
+    // An existing character device cannot be read as a directory. Remove an
+    // accidental trailing slash before passing that concrete node to FFmpeg.
+    if (code === 'ENOTDIR') return [normalized]
+    if (code === 'ENOENT') {
+      // Do not pass a missing directory-shaped value to VAAPI as though it were
+      // a render node. Preserve a missing explicit renderD path so FFmpeg can
+      // still return its actionable "No such file" device diagnostic.
+      if (looksLikeRenderNode(normalized)) return [normalized]
+      if (looksLikeDeviceDirectory(requestedDevice)) return []
+      return [requestedDevice]
+    }
+    throw error
+  }
+}
+
+function compareRenderNodes(left: string, right: string): number {
+  return (
+    Number(left.slice('renderD'.length)) -
+    Number(right.slice('renderD'.length))
+  )
+}
+
+function joinDevicePath(directory: string, name: string): string {
+  const normalized = stripTrailingSeparators(directory)
+  if (!normalized) return `/${name}`
+  const separator =
+    directory.includes('\\') && !directory.includes('/') ? '\\' : '/'
+  return `${normalized}${separator}${name}`
+}
+
+function stripTrailingSeparators(value: string): string {
+  return value.replace(/[\\/]+$/, '')
+}
+
+function basename(value: string): string {
+  return stripTrailingSeparators(value).split(/[\\/]/).at(-1) ?? ''
+}
+
+function looksLikeRenderNode(value: string): boolean {
+  return /^renderD\d+$/.test(basename(value))
+}
+
+function looksLikeDeviceDirectory(value: string): boolean {
+  return (
+    basename(value) === 'dri' ||
+    (/[\\/]$/.test(value) && !looksLikeRenderNode(value))
+  )
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== 'object' || !('code' in error)) return undefined
+  return typeof error.code === 'string' ? error.code : undefined
+}
+
+function probeAttempt(
+  device: string,
+  result: FfmpegProbeResult
+): FfmpegTranscodingProbeAttempt {
+  const detail = boundedDetail(result.stderr)
+  return {
+    device,
+    exitCode: result.code,
+    timedOut: result.timedOut === true,
+    ...(detail ? { detail } : {}),
+  }
+}
+
+function multipleProbeFailureReason(
+  attempts: readonly FfmpegTranscodingProbeAttempt[]
+): string {
+  const summaries = attempts.map((attempt) => {
+    if (attempt.timedOut) return `${attempt.device} (timed out)`
+    const code = attempt.exitCode ?? 'unknown'
+    const detail = attempt.detail ? `: ${attempt.detail}` : ''
+    return `${attempt.device} (code ${code}${detail})`
+  })
+  return `Intel QSV probe failed for all discovered render nodes: ${summaries.join('; ')}`
+    .slice(0, 1_500)
 }
 
 function intelQsvProbeCommand(

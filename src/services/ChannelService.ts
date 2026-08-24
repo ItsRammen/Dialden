@@ -21,8 +21,11 @@ import type {
 import {
   loadStationAutomationCatalog,
   selectStationCollections,
+  isStationPresetId,
   STATION_AIRTIME_OPTIONS,
+  stationCollectionProgrammingGroups,
   stationAirtimeSlots,
+  stationScheduleSlots,
   type StationAutomationCatalog,
   type StationAirtimeId,
   type StationCollectionOption,
@@ -287,9 +290,16 @@ export class ChannelService {
       id: channel.id,
       name: channel.name,
       timezone: channel.timezone,
-      preset: 'custom',
+      preset:
+        channel.automation && isStationPresetId(channel.automation.preset)
+          ? channel.automation.preset
+          : 'custom',
       collectionIds,
-      ...(airtime ? { airtime } : {}),
+      ...(channel.automation
+        ? { airtime: channel.automation.airtime }
+        : airtime
+          ? { airtime }
+          : {}),
       ...(channel.marathon ? { marathon: channel.marathon } : {}),
     }
   }
@@ -330,7 +340,7 @@ export class ChannelService {
     this.persistAndApply(
       channels,
       this.manuallyOffAir,
-      this.automatedCollectionGroups(request.id, preview)
+      this.automatedCollectionGroups(request.id, preview, request)
     )
     return { channel, ...preview }
   }
@@ -362,7 +372,7 @@ export class ChannelService {
     this.persistAndApply(
       validated,
       this.manuallyOffAir,
-      this.automatedCollectionGroups(channelId, preview)
+      this.automatedCollectionGroups(channelId, preview, request)
     )
     return { channel: validated[index] as LibraryChannelPolicy, ...preview }
   }
@@ -589,7 +599,15 @@ export class ChannelService {
         name: request.name,
         enabled: true,
         timezone: request.timezone,
-        slots: stationAirtimeSlots(request.airtime ?? 'all-day', group),
+        slots: stationScheduleSlots(
+          request.airtime ?? 'all-day',
+          group,
+          request.preset
+        ),
+        automation: {
+          preset: request.preset,
+          airtime: request.airtime ?? 'all-day',
+        },
         ...(request.marathon ? { marathon: request.marathon } : {}),
       },
     ])[0] as LibraryChannelPolicy
@@ -618,10 +636,15 @@ export class ChannelService {
         ...current,
         name: request.name,
         timezone: request.timezone,
-        slots: stationAirtimeSlots(
+        slots: stationScheduleSlots(
           request.airtime ?? 'all-day',
-          group
+          group,
+          request.preset
         ),
+        automation: {
+          preset: request.preset,
+          airtime: request.airtime ?? 'all-day',
+        },
         ...(request.marathon ? { marathon: request.marathon } : {}),
       },
     ])[0] as LibraryChannelPolicy
@@ -629,11 +652,40 @@ export class ChannelService {
 
   private automatedCollectionGroups(
     channelId: string,
-    preview: StationBuildPreview
+    preview: StationBuildPreview,
+    request: StationBuildRequest
   ): CollectionProgrammingGroups[] {
     const group = this.generatedGroup(channelId)
+    const plannedGroups = new Map(
+      preview.collections.map((collection) => [
+        collection.id,
+        stationCollectionProgrammingGroups(request.preset, collection, group),
+      ])
+    )
+    const scheduledGroups = new Set(
+      stationScheduleSlots(
+        request.airtime ?? 'all-day',
+        group,
+        request.preset
+      ).flatMap((slot) => slot.groups)
+    )
+    const assignedGroups = new Set([...plannedGroups.values()].flat())
+    const missingGroups = [...scheduledGroups].filter(
+      (scheduledGroup) => !assignedGroups.has(scheduledGroup)
+    )
+    const fallback = [...preview.collections].sort(
+      (left, right) =>
+        Number(right.libraryKind === 'tv') - Number(left.libraryKind === 'tv') ||
+        right.eligibleFiles - left.eligibleFiles ||
+        this.compareText(left.displayTitle, right.displayTitle)
+    )[0]
+    if (fallback && missingGroups.length > 0) {
+      plannedGroups.set(fallback.id, [
+        ...new Set([...(plannedGroups.get(fallback.id) ?? []), ...missingGroups]),
+      ])
+    }
     const byKey = new Map(
-      this.withoutConfiguredGroup(group).map((assignment) => [
+      this.withoutConfiguredGroupTree(group).map((assignment) => [
         this.configuredCollectionKey(assignment),
         assignment,
       ])
@@ -659,7 +711,12 @@ export class ChannelService {
         libraryKind: collection.libraryKind,
         rootId: collection.rootId,
         collectionTitle: collection.collectionTitle,
-        groups: [...new Set([...(current?.groups ?? []), group])],
+        groups: [
+          ...new Set([
+            ...(current?.groups ?? []),
+            ...(plannedGroups.get(collection.id) ?? [group]),
+          ]),
+        ],
       })
     }
     return [...byKey.values()]
@@ -1466,13 +1523,15 @@ export class ChannelService {
       )
   }
 
-  private withoutConfiguredGroup(
+  private withoutConfiguredGroupTree(
     group: string
   ): CollectionProgrammingGroups[] {
     return this.configuredCollectionGroups()
       .map((assignment) => ({
         ...assignment,
-        groups: assignment.groups.filter((item) => item !== group),
+        groups: assignment.groups.filter(
+          (item) => item !== group && !item.startsWith(`${group}-`)
+        ),
       }))
       .filter((assignment) => assignment.groups.length > 0)
   }
@@ -1489,8 +1548,16 @@ export class ChannelService {
       .map((assignment) => ({
         ...assignment,
         groups: assignment.groups.filter(
-          (group) =>
-            !/^toasttv-auto-[0-9a-f]{8}$/.test(group) || referenced.has(group)
+          (group) => {
+            if (!/^toasttv-auto-[0-9a-f]{8}(?:-[a-z0-9-]+)?$/.test(group)) {
+              return true
+            }
+            if (referenced.has(group)) return true
+            return (
+              /^toasttv-auto-[0-9a-f]{8}$/.test(group) &&
+              [...referenced].some((value) => value.startsWith(`${group}-`))
+            )
+          }
         ),
       }))
       .filter((assignment) => assignment.groups.length > 0)

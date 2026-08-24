@@ -324,6 +324,10 @@ function renderTranscodingStatus(
 ): string {
   if (!status) return ''
 
+  const requestedDevice = status.requestedDevice ?? status.device
+  const candidates = status.deviceCandidates ?? []
+  const attempts = status.probeAttempts ?? []
+
   const configuredLabel =
     status.configuredMode === 'intel-qsv'
       ? 'Intel Quick Sync (QSV)'
@@ -354,12 +358,71 @@ function renderTranscodingStatus(
       <dl class="settings-status-list">
         <div><dt>Configured</dt><dd>${configuredLabel}</dd></div>
         <div><dt>Active encoder</dt><dd>${activeLabel}</dd></div>
-        ${status.device ? `<div><dt>Device</dt><dd><code>${escapeHtml(status.device)}</code></dd></div>` : ''}
+        ${
+          requestedDevice && status.device && requestedDevice !== status.device
+            ? `<div><dt>Requested path</dt><dd><code>${escapeHtml(requestedDevice)}</code></dd></div>
+               <div><dt>Resolved render node</dt><dd><code>${escapeHtml(status.device)}</code></dd></div>`
+            : status.device
+              ? `<div><dt>Device</dt><dd><code>${escapeHtml(status.device)}</code></dd></div>`
+              : requestedDevice
+                ? `<div><dt>Requested path</dt><dd><code>${escapeHtml(requestedDevice)}</code></dd></div>`
+                : ''
+        }
       </dl>
       ${status.fallbackReason ? `<p class="settings-restart-note" role="status">Fallback reason: ${escapeHtml(status.fallbackReason)}</p>` : ''}
+      ${renderTranscodingDiagnostics(status, candidates, attempts)}
       <p class="hint">Read-only container setting. Change <code>TOASTTV_TRANSCODING_MODE</code> in the deployment environment, then restart ToastTV.</p>
     </div>
   `
+}
+
+function renderTranscodingDiagnostics(
+  status: FfmpegTranscodingStatus,
+  candidates: readonly string[],
+  attempts: NonNullable<FfmpegTranscodingStatus['probeAttempts']>
+): string {
+  if (status.configuredMode === 'software') return ''
+
+  const guidance = status.hardwareAcceleration
+    ? 'The render node is accessible and the one-frame Intel QSV encode test passed.'
+    : candidates.length === 0
+      ? 'No DRM render node was discovered inside the container. Map the host /dev/dri directory into the container at /dev/dri, then restart ToastTV.'
+      : 'The container can see a render node, but QSV did not start. Check the node group permissions and Intel media-driver support shown in the server log.'
+
+  return `<details class="settings-transcoding-diagnostics" ${status.hardwareAcceleration ? '' : 'open'}>
+    <summary>
+      <span><strong>Hardware diagnostics</strong><small>${attempts.length} ${attempts.length === 1 ? 'probe attempt' : 'probe attempts'}</small></span>
+    </summary>
+    <div class="settings-transcoding-diagnostics-body">
+      <p>${escapeHtml(guidance)}</p>
+      <dl class="settings-status-list">
+        <div><dt>Render nodes found</dt><dd>${
+          candidates.length > 0
+            ? candidates.map((candidate) => `<code>${escapeHtml(candidate)}</code>`).join(', ')
+            : 'None'
+        }</dd></div>
+      </dl>
+      ${
+        attempts.length > 0
+          ? `<ul class="settings-probe-attempts">${attempts
+              .map(
+                (attempt) => `<li>
+                  <div><code>${escapeHtml(attempt.device)}</code><strong>${
+                    attempt.timedOut
+                      ? 'Timed out'
+                      : attempt.exitCode === 0
+                        ? 'Passed'
+                        : `Exit ${attempt.exitCode ?? 'unknown'}`
+                  }</strong></div>
+                  ${attempt.detail ? `<small>${escapeHtml(attempt.detail)}</small>` : ''}
+                </li>`
+              )
+              .join('')}</ul>`
+          : ''
+      }
+      <p class="hint"><strong>This check runs inside the server container at startup, so the browser developer console stays empty.</strong> In Unraid, open Docker → ToastTV → Logs. With Compose, run <code>docker compose logs toasttv</code>.</p>
+    </div>
+  </details>`
 }
 
 function renderHourOptions(selectedHour: number): string {

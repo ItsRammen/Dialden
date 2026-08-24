@@ -1,8 +1,17 @@
 import type { IMediaRepository } from '../repositories/IMediaRepository'
 import type { LibraryKind, MediaCollection } from '../types'
 import type { ChannelScheduleSlot } from '../config/library'
+import {
+  analyzeEraStationTemplate,
+  ERA_STATION_TEMPLATES,
+  ERA_STATION_FAMILY_MIX_GUESTS,
+  getEraStationTemplate,
+  type EraPlaybackOrder,
+  type EraStationTemplateId,
+} from './EraStationTemplateService'
 
 export type StationPresetId =
+  | EraStationTemplateId
   | 'all-approved-tv'
   | 'family-animation'
   | 'nature-documentaries'
@@ -54,6 +63,7 @@ export interface StationCollectionOption {
   readonly genres: readonly string[]
   readonly networks: readonly string[]
   readonly studios: readonly string[]
+  readonly firstAirYear?: number | null
   readonly eligibleFiles: number
 }
 
@@ -70,12 +80,58 @@ export interface StationPresetSummary {
   readonly unofficial?: boolean
 }
 
+export interface StationEraTemplateSuggestionSummary {
+  readonly title: string
+  readonly libraryKind: Extract<LibraryKind, 'tv' | 'movie'>
+  readonly firstYear: number
+  readonly tags: readonly string[]
+}
+
+export interface StationEraTemplateMatchSummary {
+  readonly collectionId: number
+  readonly title: string
+  readonly libraryKind: LibraryKind
+  readonly blockIds: readonly string[]
+  readonly playbackOrder: EraPlaybackOrder
+  readonly score: number
+  readonly relationship: 'historical' | 'family-guest'
+}
+
+export interface StationEraTemplateSummary {
+  readonly id: EraStationTemplateId
+  readonly name: string
+  readonly networkFamily: string
+  readonly description: string
+  readonly eraStartYear: number
+  readonly eraEndYear: number
+  readonly blocks: readonly {
+    readonly id: string
+    readonly name: string
+    readonly start: string
+    readonly end: string
+  }[]
+  readonly matches: readonly StationEraTemplateMatchSummary[]
+  readonly missingSuggestions: readonly StationEraTemplateSuggestionSummary[]
+  readonly matchedShows: number
+  readonly matchedMovies: number
+  readonly movieCadence: string
+  readonly marathonCadence: string
+}
+
 export interface StationAutomationCatalog {
   readonly collections: readonly StationCollectionOption[]
   readonly genres: readonly StationFacet[]
   readonly networks: readonly StationFacet[]
   readonly studios: readonly StationFacet[]
   readonly presets: readonly StationPresetSummary[]
+  /** Period-inspired recipes and their coverage in the current library. */
+  readonly eraTemplates?: readonly StationEraTemplateSummary[]
+  readonly familyMixSuggestions?: readonly {
+    readonly title: string
+    readonly firstYear: number
+    readonly tags: readonly string[]
+    readonly available: boolean
+  }[]
   readonly truncated: boolean
 }
 
@@ -113,6 +169,90 @@ export function stationAirtimeSlots(
         },
       ]
   }
+}
+
+/**
+ * Build real dayparts for an era recipe. Reduced-airtime stations deliberately
+ * retain the simpler window presets; an all-day era station gets the complete
+ * programming personality from its selected template.
+ */
+export function stationScheduleSlots(
+  airtime: StationAirtimeId,
+  group: string,
+  preset: StationPresetId
+): ChannelScheduleSlot[] {
+  if (airtime !== 'all-day' || !isEraStationTemplateId(preset)) {
+    return stationAirtimeSlots(airtime, group)
+  }
+  const everyDay = [
+    'sun',
+    'mon',
+    'tue',
+    'wed',
+    'thu',
+    'fri',
+    'sat',
+  ] as const
+  return getEraStationTemplate(preset).blocks.map((block) => ({
+    days: everyDay,
+    start: block.start,
+    end: block.end,
+    groups: [stationTemplateBlockGroup(group, block.id)],
+  }))
+}
+
+/**
+ * Keep the base generated group as an ownership marker while assigning each
+ * collection to the template dayparts where it belongs. User-added titles
+ * that are outside the curated roster are placed conservatively by media kind
+ * and genre instead of leaking into every block.
+ */
+export function stationCollectionProgrammingGroups(
+  preset: StationPresetId,
+  collection: StationCollectionOption,
+  group: string
+): string[] {
+  if (!isEraStationTemplateId(preset)) return [group]
+  const template = getEraStationTemplate(preset)
+  const match = analyzeEraStationTemplate(template, [collection]).matches[0]
+  let blockIds = match?.blockIds ?? []
+  if (blockIds.length === 0 && collection.libraryKind === 'movie') {
+    blockIds = template.moviePolicy.preferredBlockIds
+  }
+  if (blockIds.length === 0) {
+    const genres = new Set(collection.genres.map(normalize))
+    const ranked = template.blocks
+      .map((block) => ({
+        id: block.id,
+        score: block.tags.filter((tag) => genres.has(normalize(tag))).length,
+      }))
+      .sort((left, right) => right.score - left.score)
+    const bestScore = ranked[0]?.score ?? 0
+    blockIds = bestScore > 0
+      ? ranked.filter((item) => item.score === bestScore).map((item) => item.id)
+      : template.blocks
+          .filter((block) => ['daytime', 'afternoon', 'primetime'].includes(block.id))
+          .slice(0, 2)
+          .map((block) => block.id)
+  }
+  if (blockIds.length === 0 && template.blocks[0]) {
+    blockIds = [template.blocks[0].id]
+  }
+  return [
+    group,
+    ...new Set(blockIds.map((blockId) => stationTemplateBlockGroup(group, blockId))),
+  ]
+}
+
+export function stationTemplateBlockGroup(
+  group: string,
+  blockId: string
+): string {
+  const value = `${group}-${blockId}`
+  if (value.length > 64) {
+    throw new Error('Generated station template group is too long')
+  }
+  return value
 }
 
 const PAGE_SIZE = 250
@@ -233,6 +373,59 @@ export async function loadStationAutomationCatalog(
       matchedCollections: playable.filter(preset.matches).length,
       ...(preset.unofficial ? { unofficial: true } : {}),
     })),
+    eraTemplates: ERA_STATION_TEMPLATES.map((template) => {
+      const analysis = analyzeEraStationTemplate(template, playable)
+      return {
+        id: template.id,
+        name: template.name,
+        networkFamily: template.networkFamily,
+        description: template.description,
+        eraStartYear: template.era.startYear,
+        eraEndYear: template.era.endYear,
+        blocks: template.blocks.map(({ id, name, start, end }) => ({
+          id,
+          name,
+          start,
+          end,
+        })),
+        matches: analysis.matches.map((match) => ({
+          collectionId: match.collection.id,
+          title: match.collection.displayTitle,
+          libraryKind: match.collection.libraryKind,
+          blockIds: match.blockIds,
+          playbackOrder: match.playbackOrder,
+          score: match.score,
+          relationship: match.reasons.includes('family-guest')
+            ? 'family-guest' as const
+            : 'historical' as const,
+        })),
+        missingSuggestions: analysis.missingSuggestions.map(
+          ({ title, libraryKind, firstYear, tags }) => ({
+            title,
+            libraryKind,
+            firstYear,
+            tags,
+          })
+        ),
+        matchedShows: analysis.matchedShows,
+        matchedMovies: analysis.matchedMovies,
+        movieCadence: template.moviePolicy.cadence,
+        marathonCadence: template.marathonDefaults.cadence,
+      }
+    }),
+    familyMixSuggestions: ERA_STATION_FAMILY_MIX_GUESTS.map((suggestion) => {
+      const aliases = new Set(
+        [suggestion.title, ...(suggestion.aliases ?? [])].map(normalizeTitle)
+      )
+      return {
+        title: suggestion.title,
+        firstYear: suggestion.firstYear,
+        tags: suggestion.tags,
+        available: playable.some((collection) =>
+          aliases.has(normalizeTitle(collection.displayTitle))
+        ),
+      }
+    }),
   }
 }
 
@@ -246,9 +439,20 @@ export function selectStationCollections(
     )
   }
   const preset = presetDefinitions.find((item) => item.id === request.preset)
-  if (!preset && request.preset !== 'custom') {
+  const eraTemplate = isEraStationTemplateId(request.preset)
+    ? getEraStationTemplate(request.preset)
+    : undefined
+  if (!preset && !eraTemplate && request.preset !== 'custom') {
     throw new Error('Choose a valid station preset')
   }
+
+  const eraMatches = eraTemplate
+    ? new Set(
+        analyzeEraStationTemplate(eraTemplate, catalog.collections).matches.map(
+          (match) => match.collection.id
+        )
+      )
+    : undefined
 
   const ids = boundedIds(request.collectionIds ?? [])
   const genres = normalizedSet(request.genres ?? [], 'genres')
@@ -263,8 +467,8 @@ export function selectStationCollections(
   return catalog.collections.filter((collection) => {
     const presetMatch =
       request.preset !== 'custom' &&
-      preset !== undefined &&
-      preset.matches(collection)
+      ((preset !== undefined && preset.matches(collection)) ||
+        eraMatches?.has(collection.id) === true)
     const customMatch =
       ids.has(collection.id) ||
       collection.genres.some((value) => genres.has(normalize(value))) ||
@@ -393,8 +597,23 @@ function toOption(collection: MediaCollection): StationCollectionOption {
     genres: collection.genres,
     networks: collection.networks ?? [],
     studios: collection.studios ?? [],
+    firstAirYear: collection.metadataYear ?? collection.year,
     eligibleFiles: collection.scheduleEligibleCount,
   }
+}
+
+export function isEraStationTemplateId(
+  value: string
+): value is EraStationTemplateId {
+  return ERA_STATION_TEMPLATES.some((template) => template.id === value)
+}
+
+export function isStationPresetId(value: string): value is StationPresetId {
+  return (
+    value === 'custom' ||
+    presetDefinitions.some((preset) => preset.id === value) ||
+    isEraStationTemplateId(value)
+  )
 }
 
 function facets(

@@ -230,6 +230,50 @@ describe('ChannelConfigurationStore', () => {
     }
   })
 
+  test('persists Auto-builder provenance for era stations', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'toasttv-channel-automation-'))
+    try {
+      const store = new ChannelConfigurationStore(join(directory, 'channels.json'))
+      const automatic = {
+        ...channel,
+        automation: {
+          preset: 'cartoon-network-1997-2004',
+          airtime: 'all-day' as const,
+        },
+      }
+      store.save({ channels: [automatic], manuallyOffAir: [] })
+      expect(store.load().channels[0]?.automation).toEqual(automatic.automation)
+
+      expect(() =>
+        store.save({
+          channels: [
+            {
+              ...automatic,
+              automation: { ...automatic.automation, preset: '../invalid' },
+            },
+          ],
+          manuallyOffAir: [],
+        })
+      ).toThrow('automation preset')
+      expect(() =>
+        store.save({
+          channels: [
+            {
+              ...automatic,
+              automation: {
+                ...automatic.automation,
+                airtime: 'sometimes' as 'all-day',
+              },
+            },
+          ],
+          manuallyOffAir: [],
+        })
+      ).toThrow('automation airtime')
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
   test('validates a scheduled custom logo on a channel time block', () => {
     const directory = mkdtempSync(join(tmpdir(), 'toasttv-scheduled-branding-'))
     try {

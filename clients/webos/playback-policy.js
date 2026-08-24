@@ -47,6 +47,30 @@
     return activeSource.mode !== nextSource.mode || activeSource.url !== nextSource.url;
   }
 
+  function resetMediaElement(video) {
+    if (!video) return;
+    try { video.muted = true; } catch (ignoreMuted) {}
+    try { video.pause(); } catch (ignorePause) {}
+    try { video.removeAttribute('src'); } catch (ignoreSource) {}
+    try { video.load(); } catch (ignoreLoad) {}
+  }
+
+  function loadMediaElement(video, url) {
+    if (!video || !url) return false;
+    resetMediaElement(video);
+    try {
+      video.src = url;
+      video.load();
+      return true;
+    } catch (ignoreLoad) {
+      return false;
+    }
+  }
+
+  function isPlaybackStable(video) {
+    return !!video && video.paused === false && Number(video.readyState || 0) >= 3;
+  }
+
   function expectedDirectPosition(program, elapsedSinceResponseMs) {
     if (!program) return 0;
     var playback = program.playback || {};
@@ -58,6 +82,9 @@
     appendClientId: appendClientId,
     choose: choose,
     expectedDirectPosition: expectedDirectPosition,
+    isPlaybackStable: isPlaybackStable,
+    loadMediaElement: loadMediaElement,
+    resetMediaElement: resetMediaElement,
     resolveUrl: resolveUrl,
     shouldReload: shouldReload
   };
