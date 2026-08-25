@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { createChannelStreamController } from '../src/controllers/ChannelStreamController'
+import { createChannelStreamController, augmentLivePlaylist, isWellFormedPlaylist } from '../src/controllers/ChannelStreamController'
 import { Hono } from 'hono'
 import { mutationOriginGuard } from '../src/middleware/mutationOriginGuard'
 
@@ -129,6 +129,34 @@ describe('ChannelStreamController', () => {
     expect(response.headers.get('Content-Type')).toContain('video/mp2t')
     expect(await response.text()).toBe('segment')
     expect(touches).toEqual([])
+  })
+
+  test('injects the live start tag into the served playlist', async () => {
+    const response = await app().request(
+      '/api/v1/channels/kids/live/index.m3u8?clientId=living-room-tv'
+    )
+    const body = await response.text()
+
+    expect(body).toContain('#EXTM3U')
+    expect(body).toContain('#EXT-X-START:TIME-OFFSET=-1.0,PRECISE=YES')
+    expect(body.indexOf('#EXT-X-START')).toBeGreaterThan(-1)
+    expect(body.indexOf('#EXT-X-VERSION')).toBeGreaterThan(
+      body.indexOf('#EXT-X-START')
+    )
+  })
+
+  test('playlist augmentation is idempotent and rejects torn text', () => {
+    const wellFormed = '#EXTM3U\n#EXT-X-VERSION:6\n#EXTINF:1.0,\nseg.ts\n'
+    const once = augmentLivePlaylist(wellFormed)
+    expect(once).toContain('#EXT-X-START:TIME-OFFSET=-1.0,PRECISE=YES')
+    expect(augmentLivePlaylist(once)).toBe(once)
+    expect(augmentLivePlaylist('#EXTM3U\n#EXT-X-START:TIME-OFFSET=0\n')).not.toContain(
+      'TIME-OFFSET=-1.0'
+    )
+    // Torn text passes through untouched; the route retries the read instead.
+    const torn = 'EXTM3U without header'
+    expect(isWellFormedPlaylist(torn)).toBe(false)
+    expect(augmentLivePlaylist(torn)).toBe(torn)
   })
 
   test('opens a lineup session on the last channel and reports spin-up progress', async () => {

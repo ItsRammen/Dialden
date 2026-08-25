@@ -62,6 +62,7 @@ describe('LG webOS presence telemetry', () => {
     expect(script).toContain('liveEdge - video.currentTime > DRIFT_LIMIT_SECONDS')
     expect(script).toContain('detachVideoForTune();')
     expect(script).toContain('window.ToastTVPlaybackPolicy.resetMediaElement(activeVideo())')
+    expect(script).toContain('standbyVideo().muted = true')
     expect(script).toContain('window.ToastTVPlaybackPolicy.loadMediaElement(activeVideo(), source.url)')
     expect(script).toContain('window.ToastTVPlaybackPolicy.isPlaybackStable(video)')
     expect(script).toContain('event.currentTarget !== activeVideo()')

@@ -33,33 +33,19 @@ export function createChannelStreamController({
 }: ChannelStreamControllerDeps) {
   const controller = new Hono()
 
-  controller.use(
+  const clientCors = cors({
+    origin: '*',
+    allowMethods: ['POST', 'OPTIONS'],
+    allowHeaders: ['Content-Type'],
+    maxAge: 300,
+  })
+  for (const path of [
     '/api/client/v1/channels/*',
-    cors({
-      origin: '*',
-      allowMethods: ['POST', 'OPTIONS'],
-      allowHeaders: ['Content-Type'],
-      maxAge: 300,
-    })
-  )
-  controller.use(
     CLIENT_SESSION_ROUTE,
-    cors({
-      origin: '*',
-      allowMethods: ['POST', 'OPTIONS'],
-      allowHeaders: ['Content-Type'],
-      maxAge: 300,
-    })
-  )
-  controller.use(
     CLIENT_SESSION_CLOSE_ROUTE,
-    cors({
-      origin: '*',
-      allowMethods: ['POST', 'OPTIONS'],
-      allowHeaders: ['Content-Type'],
-      maxAge: 300,
-    })
-  )
+  ]) {
+    controller.use(path, clientCors)
+  }
 
   controller.post(CLIENT_CHANNEL_STARTUP_ROUTE, async (c) => {
     c.header('Cache-Control', 'no-store')
@@ -284,7 +270,7 @@ export function createChannelStreamController({
       const minimumModifiedAt = workerState.startedAt
         ? Date.parse(workerState.startedAt)
         : 0
-      const file = await waitForOutput(
+      let file = await waitForOutput(
         path,
         minimumModifiedAt,
         () => workers.getState(channelId)?.status === 'error'
@@ -297,8 +283,24 @@ export function createChannelStreamController({
           { 'Retry-After': '1', 'Cache-Control': 'no-store' }
         )
       }
+      // FFmpeg rewrites the muxer-owned playlist in place, so a reader can
+      // observe a torn write. One short retry covers that window; serving the
+      // raw text afterwards beats refusing playback over cosmetics.
+      let text = await readPlaylistText(file)
+      if (!isWellFormedPlaylist(text)) {
+        await new Promise((resolve) => setTimeout(resolve, 50))
+        file = await waitForOutput(
+          path,
+          minimumModifiedAt,
+          () => workers.getState(channelId)?.status === 'error'
+        )
+        if (file) text = await readPlaylistText(file)
+      }
       const headers = hlsHeaders('application/vnd.apple.mpegurl', 'no-store')
-      return new Response(c.req.method === 'HEAD' ? null : file, { headers })
+      return new Response(
+        c.req.method === 'HEAD' ? null : augmentLivePlaylist(text),
+        { headers }
+      )
     }
   )
 
@@ -326,12 +328,25 @@ export function createChannelStreamController({
   return controller
 }
 
+const MAX_CLIENT_BODY_BYTES = 4_096
+
 async function parseClientRequest(c: any): Promise<
   | { input: unknown }
   | { response: Response }
 > {
   try {
-    return { input: await c.req.json() }
+    const declaredLength = Number(c.req.header('content-length'))
+    if (
+      Number.isFinite(declaredLength) &&
+      declaredLength > MAX_CLIENT_BODY_BYTES
+    ) {
+      return { response: c.json({ error: 'Request body is too large' }, 413) }
+    }
+    const text = await c.req.text()
+    if (new TextEncoder().encode(text).byteLength > MAX_CLIENT_BODY_BYTES) {
+      return { response: c.json({ error: 'Request body is too large' }, 413) }
+    }
+    return { input: JSON.parse(text) }
   } catch {
     return {
       response: c.json({ error: 'Request must be valid JSON' }, 400),
@@ -376,6 +391,39 @@ async function waitForOutput(
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
   return null
+}
+
+async function readPlaylistText(
+  file: ReturnType<typeof Bun.file>
+): Promise<string> {
+  try {
+    return await file.text()
+  } catch {
+    // A concurrent muxer rewrite can invalidate the handle; treated as torn.
+    return ''
+  }
+}
+
+/** A playlist missing its header is a torn in-place FFmpeg rewrite. */
+export function isWellFormedPlaylist(text: string): boolean {
+  return text.startsWith('#EXTM3U')
+}
+
+const LIVE_START_TAG = '#EXT-X-START:TIME-OFFSET=-1.0,PRECISE=YES'
+
+/**
+ * Joins native players one second before the published live edge. FFmpeg's
+ * HLS muxer cannot emit this tag itself, so it is injected at serve time and
+ * stays idempotent for playlists that already carry one.
+ */
+export function augmentLivePlaylist(text: string): string {
+  if (!isWellFormedPlaylist(text)) return text
+  if (text.includes('#EXT-X-START')) return text
+  if (/^#EXTM3U\r?\n/.test(text)) {
+    return text.replace(/^#EXTM3U\r?\n/, `#EXTM3U\n${LIVE_START_TAG}\n`)
+  }
+  const newline = text.endsWith('\n') ? '' : '\n'
+  return `${text}${newline}${LIVE_START_TAG}\n`
 }
 
 function hlsHeaders(contentType: string, cacheControl: string): Headers {

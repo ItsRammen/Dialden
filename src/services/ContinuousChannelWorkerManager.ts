@@ -15,8 +15,11 @@ export interface ChannelTimelinePosition {
   /** Set false for silent media so the pipeline synthesizes normalized audio. */
   readonly hasAudio?: boolean
   /**
-   * 'hw' marks a source the hardware decoder is known to handle, letting the
-   * pipeline offload that input's decode. Undefined or 'sw' decodes on CPU.
+   * 'hw' marks a source the hardware decoder is known to handle. Currently
+   * dormant: per-input QSV decode produced exit-218 failures under lineup
+   * contention, so factories decode everything on CPU and use QSV for the
+   * final encode only. Hints are still derived (bit-depth gated) so a
+   * measured re-enable attempt needs no resolver changes.
    */
   readonly decodeHint?: 'hw' | 'sw'
   /** Loop a finite emergency asset until the scheduled replacement range ends. */
@@ -379,6 +382,9 @@ export class ContinuousChannelWorkerManager {
       record.warmLeases.size === 0 &&
       record.state.viewerCount === 0
     ) {
+      console.info(
+        `Channel ${record.state.channelId} lineup session lapsed — stopping encoder`
+      )
       await this.stopRecord(record, 'stopped')
       return
     }
@@ -807,6 +813,10 @@ export class ContinuousChannelWorkerManager {
     record.state = { ...record.state, status: 'idle', idleSince }
     record.idleTimer = this.clock.setTimeout(() => {
       record.idleTimer = undefined
+      // A deliberate idle release, not a crash: nothing here is an error.
+      console.info(
+        `Channel ${record.state.channelId} idle for ${Math.round(this.idleTimeoutMs / 1000)}s — releasing encoder`
+      )
       void this.stopRecord(record, 'stopped')
     }, this.idleTimeoutMs)
   }

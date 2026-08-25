@@ -9,6 +9,11 @@ import type { FfmpegTranscodingStatus } from './FfmpegTranscodingBackend'
 export interface SpawnedChannelProcess {
   readonly exited: Promise<number>
   kill(signal?: string): void
+  /**
+   * Bounded tail of the process's stderr, resolved after exit when available.
+   * Diagnostics only: a spawner that cannot capture stderr may omit it.
+   */
+  readonly stderrTail?: Promise<string>
 }
 
 export interface ChannelProcessSpawner {
@@ -20,6 +25,53 @@ export interface ChannelAudioProbe {
 }
 
 const AUDIO_PROBE_CACHE_TTL_MS = 10 * 60_000
+const STDERR_TAIL_BYTES = 2_048
+
+/**
+ * Drains FFmpeg's stderr into a bounded tail so exit diagnostics survive into
+ * worker lastError instead of scrolling past in the server console. The stream
+ * is consumed continuously, which is what keeps a full pipe from stalling the
+ * child — the same property the previous inherit-based approach relied on.
+ */
+async function collectStderrTail(
+  stream: ReadableStream<Uint8Array>,
+  capacityBytes = STDERR_TAIL_BYTES
+): Promise<string> {
+  let text = ''
+  try {
+    const reader = stream.getReader()
+    const decoder = new TextDecoder()
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      text += decoder.decode(value, { stream: true })
+      if (text.length > capacityBytes) text = text.slice(-capacityBytes)
+    }
+    text += decoder.decode()
+  } catch {
+    // Diagnostics are best-effort; never let capture failures mask the exit.
+  }
+  return text.slice(-capacityBytes)
+}
+
+function composeExitError(code: number, stderrTail?: string): string {
+  const detail = boundedStderrDetail(stderrTail)
+  return detail
+    ? `FFmpeg exited with code ${code}: ${detail}`
+    : `FFmpeg exited with code ${code}`
+}
+
+function boundedStderrDetail(stderrTail?: string): string | undefined {
+  const lines = (stderrTail ?? '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+  const informative = [...lines]
+    .reverse()
+    .find((line) => /(?:error|failed|invalid|no such|unable|mfx|vaapi|qsv)/i.test(line))
+  const chosen = informative ?? lines.at(-1)
+  return chosen ? chosen.slice(0, 500) : undefined
+}
 
 const SOFTWARE_TRANSCODING: FfmpegTranscodingStatus = {
   configuredMode: 'software',
@@ -29,11 +81,11 @@ const SOFTWARE_TRANSCODING: FfmpegTranscodingStatus = {
 
 const BUN_SPAWNER: ChannelProcessSpawner = {
   spawn(command) {
-    // Inherit stderr so a noisy FFmpeg cannot block on an unread pipe.
-    const child = Bun.spawn([...command], { stdout: 'ignore', stderr: 'inherit' })
+    const child = Bun.spawn([...command], { stdout: 'ignore', stderr: 'pipe' })
     return {
       exited: child.exited,
       kill: (signal = 'SIGTERM') => child.kill(signal as NodeJS.Signals),
+      stderrTail: collectStderrTail(child.stderr),
     }
   },
 }
@@ -92,10 +144,14 @@ export class FfmpegContinuousHlsPipelineFactory implements ChannelPipelineFactor
     let stopping = false
     let stopPromise: Promise<void> | null = null
     return {
-      completed: process.exited.then((code) => ({
+      completed: Promise.all([
+        process.exited,
+        process.stderrTail ?? Promise.resolve(''),
+      ]).then(([code, stderrTail]) => ({
         code,
         signal: stopping ? 'SIGTERM' : undefined,
-        error: code === 0 || stopping ? undefined : `FFmpeg exited with code ${code}`,
+        error:
+          code === 0 || stopping ? undefined : composeExitError(code, stderrTail),
       })),
       stop: () => {
         if (!stopPromise) {

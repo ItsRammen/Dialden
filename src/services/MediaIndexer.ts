@@ -281,7 +281,7 @@ export class MediaIndexer {
     if (typeof this.repository.listMissingAudioProbe !== 'function') return
     let pending: Awaited<ReturnType<IMediaRepository['listMissingAudioProbe']>> | undefined
     try {
-      pending = await this.repository.listMissingAudioProbe(40)
+      pending = await this.repository.listMissingAudioProbe(80)
     } catch (error) {
       console.error('Audio probe backfill query failed', error)
       return
@@ -484,6 +484,7 @@ export class MediaIndexer {
         bitrateMbps: null,
         hasAudio: descriptor.existing?.hasAudio ?? null,
         audioCodec: descriptor.existing?.audioCodec ?? null,
+        pixelFormat: descriptor.existing?.pixelFormat ?? null,
       }
       const metadata = probeFailed
         ? { ...previousMetadata, durationSeconds: 0 }
@@ -520,6 +521,7 @@ export class MediaIndexer {
         warning,
         hasAudio: metadata.hasAudio,
         audioCodec: metadata.audioCodec,
+        pixelFormat: metadata.pixelFormat ?? null,
         mtime: probeFailed || !descriptor.shouldProbe
           ? (descriptor.existing?.mtime ?? null)
           : descriptor.mtime,

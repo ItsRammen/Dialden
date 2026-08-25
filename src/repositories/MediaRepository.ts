@@ -122,7 +122,7 @@ CREATE INDEX IF NOT EXISTS idx_collections_metadata
 const MEDIA_COLUMNS = `
   id, path, filename, duration_seconds, is_interlude, media_type,
   date_start, date_end, codec, width, height, warning, mtime, compatibility,
-  has_audio, audio_codec,
+  has_audio, audio_codec, pixel_format,
   root_id, relative_path, library_kind, collection_title,
   policy_enabled, playback_override, root_available,
   collection_id,
@@ -171,6 +171,7 @@ const MEDIA_UPSERT_UPDATE = `
   compatibility = excluded.compatibility,
   has_audio = COALESCE(excluded.has_audio, media.has_audio),
   audio_codec = COALESCE(excluded.audio_codec, media.audio_codec),
+  pixel_format = COALESCE(excluded.pixel_format, media.pixel_format),
   root_id = excluded.root_id,
   relative_path = excluded.relative_path,
   library_kind = excluded.library_kind,
@@ -186,12 +187,12 @@ const MEDIA_UPSERT_SQL = `
   INSERT INTO media (
     path, filename, duration_seconds, is_interlude, media_type,
     date_start, date_end, codec, width, height, warning, mtime, compatibility,
-    has_audio, audio_codec,
+    has_audio, audio_codec, pixel_format,
     root_id, relative_path, library_kind, collection_title,
     policy_enabled, playback_override, root_available,
     collection_id, season_number, episode_number, episode_title
   )
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(path) DO UPDATE SET
     ${MEDIA_UPSERT_UPDATE}
   ON CONFLICT(root_id, relative_path) DO UPDATE SET
@@ -306,6 +307,13 @@ export class MediaRepository implements IMediaRepository {
       this.db.exec(`ALTER TABLE media ADD COLUMN has_audio INTEGER`)
       this.db.exec(`ALTER TABLE media ADD COLUMN audio_codec TEXT`)
       console.log('Migrated database to include audio probe columns')
+    }
+
+    // Pixel format (bit-depth source) for hardware-decode eligibility.
+    const hasPixelFormat = columns.some((c) => c.name === 'pixel_format')
+    if (!hasPixelFormat) {
+      this.db.exec(`ALTER TABLE media ADD COLUMN pixel_format TEXT`)
+      console.log('Migrated database to include pixel_format column')
     }
 
     // Root-aware library identity and default-deny playback policy. Nullable
@@ -1295,6 +1303,7 @@ export class MediaRepository implements IMediaRepository {
             ? 1
             : 0,
         item.audioCodec ?? null,
+        item.pixelFormat ?? null,
         item.rootId ?? 'legacy',
         item.relativePath ?? item.path,
         item.libraryKind ?? 'other',
@@ -1671,6 +1680,7 @@ export class MediaRepository implements IMediaRepository {
           ? null
           : Boolean(row.has_audio),
       audioCodec: (row.audio_codec as string) ?? null,
+      pixelFormat: (row.pixel_format as string) ?? null,
       rootId: (row.root_id as string) ?? 'legacy',
       relativePath: (row.relative_path as string) ?? (row.path as string),
       libraryKind: this.normalizeLibraryKind(row.library_kind),
@@ -1828,6 +1838,7 @@ export class MediaRepository implements IMediaRepository {
               ? 1
               : 0,
           item.audioCodec ?? null,
+          item.pixelFormat ?? null,
           item.rootId ?? 'legacy',
           item.relativePath ?? item.path,
           item.libraryKind ?? 'other',
@@ -1972,7 +1983,7 @@ export class MediaRepository implements IMediaRepository {
     const rows = this.db
       .prepare(
         `SELECT ${MEDIA_COLUMNS} FROM media
-         WHERE has_audio IS NULL AND root_available = 1
+         WHERE (has_audio IS NULL OR pixel_format IS NULL) AND root_available = 1
          ORDER BY id LIMIT ?`
       )
       .all(bounded) as Array<Record<string, unknown>>

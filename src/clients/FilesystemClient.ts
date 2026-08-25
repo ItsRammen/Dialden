@@ -129,7 +129,7 @@ export class FFProbeClient implements IMediaProbe {
       '-v',
       'error',
       '-show_entries',
-      'format=duration,bit_rate:stream=codec_type,codec_name,width,height,avg_frame_rate',
+      'format=duration,bit_rate:stream=codec_type,codec_name,width,height,pix_fmt,avg_frame_rate',
       '-of',
       'json',
       filePath,
@@ -150,6 +150,7 @@ export class FFProbeClient implements IMediaProbe {
           codec_name?: string
           width?: number
           height?: number
+          pix_fmt?: string
           avg_frame_rate?: string
         }>
       }
@@ -191,6 +192,7 @@ export class FFProbeClient implements IMediaProbe {
         bitrateMbps,
         hasAudio: audioStream ? true : false,
         audioCodec: audioStream?.codec_name ?? null,
+        pixelFormat: stream?.pix_fmt ?? null,
       }
     } catch {
       return {

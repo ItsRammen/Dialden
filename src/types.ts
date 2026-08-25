@@ -249,6 +249,8 @@ export interface MediaItem {
   /** Null until the file has been probed for an audio stream. */
   readonly hasAudio?: boolean | null
   readonly audioCodec?: string | null
+  /** FFmpeg pixel format (e.g. yuv420p, yuv420p10le). Null until probed. */
+  readonly pixelFormat?: string | null
   // Root-aware library identity and kid-safe playback policy.
   readonly rootId?: string
   readonly relativePath?: string
@@ -425,6 +427,8 @@ export interface MediaMetadata {
   /** Null when the file could not be inspected at all. */
   readonly hasAudio: boolean | null
   readonly audioCodec: string | null
+  /** FFmpeg pixel format; bit-depth decisions derive from this. */
+  readonly pixelFormat?: string | null
 }
 
 export interface IDateTimeProvider {

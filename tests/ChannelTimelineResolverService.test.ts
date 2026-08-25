@@ -195,7 +195,7 @@ describe('ChannelTimelineResolverService', () => {
     expect(await resolver.presentation('hidden')).toEqual({ enabled: false })
   })
 
-  test('hints hardware decode only for h264 sources a QSV backend can handle', async () => {
+  test('hints hardware decode only for 8-bit h264 sources a QSV backend can handle', async () => {
     const episodeA = program(
       'episode-a',
       1,
@@ -209,78 +209,68 @@ describe('ChannelTimelineResolverService', () => {
       '2026-08-24T12:30:20.000Z',
       'interlude'
     )
-    const mediaById = new Map<number, Partial<MediaItem>>([
-      [1, { codec: 'h264', compatibility: 'compatible' }],
-      [2, { codec: 'mpeg4', compatibility: 'marginal' }],
-    ])
-    const resolver = new ChannelTimelineResolverService(
-      {
-        getGuide: async () => ({
-          channelId: 'kids',
-          serverTime: '2026-08-24T12:05:00.000Z',
-          serverTimeMs: Date.parse('2026-08-24T12:05:00.000Z'),
-          timezone: 'UTC',
-          timelineRevision: 'revision-1',
-          requestedEnd: bumper.scheduledEnd,
-          coverageEnd: bumper.scheduledEnd,
-          truncated: false,
-          programs: [episodeA, bumper],
-        }),
-      },
-      {
-        resolveForChannelWorker: async (id) => ({
-          path: `/media/${id}.mkv`,
-          size: 1,
-          mimeType: 'video/x-matroska',
-          lastModified: new Date(0),
-        }),
-      },
-      { getById: async (id) => (mediaById.get(id) ?? null) as MediaItem | null },
-      undefined,
-      undefined,
-      () => true,
-      () => true
-    )
+    const guide = () => ({
+      channelId: 'kids',
+      serverTime: '2026-08-24T12:05:00.000Z',
+      serverTimeMs: Date.parse('2026-08-24T12:05:00.000Z'),
+      timezone: 'UTC',
+      timelineRevision: 'revision-1',
+      requestedEnd: bumper.scheduledEnd,
+      coverageEnd: bumper.scheduledEnd,
+      truncated: false,
+      programs: [episodeA, bumper],
+    })
+    const resolveMedia = {
+      resolveForChannelWorker: async (id: number) => ({
+        path: `/media/${id}.mkv`,
+        size: 1,
+        mimeType: 'video/x-matroska',
+        lastModified: new Date(0),
+      }),
+    }
+    const buildResolver = (
+      hardware: boolean,
+      mediaById: Map<number, Partial<MediaItem>>
+    ) =>
+      new ChannelTimelineResolverService(
+        { getGuide: async () => guide() },
+        resolveMedia,
+        { getById: async (id) => (mediaById.get(id) ?? null) as MediaItem | null },
+        undefined,
+        undefined,
+        () => true,
+        () => hardware
+      )
 
-    const window = await resolver.resolveWindow('kids', new Date(), 2)
-    expect(window[0]).toMatchObject({ decodeHint: 'hw' })
-    expect(window[1]).toMatchObject({ decodeHint: 'sw' })
+    const base: Array<[string, Partial<MediaItem>, 'hw' | 'sw']> = [
+      ['8-bit h264', { codec: 'h264', compatibility: 'compatible', pixelFormat: 'yuv420p' }, 'hw'],
+      ['10-bit h264 (Hi10P)', { codec: 'h264', compatibility: 'compatible', pixelFormat: 'yuv420p10le' }, 'sw'],
+      ['unknown pixel format', { codec: 'h264', compatibility: 'compatible' }, 'sw'],
+      ['non-h264', { codec: 'mpeg4', compatibility: 'marginal', pixelFormat: 'yuv420p' }, 'sw'],
+      ['incompatible h264', { codec: 'h264', compatibility: 'incompatible', pixelFormat: 'yuv420p' }, 'sw'],
+    ]
+    const hardwareWindow = await buildResolver(true, new Map([
+      [1, base[0]![1]],
+      [2, { codec: 'mpeg4', compatibility: 'marginal', pixelFormat: 'yuv420p' }],
+    ])).resolveWindow('kids', new Date(), 2)
+    expect(hardwareWindow[0]).toMatchObject({ decodeHint: 'hw' })
+    expect(hardwareWindow[1]).toMatchObject({ decodeHint: 'sw' })
 
-    const softwareResolver = new ChannelTimelineResolverService(
-      {
-        getGuide: async () => ({
-          channelId: 'kids',
-          serverTime: '2026-08-24T12:05:00.000Z',
-          serverTimeMs: Date.parse('2026-08-24T12:05:00.000Z'),
-          timezone: 'UTC',
-          timelineRevision: 'revision-1',
-          requestedEnd: bumper.scheduledEnd,
-          coverageEnd: bumper.scheduledEnd,
-          truncated: false,
-          programs: [episodeA, bumper],
-        }),
-      },
-      {
-        resolveForChannelWorker: async (id) => ({
-          path: `/media/${id}.mkv`,
-          size: 1,
-          mimeType: 'video/x-matroska',
-          lastModified: new Date(0),
-        }),
-      },
-      { getById: async (id) => (mediaById.get(id) ?? null) as MediaItem | null },
-      undefined,
-      undefined,
-      () => true,
-      () => false
-    )
-    const softwareWindow = await softwareResolver.resolveWindow(
-      'kids',
-      new Date(),
-      2
-    )
-    expect(softwareWindow[0]).toMatchObject({ decodeHint: 'sw' })
-    expect(softwareWindow[1]).toMatchObject({ decodeHint: 'sw' })
+    for (const [label, item, expected] of base.slice(1)) {
+      const window = await buildResolver(true, new Map([[1, item]])).resolveWindow(
+        'kids',
+        new Date(),
+        1
+      )
+      expect(`${label} → ${String(window[0]?.decodeHint)}`).toBe(
+        `${label} → ${expected}`
+      )
+    }
+
+    const softwareResult = await buildResolver(false, new Map([
+      [1, { codec: 'h264', compatibility: 'compatible', pixelFormat: 'yuv420p' }],
+    ])).resolveWindow('kids', new Date(), 1)
+    expect(softwareResult[0]).toMatchObject({ decodeHint: 'sw' })
   })
 
   test('resolves the live offset plus bumper and next episode as one window', async () => {

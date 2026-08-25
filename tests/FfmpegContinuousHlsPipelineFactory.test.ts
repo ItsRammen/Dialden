@@ -173,6 +173,45 @@ describe('FfmpegContinuousHlsPipelineFactory', () => {
     expect(commands[0]).toContain('anullsrc=r=48000:cl=stereo')
   })
 
+  test('surfaces a bounded stderr tail in the exit error for diagnosability', async () => {
+    const factory = new FfmpegContinuousHlsPipelineFactory(
+      'ffmpeg',
+      {
+        spawn: () => ({
+          exited: Promise.resolve(218),
+          kill: () => {},
+          stderrTail: Promise.resolve(
+            '[h264_qsv @ 0xdeadbeef] Current frame rate is not set\n' +
+              'mfx session init failed: MFX_ERR_DEVICE_FAILED\n'
+          ),
+        }),
+      },
+      { hasAudio: async () => true }
+    )
+
+    const handle = await factory.start(request())
+    const exit = await handle.completed
+
+    expect(exit.code).toBe(218)
+    expect(exit.error).toContain('code 218')
+    expect(exit.error).toContain('MFX_ERR_DEVICE_FAILED')
+  })
+
+  test('composes the plain exit error when no stderr tail is available', async () => {
+    const factory = new FfmpegContinuousHlsPipelineFactory(
+      'ffmpeg',
+      {
+        spawn: () => ({ exited: Promise.resolve(1), kill: () => {} }),
+      },
+      { hasAudio: async () => true }
+    )
+
+    const handle = await factory.start(request())
+    const exit = await handle.completed
+
+    expect(exit.error).toBe('FFmpeg exited with code 1')
+  })
+
   test('expires cached audio layouts so an in-place media replacement is re-probed', async () => {
     let now = 1_787_500_000_000
     let probes = 0

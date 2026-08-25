@@ -50,7 +50,6 @@
     channelRefreshSerial: 0,
     videoSlot: 'A',
     lineupOpening: false,
-    lineupOpen: false,
     tuneMetrics: null
   };
 
@@ -327,7 +326,6 @@
           showChannelStartupFailure(data.error || 'The last channel could not start. Choose another channel to continue.');
           return;
         }
-        state.lineupOpen = true;
         var index = findChannelIndex(data.channel.id);
         if (index < 0) index = firstAvailableChannelIndex();
         if (index < 0) {
@@ -345,7 +343,6 @@
 
   function closeLineupSession() {
     if (!state.serverUrl || !state.clientId) return;
-    state.lineupOpen = false;
     var payload = JSON.stringify({ clientId: state.clientId });
     try {
       if (navigator.sendBeacon) {
@@ -370,7 +367,6 @@
       function (error, data) {
         state.lineupOpening = false;
         if (error || state.view !== 'player' || !currentChannel() || currentChannel().id !== channel.id) return;
-        state.lineupOpen = !!data && data.status === 'ready';
         syncNow(true);
       }
     );
@@ -1570,6 +1566,10 @@
     state.playToken += 1;
     state.videoSlot = state.videoSlot === 'A' ? 'B' : 'A';
     applyVideoVisibility();
+    /* The previous channel keeps its decoder until the new stream proves
+       stable, so it must be silenced now — a failed tune would otherwise
+       leave the old channel's audio playing behind the tuning panel. */
+    standbyVideo().muted = true;
     window.ToastTVPlaybackPolicy.resetMediaElement(activeVideo());
   }
 

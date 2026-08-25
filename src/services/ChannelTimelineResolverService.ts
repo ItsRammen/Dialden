@@ -13,6 +13,7 @@ import type {
 } from './ContinuousChannelWorkerManager'
 import type { ChannelService, ScheduledProgram } from './ChannelService'
 import type { MediaDeliveryService } from './MediaDeliveryService'
+import type { MediaItem } from '../types'
 
 type ChannelRuntimeConfig = Pick<AppConfig, 'session'> &
   Partial<Pick<AppConfig, 'logo'>>
@@ -175,7 +176,7 @@ export class ChannelTimelineResolverService implements ChannelTimelineResolver {
           typeof mediaItem?.hasAudio === 'boolean'
             ? mediaItem.hasAudio
             : undefined,
-          this.hardwareDecodesH264() && mediaItem?.codec === 'h264' && mediaItem.compatibility !== 'incompatible'
+          this.hardwareDecodesH264() && hardwareDecodable(mediaItem)
             ? 'hw'
             : 'sw'
         )
@@ -272,4 +273,22 @@ function scheduleMinutes(value: string): number {
 
 function defaultBranding(mode: ChannelBrandingPolicy['mode']): ChannelBrandingPolicy {
   return { mode, opacity: 210, position: 2, x: 24, y: 24, sizePercent: 12 }
+}
+
+/**
+ * Hardware decode eligibility for the (currently dormant) per-input QSV
+ * experiment. Conservative by construction: an unknown pixel format — legacy
+ * rows awaiting the lazy backfill — is treated as software-decodable only,
+ * and anything 10-bit or deeper stays software because Intel's H.264 decoder
+ * cannot handle Hi10P. Failing closed here prevents a mid-tune spawn death.
+ */
+function hardwareDecodable(
+  item: Pick<MediaItem, 'codec' | 'compatibility' | 'pixelFormat'> | null
+): boolean {
+  if (!item) return false
+  if (item.codec !== 'h264') return false
+  if (item.compatibility === 'incompatible') return false
+  const pixelFormat = item.pixelFormat
+  if (typeof pixelFormat !== 'string' || pixelFormat.length === 0) return false
+  return !/(?:10|12|16)/.test(pixelFormat)
 }

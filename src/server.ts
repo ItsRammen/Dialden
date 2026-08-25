@@ -167,7 +167,7 @@ export async function createServer(
     new BunChannelWorkerFiles(),
     {
       outputRoot: getDataPath('streams'),
-      clientLeaseTtlMs: 15_000,
+      clientLeaseTtlMs: 45_000,
       idleTimeoutMs: 60_000,
       // Every speculative channel is a complete normalized encoder.
       // Running two of those beside the watched channel can starve CPU fallback

@@ -50,6 +50,7 @@ const probe: IMediaProbe = {
       bitrateMbps: 4,
       hasAudio: true,
       audioCodec: 'aac',
+      pixelFormat: 'yuv420p',
     }
   },
 }
@@ -194,6 +195,7 @@ describe('collection-first catalog integration', () => {
       bitrateMbps: 4,
       hasAudio: true,
       audioCodec: 'aac',
+      pixelFormat: 'yuv420p',
     })
     expect(await scan).toBe(1)
 
