@@ -1,20 +1,37 @@
 import type { MiddlewareHandler } from 'hono'
 import { CLIENT_HEARTBEAT_ROUTE } from '../controllers/ClientPresenceController'
-import { CLIENT_CHANNEL_WARM_ROUTE } from '../controllers/ChannelStreamController'
+import {
+  CLIENT_CHANNEL_STARTUP_ROUTE,
+  CLIENT_CHANNEL_WARM_ROUTE,
+  CLIENT_SESSION_CLOSE_ROUTE,
+  CLIENT_SESSION_ROUTE,
+} from '../controllers/ChannelStreamController'
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
+const CLIENT_CHANNEL_PREPARE_PATH =
+  /^\/api\/client\/v1\/channels\/[a-zA-Z0-9._-]{1,100}\/prepare$/
+
+function isCredentiallessClientMutation(path: string): boolean {
+  return (
+    path === CLIENT_HEARTBEAT_ROUTE ||
+    path === CLIENT_CHANNEL_WARM_ROUTE ||
+    path === CLIENT_CHANNEL_STARTUP_ROUTE ||
+    path === CLIENT_SESSION_ROUTE ||
+    path === CLIENT_SESSION_CLOSE_ROUTE ||
+    CLIENT_CHANNEL_PREPARE_PATH.test(path)
+  )
+}
 
 /**
  * Prevent a hostile web page from submitting unauthenticated admin forms to a
  * trusted-LAN ToastTV server. Direct CLI requests without browser origin
- * headers remain possible; the credentialless TV heartbeat is separately
+ * headers remain possible; the credentialless TV routes are separately
  * validated and explicitly exempt.
  */
 export const mutationOriginGuard: MiddlewareHandler = async (c, next) => {
   if (
     SAFE_METHODS.has(c.req.method) ||
-    c.req.path === CLIENT_HEARTBEAT_ROUTE ||
-    c.req.path === CLIENT_CHANNEL_WARM_ROUTE
+    isCredentiallessClientMutation(c.req.path)
   ) {
     await next()
     return

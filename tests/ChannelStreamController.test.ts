@@ -315,7 +315,7 @@ describe('ChannelStreamController', () => {
   test('allows only the dedicated credentialless client channel mutations across origins', async () => {
     const guarded = new Hono()
     guarded.use('*', mutationOriginGuard)
-    guarded.route('/', app())
+    guarded.route('/', app({ lineup: true }))
 
     const preflight = await guarded.request('/api/client/v1/channels/warm', {
       method: 'OPTIONS',
@@ -339,6 +339,32 @@ describe('ChannelStreamController', () => {
       body: JSON.stringify({ clientId: 'tv', channelIds: ['cartoons'] }),
     })
     expect(warm.status).toBe(200)
+
+    const clientHeaders = {
+      'Content-Type': 'application/json',
+      Origin: 'null',
+      'Sec-Fetch-Site': 'cross-site',
+    }
+    const session = await guarded.request('/api/client/v1/session', {
+      method: 'POST',
+      headers: clientHeaders,
+      body: JSON.stringify({ clientId: 'tv', lastChannelId: 'kids', lineup: true }),
+    })
+    expect(session.status).toBe(200)
+
+    const prepare = await guarded.request('/api/client/v1/channels/kids/prepare', {
+      method: 'POST',
+      headers: clientHeaders,
+      body: JSON.stringify({ clientId: 'tv' }),
+    })
+    expect(prepare.status).toBe(200)
+
+    const close = await guarded.request('/api/client/v1/session/close', {
+      method: 'POST',
+      headers: clientHeaders,
+      body: JSON.stringify({ clientId: 'tv' }),
+    })
+    expect(close.status).toBe(200)
 
     const unrelated = await guarded.request('/api/client/v1/not-warm', {
       method: 'POST',
