@@ -122,7 +122,11 @@ export class FfmpegContinuousHlsPipelineFactory implements ChannelPipelineFactor
     const streams: Array<{ video: number; audio: number }> = []
     let inputIndex = 0
     for (const item of request.sequence) {
-      if (qsv && item.decodeHint === 'hw') args.push('-hwaccel', 'qsv')
+      // Decode into system memory. The normalization/concat graph below uses
+      // software filters; handing it QSV hardware frames makes FFmpeg insert
+      // an unsupported implicit conversion on some Intel generations. QSV is
+      // still used for the final H.264 encode, which provides the largest CPU
+      // reduction without making channel compatibility source-dependent.
       if (item.loopSource) args.push('-stream_loop', '-1')
       if (item.sourceOffsetSeconds > 0) args.push('-ss', decimal(item.sourceOffsetSeconds))
       if (item.sourceDurationSeconds !== undefined) args.push('-t', decimal(item.sourceDurationSeconds))

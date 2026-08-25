@@ -27,7 +27,7 @@ const request = (): ChannelPipelineRequest => ({
 })
 
 describe('FfmpegContinuousHlsPipelineFactory', () => {
-  test('applies the QSV decoder only to inputs hinted as hardware-decodable', () => {
+  test('keeps QSV-hinted inputs in system memory for the software concat graph', () => {
     const value = request()
     const first = { ...value.sequence[0]!, decodeHint: 'hw' as const }
     const second = { ...value.sequence[1]!, decodeHint: 'sw' as const }
@@ -50,19 +50,9 @@ describe('FfmpegContinuousHlsPipelineFactory', () => {
       sequence: [first, second, third],
     })
 
-    const inputIndexes = command
-      .map((value, index) => (value === '-i' ? index : -1))
-      .filter((index) => index >= 0)
-    expect(inputIndexes).toHaveLength(3)
-    for (const index of inputIndexes) {
-      const before = command.slice(Math.max(0, index - 6), index)
-      if (command[index + 1] === '/media/a.mkv') {
-        expect(before).toContain('-hwaccel')
-        expect(before).toContain('qsv')
-      } else {
-        expect(before).not.toContain('-hwaccel')
-      }
-    }
+    expect(command.filter((value) => value === '-i')).toHaveLength(3)
+    expect(command).not.toContain('-hwaccel')
+    expect(command).toContain('h264_qsv')
   })
 
   test('ignores hardware decode hints in software mode', () => {
