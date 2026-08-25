@@ -246,6 +246,9 @@ export interface MediaItem {
   readonly mtime: number | null // Unix timestamp in ms
   // Hardware compatibility
   readonly compatibility: Compatibility
+  /** Null until the file has been probed for an audio stream. */
+  readonly hasAudio?: boolean | null
+  readonly audioCodec?: string | null
   // Root-aware library identity and kid-safe playback policy.
   readonly rootId?: string
   readonly relativePath?: string
@@ -419,6 +422,9 @@ export interface MediaMetadata {
   readonly height: number | null
   readonly fps: number | null
   readonly bitrateMbps: number | null
+  /** Null when the file could not be inspected at all. */
+  readonly hasAudio: boolean | null
+  readonly audioCodec: string | null
 }
 
 export interface IDateTimeProvider {

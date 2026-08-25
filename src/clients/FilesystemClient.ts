@@ -128,10 +128,8 @@ export class FFProbeClient implements IMediaProbe {
       'ffprobe',
       '-v',
       'error',
-      '-select_streams',
-      'v:0',
       '-show_entries',
-      'format=duration:stream=codec_name,width,height',
+      'format=duration,bit_rate:stream=codec_type,codec_name,width,height,avg_frame_rate',
       '-of',
       'json',
       filePath,
@@ -148,6 +146,7 @@ export class FFProbeClient implements IMediaProbe {
       const data = JSON.parse(output) as {
         format?: { duration?: string; bit_rate?: string }
         streams?: Array<{
+          codec_type?: string
           codec_name?: string
           width?: number
           height?: number
@@ -156,7 +155,12 @@ export class FFProbeClient implements IMediaProbe {
       }
 
       const duration = Math.floor(parseFloat(data.format?.duration ?? '0') || 0)
-      const stream = data.streams?.[0]
+      const stream = data.streams?.find(
+        (candidate) => candidate.codec_type === 'video'
+      )
+      const audioStream = data.streams?.find(
+        (candidate) => candidate.codec_type === 'audio'
+      )
 
       // Parse frame rate (e.g., "30000/1001" or "30/1")
       let fps: number | null = null
@@ -185,6 +189,8 @@ export class FFProbeClient implements IMediaProbe {
         height: stream?.height ?? null,
         fps,
         bitrateMbps,
+        hasAudio: audioStream ? true : false,
+        audioCodec: audioStream?.codec_name ?? null,
       }
     } catch {
       return {
@@ -194,6 +200,8 @@ export class FFProbeClient implements IMediaProbe {
         height: null,
         fps: null,
         bitrateMbps: null,
+        hasAudio: null,
+        audioCodec: null,
       }
     }
   }

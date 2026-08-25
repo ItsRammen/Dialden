@@ -94,14 +94,16 @@ describe('FileWatcherService', () => {
     capturedCallback?.('add', '/media/videos/show.mp4') // Should pass
     capturedCallback?.('add', '/media/videos/image.jpg') // Should be filtered
     capturedCallback?.('add', '/media/videos/outro.mkv') // Should pass
+    capturedCallback?.('add', '/media/videos/NEW-EPISODE.MKV') // Case-insensitive
 
     // Advance timer (debounce) - use real setTimeout since service uses it internally
     await new Promise((r) => setTimeout(r, 2100))
 
     const batch = await batchPromise
-    expect(batch).toHaveLength(2)
+    expect(batch).toHaveLength(3)
     expect(batch).toContain('/media/videos/show.mp4')
     expect(batch).toContain('/media/videos/outro.mkv')
+    expect(batch).toContain('/media/videos/NEW-EPISODE.MKV')
   })
 
   test('debounces rapid events into single batch', async () => {

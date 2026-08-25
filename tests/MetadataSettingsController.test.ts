@@ -34,6 +34,8 @@ function service(overrides: Record<string, unknown> = {}) {
     testConfiguration: async () => {},
     runPending: async () => state,
     reevaluateLibrary: async () => state,
+    retryReviewLibrary: async () => state,
+    reapplyCachedPolicies: async () => 0,
     ...overrides,
   }
 }
@@ -235,7 +237,7 @@ describe('metadata settings controller', () => {
 
     expect(response.status).toBe(303)
     expect(response.headers.get('location')).toBe(
-      '/settings/metadata?reevaluate=started'
+      '/settings/metadata?maintenance=full'
     )
     expect(reevaluations).toBe(1)
     expect(refreshes).toBe(1)
@@ -245,8 +247,42 @@ describe('metadata settings controller', () => {
     const response = await appFor(service()).request('/settings/metadata')
     const html = await response.text()
 
-    expect(html).toContain('Re-evaluate entire library')
-    expect(html).toContain('Parent approve and Parent block choices are preserved')
-    expect(html).toContain('Manually confirmed TMDB identities stay locked')
+    expect(html).toContain('Apply updated rules')
+    expect(html).toContain('Retry Needs Review')
+    expect(html).toContain('Rebuild all metadata')
+    expect(html).toContain('Explicit Parent approve and Parent block choices are never replaced')
+    expect(html).toContain('Manual TMDB identities remain locked')
+  })
+
+  test('offers cached-policy and targeted review maintenance independently', async () => {
+    const calls: string[] = []
+    const metadata = service({
+      async reapplyCachedPolicies() {
+        calls.push('policy')
+        return 2
+      },
+      async retryReviewLibrary() {
+        calls.push('review')
+        return state
+      },
+    })
+    const app = appFor(metadata)
+
+    const policy = await app.request('/settings/metadata/reapply-policy', {
+      method: 'POST',
+    })
+    await Promise.resolve()
+    const review = await app.request('/settings/metadata/retry-review', {
+      method: 'POST',
+    })
+    await Promise.resolve()
+
+    expect(policy.headers.get('location')).toBe(
+      '/settings/metadata?maintenance=policy'
+    )
+    expect(review.headers.get('location')).toBe(
+      '/settings/metadata?maintenance=review'
+    )
+    expect(calls).toEqual(['policy', 'review'])
   })
 })

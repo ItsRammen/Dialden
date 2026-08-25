@@ -122,6 +122,7 @@ CREATE INDEX IF NOT EXISTS idx_collections_metadata
 const MEDIA_COLUMNS = `
   id, path, filename, duration_seconds, is_interlude, media_type,
   date_start, date_end, codec, width, height, warning, mtime, compatibility,
+  has_audio, audio_codec,
   root_id, relative_path, library_kind, collection_title,
   policy_enabled, playback_override, root_available,
   collection_id,
@@ -168,6 +169,8 @@ const MEDIA_UPSERT_UPDATE = `
   warning = excluded.warning,
   mtime = excluded.mtime,
   compatibility = excluded.compatibility,
+  has_audio = COALESCE(excluded.has_audio, media.has_audio),
+  audio_codec = COALESCE(excluded.audio_codec, media.audio_codec),
   root_id = excluded.root_id,
   relative_path = excluded.relative_path,
   library_kind = excluded.library_kind,
@@ -183,11 +186,12 @@ const MEDIA_UPSERT_SQL = `
   INSERT INTO media (
     path, filename, duration_seconds, is_interlude, media_type,
     date_start, date_end, codec, width, height, warning, mtime, compatibility,
+    has_audio, audio_codec,
     root_id, relative_path, library_kind, collection_title,
     policy_enabled, playback_override, root_available,
     collection_id, season_number, episode_number, episode_title
   )
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(path) DO UPDATE SET
     ${MEDIA_UPSERT_UPDATE}
   ON CONFLICT(root_id, relative_path) DO UPDATE SET
@@ -293,6 +297,15 @@ export class MediaRepository implements IMediaRepository {
         `ALTER TABLE media ADD COLUMN compatibility TEXT NOT NULL DEFAULT 'compatible'`
       )
       console.log('Migrated database to include compatibility column')
+    }
+
+    // Audio stream presence, probed once during indexing so the channel
+    // worker never needs a runtime ffprobe before spawning an encoder.
+    const hasHasAudio = columns.some((c) => c.name === 'has_audio')
+    if (!hasHasAudio) {
+      this.db.exec(`ALTER TABLE media ADD COLUMN has_audio INTEGER`)
+      this.db.exec(`ALTER TABLE media ADD COLUMN audio_codec TEXT`)
+      console.log('Migrated database to include audio probe columns')
     }
 
     // Root-aware library identity and default-deny playback policy. Nullable
@@ -1276,6 +1289,12 @@ export class MediaRepository implements IMediaRepository {
         item.warning,
         item.mtime,
         item.compatibility,
+        item.hasAudio === null || item.hasAudio === undefined
+          ? null
+          : item.hasAudio
+            ? 1
+            : 0,
+        item.audioCodec ?? null,
         item.rootId ?? 'legacy',
         item.relativePath ?? item.path,
         item.libraryKind ?? 'other',
@@ -1647,6 +1666,11 @@ export class MediaRepository implements IMediaRepository {
       warning: (row.warning as string) ?? null,
       mtime: (row.mtime as number) ?? null,
       compatibility,
+      hasAudio:
+        row.has_audio === null || row.has_audio === undefined
+          ? null
+          : Boolean(row.has_audio),
+      audioCodec: (row.audio_codec as string) ?? null,
       rootId: (row.root_id as string) ?? 'legacy',
       relativePath: (row.relative_path as string) ?? (row.path as string),
       libraryKind: this.normalizeLibraryKind(row.library_kind),
@@ -1798,6 +1822,12 @@ export class MediaRepository implements IMediaRepository {
           item.warning,
           item.mtime,
           item.compatibility,
+          item.hasAudio === null || item.hasAudio === undefined
+            ? null
+            : item.hasAudio
+              ? 1
+              : 0,
+          item.audioCodec ?? null,
           item.rootId ?? 'legacy',
           item.relativePath ?? item.path,
           item.libraryKind ?? 'other',
@@ -1934,5 +1964,29 @@ export class MediaRepository implements IMediaRepository {
     }
 
     return count
+  }
+
+  async listMissingAudioProbe(limit: number): Promise<MediaItem[]> {
+    if (!this.db) throw new Error('Repository not initialized')
+    const bounded = Math.max(1, Math.min(500, Math.floor(limit)))
+    const rows = this.db
+      .prepare(
+        `SELECT ${MEDIA_COLUMNS} FROM media
+         WHERE has_audio IS NULL AND root_available = 1
+         ORDER BY id LIMIT ?`
+      )
+      .all(bounded) as Array<Record<string, unknown>>
+    return rows.map((row) => this.rowToMediaItem(row))
+  }
+
+  async updateAudioProbe(
+    id: number,
+    hasAudio: boolean,
+    audioCodec: string | null
+  ): Promise<void> {
+    if (!this.db) throw new Error('Repository not initialized')
+    this.db
+      .prepare('UPDATE media SET has_audio = ?, audio_codec = ? WHERE id = ?')
+      .run(hasAudio ? 1 : 0, audioCodec, id)
   }
 }

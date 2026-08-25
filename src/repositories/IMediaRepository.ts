@@ -245,4 +245,17 @@ export interface IMediaRepository {
   updateCompatibilityBatch(
     updates: Array<{ id: number; compatibility: Compatibility }>
   ): Promise<number>
+
+  /**
+   * Oldest rows that have never been probed for an audio stream. Used by the
+   * lazy backfill so pre-existing libraries converge without a rescan.
+   */
+  listMissingAudioProbe(limit: number): Promise<MediaItem[]>
+
+  /** Persist one lazy audio-probe result. */
+  updateAudioProbe(
+    id: number,
+    hasAudio: boolean,
+    audioCodec: string | null
+  ): Promise<void>
 }

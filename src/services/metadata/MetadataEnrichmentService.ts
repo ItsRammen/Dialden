@@ -191,7 +191,7 @@ export class MetadataEnrichmentService {
   reevaluateLibrary(): Promise<MetadataJobState> {
     if (this.activeRun) return this.activeRun
     const run = this.withExclusiveOperation(async () => {
-      await this.queueLibraryReevaluationUnlocked()
+      await this.queueLibraryReevaluationUnlocked(false)
       const state = await this.processPending()
       await this.reapplyCachedPoliciesUnlocked()
       return state
@@ -203,7 +203,29 @@ export class MetadataEnrichmentService {
     return run
   }
 
-  private async queueLibraryReevaluationUnlocked(): Promise<number> {
+  /**
+   * Retry only unresolved collections which still depend on policy review.
+   * Explicit parent decisions are skipped, while locked manual identities may
+   * be refreshed in place when their certification is what needs review.
+   */
+  retryReviewLibrary(): Promise<MetadataJobState> {
+    if (this.activeRun) return this.activeRun
+    const run = this.withExclusiveOperation(async () => {
+      await this.queueLibraryReevaluationUnlocked(true)
+      const state = await this.processPending()
+      await this.reapplyCachedPoliciesUnlocked()
+      return state
+    })
+    this.activeRun = run
+    void run.finally(() => {
+      if (this.activeRun === run) this.activeRun = null
+    })
+    return run
+  }
+
+  private async queueLibraryReevaluationUnlocked(
+    reviewOnly: boolean
+  ): Promise<number> {
     let offset = 0
     let queued = 0
     const pageSize = 250
@@ -216,6 +238,11 @@ export class MetadataEnrichmentService {
       if (collections.length === 0) break
       for (const collection of collections) {
         if (collection.libraryKind === 'other') continue
+        if (
+          reviewOnly &&
+          (collection.parentOverride !== null ||
+            collection.effectiveDecision !== 'review')
+        ) continue
         const keepManualIdentity =
           collection.metadataLocked && Boolean(collection.metadataExternalId)
         const policyUpdated = await this.repository.updateCollectionPolicy(

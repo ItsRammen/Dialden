@@ -14,6 +14,7 @@ import type { IHardwareDetectionService } from '../services/HardwareDetectionSer
 import type { UpdateService } from '../services/UpdateService'
 import type { ChannelInterludePolicy } from '../services/ChannelService'
 import type { FfmpegTranscodingStatus } from '../services/FfmpegTranscodingBackend'
+import type { TierDecision } from '../services/ChannelQualityTierService'
 
 interface SettingsControllerDeps {
   config: ConfigService
@@ -21,10 +22,19 @@ interface SettingsControllerDeps {
   hardware?: IHardwareDetectionService
   update: UpdateService
   transcodingStatus?: FfmpegTranscodingStatus
+  qualityTier?: () => TierDecision | undefined
   onInterludeUpdated?: (
     policy: ChannelInterludePolicy
   ) => Promise<void> | void
   onLogoUpdated?: () => Promise<void> | void
+  onLibraryMonitoringUpdated?: (intervalMinutes: number) => void
+  libraryMonitoring?: () => {
+    watcherActive: boolean
+    watcherStartedAt: string | null
+    lastWatcherEventAt: string | null
+    safetyScanIntervalMinutes: number
+    lastSafetyScanAt: string | null
+  }
 }
 
 export function createSettingsController(deps: SettingsControllerDeps) {
@@ -47,6 +57,8 @@ export function createSettingsController(deps: SettingsControllerDeps) {
         currentVersion: updateInfo?.currentVersion ?? update.currentVersion,
         latestVersion: updateInfo?.latestVersion,
         transcodingStatus: deps.transcodingStatus,
+        qualityTier: deps.qualityTier?.(),
+        libraryMonitoring: deps.libraryMonitoring?.(),
       })
     )
   })
@@ -97,6 +109,11 @@ export function createSettingsController(deps: SettingsControllerDeps) {
       playback: {
         safeMode: body['safeMode'] === 'true',
       },
+      library: {
+        safetyScanIntervalMinutes: parseSafetyScanInterval(
+          body['safetyScanIntervalMinutes']
+        ),
+      },
     }
 
     await config.update(partial)
@@ -105,6 +122,9 @@ export function createSettingsController(deps: SettingsControllerDeps) {
       frequency: partial.interlude?.frequency ?? 1,
     })
     await deps.onLogoUpdated?.()
+    deps.onLibraryMonitoringUpdated?.(
+      partial.library?.safetyScanIntervalMinutes ?? 15
+    )
     return c.html(html`<div class="toast success">Settings saved</div>`)
   })
 
@@ -265,4 +285,10 @@ export function createSettingsController(deps: SettingsControllerDeps) {
   })
 
   return controller
+}
+
+function parseSafetyScanInterval(value: unknown): number {
+  const parsed = Number.parseInt(typeof value === 'string' ? value : '15', 10)
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0
+  return Math.max(5, Math.min(1440, parsed))
 }

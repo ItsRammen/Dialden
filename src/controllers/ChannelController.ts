@@ -405,12 +405,6 @@ export function createChannelController({
       }
       const updated = channels.update(id, candidate)
       if (!updated) return c.text('Channel not found', 404)
-      if (
-        existing.branding?.burnIn === true ||
-        updated.branding?.burnIn === true
-      ) {
-        await notifyChannelChanged(id)
-      }
       return c.redirect(
         `/channels?changed=updated&edit=${encodeURIComponent(id)}#editor`,
         303
@@ -781,7 +775,6 @@ interface ChannelFormData {
 function readBrandingPolicy(data: ChannelFormData): NonNullable<LibraryChannelPolicy['branding']> {
   return {
     mode: (textValue(data.get('brandingMode')) || 'inherit') as 'inherit' | 'custom' | 'off',
-    ...(textValue(data.get('brandingBurnIn')) === 'true' ? { burnIn: true } : {}),
     opacity: integerValue(data.get('brandingOpacity'), 210),
     position: integerValue(data.get('brandingPosition'), 2) as 0 | 2 | 6 | 8,
     x: integerValue(data.get('brandingX'), 24),

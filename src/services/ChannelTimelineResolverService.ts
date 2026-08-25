@@ -10,7 +10,6 @@ import type { IMediaRepository } from '../repositories/IMediaRepository'
 import type {
   ChannelTimelinePosition,
   ChannelTimelineResolver,
-  ChannelVideoOverlay,
 } from './ContinuousChannelWorkerManager'
 import type { ChannelService, ScheduledProgram } from './ChannelService'
 import type { MediaDeliveryService } from './MediaDeliveryService'
@@ -41,7 +40,8 @@ export class ChannelTimelineResolverService implements ChannelTimelineResolver {
     private readonly config?: () => Promise<ChannelRuntimeConfig>,
     private readonly logos?: Pick<ChannelLogoStore, 'path'> &
       Partial<Pick<ChannelLogoStore, 'has'>>,
-    private readonly sourceExists: (path: string) => boolean = existsSync
+    private readonly sourceExists: (path: string) => boolean = existsSync,
+    private readonly hardwareDecodesH264: () => boolean = () => false
   ) {}
 
   /** Effective logo metadata for the client UI at the authoritative response time. */
@@ -81,48 +81,6 @@ export class ChannelTimelineResolverService implements ChannelTimelineResolver {
       return { enabled: false }
     }
     return { enabled: true, logoUrl: '/logo' }
-  }
-
-  async overlay(channelId: string, at = new Date()): Promise<ChannelVideoOverlay | null> {
-    const channel = this.channel(channelId)
-    if (!channel) return null
-    return this.resolveOverlay(channel, at, await this.config?.())
-  }
-
-  private resolveOverlay(
-    channel: LibraryChannelPolicy,
-    at: Date,
-    runtime?: ChannelRuntimeConfig
-  ): ChannelVideoOverlay | null {
-    const selected = this.resolveBranding(channel, at)
-    const branding = selected.policy
-    if (branding.mode === 'off' || branding.burnIn !== true) return null
-    if (branding.mode === 'custom') {
-      if (!this.logos) return null
-      if (this.logos.has && !this.logos.has(channel.id, selected.logoId)) {
-        return null
-      }
-      return {
-        sourcePath: this.logos.path(channel.id, selected.logoId),
-        ...brandingValues(branding),
-      }
-    }
-    const global = runtime?.logo
-    if (
-      !global?.enabled ||
-      !global.imagePath ||
-      !this.sourceExists(global.imagePath)
-    ) {
-      return null
-    }
-    return {
-      sourcePath: global.imagePath,
-      opacity: clamp(global.opacity / 255, 0, 1),
-      position: normalizePosition(global.position),
-      x: boundedInteger(global.x, 8, 0, 500),
-      y: boundedInteger(global.y, 8, 0, 500),
-      sizePercent: 12,
-    }
   }
 
   private resolveBranding(
@@ -184,21 +142,20 @@ export class ChannelTimelineResolverService implements ChannelTimelineResolver {
       .slice(currentIndex)
       .slice(0, Math.max(1, minimumItems))
     const result: ChannelTimelinePosition[] = []
-    const channel = this.channel(channelId)
-    const [runtime, resolvedWindow] = await Promise.all([
-      this.config?.(),
-      Promise.all(
-        window.map((program) =>
-          this.media.resolveForChannelWorker(program.mediaId)
-        )
-      ),
-    ])
+    const resolvedWindow = await Promise.all(
+      window.map(async (program) => ({
+        resolved: await this.media.resolveForChannelWorker(program.mediaId),
+        item: await this.repository.getById(program.mediaId),
+      }))
+    )
 
     for (let index = 0; index < window.length; index++) {
       const program = window[index]
       if (!program) continue
-      const resolved = resolvedWindow[index]
-      if (!resolved) break
+      const entry = resolvedWindow[index]
+      if (!entry?.resolved) break
+      const resolved = entry.resolved
+      const mediaItem = entry.item
       const isCurrent = program.id === current.id
       const elapsed = isCurrent
         ? Math.max(
@@ -206,30 +163,23 @@ export class ChannelTimelineResolverService implements ChannelTimelineResolver {
             (guide.serverTimeMs - Date.parse(program.scheduledStart)) / 1000
           )
         : 0
-      const startAt = new Date(
-        Date.parse(program.scheduledStart) + elapsed * 1_000
-      )
       const remaining = Math.max(0.001, program.sourceDurationSeconds - elapsed)
-      const parts = channel?.branding?.burnIn === true
-        ? brandingSlices(channel, startAt, remaining)
-        : [{ at: startAt, offsetSeconds: 0, durationSeconds: remaining }]
-      for (let partIndex = 0; partIndex < parts.length; partIndex++) {
-        const part = parts[partIndex]
-        if (!part) continue
-        result.push(
-          this.position(
-            program,
-            resolved.path,
-            guide.timelineRevision,
-            elapsed + part.offsetSeconds,
-            part.durationSeconds,
-            window[index + 1]?.id,
-            channel ? this.resolveOverlay(channel, part.at, runtime) : null,
-            partIndex
-          )
+      result.push(
+        this.position(
+          program,
+          resolved.path,
+          guide.timelineRevision,
+          elapsed,
+          remaining,
+          window[index + 1]?.id,
+          typeof mediaItem?.hasAudio === 'boolean'
+            ? mediaItem.hasAudio
+            : undefined,
+          this.hardwareDecodesH264() && mediaItem?.codec === 'h264' && mediaItem.compatibility !== 'incompatible'
+            ? 'hw'
+            : 'sw'
         )
-        if (result.length >= Math.max(1, minimumItems)) break
-      }
+      )
       if (result.length >= Math.max(1, minimumItems)) break
     }
     return result
@@ -266,20 +216,21 @@ export class ChannelTimelineResolverService implements ChannelTimelineResolver {
     elapsedSeconds: number,
     durationSeconds: number,
     nextScheduleItemId?: string,
-    overlay?: ChannelVideoOverlay | null,
-    partIndex = 0
+    hasAudio?: boolean,
+    decodeHint?: 'hw' | 'sw'
   ): ChannelTimelinePosition {
     const boundedElapsed = Math.max(
       0,
       Math.min(program.sourceDurationSeconds, elapsedSeconds)
     )
     return {
-      scheduleItemId: partIndex > 0 ? `${program.id}:brand-${partIndex}` : program.id,
+      scheduleItemId: program.id,
       ...(nextScheduleItemId ? { nextScheduleItemId } : {}),
       sourcePath,
       sourceOffsetSeconds: program.sourceStartSeconds + boundedElapsed,
       sourceDurationSeconds: Math.max(0.001, durationSeconds),
-      overlay,
+      ...(hasAudio === undefined ? {} : { hasAudio }),
+      ...(decodeHint === undefined ? {} : { decodeHint }),
       timelineRevision,
       type: program.type,
     }
@@ -314,35 +265,6 @@ function activeSlot(
   })
 }
 
-function brandingSlices(
-  channel: LibraryChannelPolicy,
-  startAt: Date,
-  durationSeconds: number
-): Array<{ at: Date; offsetSeconds: number; durationSeconds: number }> {
-  const endMs = startAt.getTime() + durationSeconds * 1_000
-  const boundaries = [startAt.getTime()]
-  let prior = slotBrandingKey(activeSlot(channel, startAt))
-  let cursor = Math.floor(startAt.getTime() / 60_000) * 60_000 + 60_000
-  while (cursor < endMs) {
-    const current = slotBrandingKey(activeSlot(channel, new Date(cursor)))
-    if (current !== prior) boundaries.push(cursor)
-    prior = current
-    cursor += 60_000
-  }
-  boundaries.push(endMs)
-  return boundaries.slice(0, -1).map((boundary, index) => ({
-    at: new Date(boundary),
-    offsetSeconds: (boundary - startAt.getTime()) / 1_000,
-    durationSeconds: ((boundaries[index + 1] ?? endMs) - boundary) / 1_000,
-  }))
-}
-
-function slotBrandingKey(slot: ChannelScheduleSlot | undefined): string {
-  return slot?.branding?.mode === 'custom'
-    ? `custom:${slot.branding.logoId}`
-    : slot?.branding?.mode ?? 'channel'
-}
-
 function scheduleMinutes(value: string): number {
   const [hour, minute] = value.split(':').map(Number)
   return (hour ?? 0) * 60 + (minute ?? 0)
@@ -350,35 +272,4 @@ function scheduleMinutes(value: string): number {
 
 function defaultBranding(mode: ChannelBrandingPolicy['mode']): ChannelBrandingPolicy {
   return { mode, opacity: 210, position: 2, x: 24, y: 24, sizePercent: 12 }
-}
-
-function brandingValues(
-  branding: ChannelBrandingPolicy
-): Omit<ChannelVideoOverlay, 'sourcePath'> {
-  return {
-    opacity: clamp(branding.opacity / 255, 0, 1),
-    position: branding.position,
-    x: branding.x,
-    y: branding.y,
-    sizePercent: branding.sizePercent,
-  }
-}
-
-function normalizePosition(value: number): 0 | 2 | 6 | 8 {
-  return value === 0 || value === 6 || value === 8 ? value : 2
-}
-
-function boundedInteger(
-  value: number | undefined,
-  fallback: number,
-  minimum: number,
-  maximum: number
-): number {
-  return Number.isInteger(value)
-    ? Math.max(minimum, Math.min(maximum, value as number))
-    : fallback
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.max(minimum, Math.min(maximum, value))
 }

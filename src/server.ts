@@ -36,6 +36,8 @@ import { HeadlessDashboardService } from './services/HeadlessDashboardService'
 import { renderHeadlessDashboard } from './templates/headlessDashboard'
 import { createMetadataSettingsController } from './controllers/MetadataSettingsController'
 import { ClientPresenceService } from './services/ClientPresenceService'
+import { ChannelQualityTierService } from './services/ChannelQualityTierService'
+import { LineupSessionService } from './services/LineupSessionService'
 import { createClientPresenceController } from './controllers/ClientPresenceController'
 import { mutationOriginGuard } from './middleware/mutationOriginGuard'
 import { ContinuousChannelWorkerManager } from './services/ContinuousChannelWorkerManager'
@@ -137,12 +139,21 @@ export async function createServer(
     mode: runtime.transcodingMode,
     qsvDevice: runtime.qsvDevice,
   })
+  const qualityTier = new ChannelQualityTierService()
+  const qualityDecision = qualityTier.resolve({
+    hardwareAcceleration: transcodingStatus.hardwareAcceleration,
+    enabledChannelCount: channelService
+      .list()
+      .channels.filter((channel) => channel.enabled).length,
+  })
   const channelTimeline = new ChannelTimelineResolverService(
     channelService,
     mediaDeliveryService,
     daemon.getRepository(),
     () => configService.get(),
-    channelLogos
+    channelLogos,
+    undefined,
+    () => transcodingStatus.activeBackend === 'intel-qsv'
   )
   const channelWorkers = new ContinuousChannelWorkerManager(
     channelTimeline,
@@ -158,12 +169,30 @@ export async function createServer(
       outputRoot: getDataPath('streams'),
       clientLeaseTtlMs: 15_000,
       idleTimeoutMs: 60_000,
-      // Every speculative channel is a complete normalized 1080p encoder.
+      // Every speculative channel is a complete normalized encoder.
       // Running two of those beside the watched channel can starve CPU fallback
       // and make subsequent LG tunes appear to loop. QSV can sustain the two
       // adjacent hot channels; software mode starts only the requested channel.
       maximumWarmChannels: transcodingStatus.hardwareAcceleration ? 2 : 0,
       warmLeaseTtlMs: 60_000,
+      profile: qualityDecision.profile,
+    }
+  )
+  // One client presence holds the whole on-air lineup up. The session TTL is
+  // deliberately far above the 15s heartbeat: a TV that briefly backgrounds or
+  // drops Wi-Fi must not tear down every encoder, while an explicit close on
+  // hide/exit keeps the common case clean.
+  const lineupSessions = new LineupSessionService(
+    channelWorkers,
+    () =>
+      channelService
+        .list()
+        .channels.filter((channel) => channel.enabled && channel.onAir)
+        .map((channel) => channel.id),
+    {
+      ttlMs: 180_000,
+      staggerDelayMs: 750,
+      maximumConcurrentWorkers: qualityDecision.maximumConcurrentWorkers,
     }
   )
   const reconcileGeneratedStations = async (): Promise<void> => {
@@ -244,6 +273,7 @@ export async function createServer(
     media: mediaService,
     hardware: daemon.getHardwareService(),
     transcodingStatus,
+    qualityTier: () => qualityDecision,
     update: updateService,
     onInterludeUpdated: async (policy) => {
       channelService.setInterludePolicy(policy)
@@ -259,34 +289,12 @@ export async function createServer(
           )
       )
     },
-    onLogoUpdated: async () => {
-      const inherited = new Set(
-        channelService
-          .administrationSnapshot()
-          .channels.filter(
-            (channel) =>
-              channel.branding?.burnIn === true &&
-              (channel.branding.mode === 'inherit' ||
-                channel.slots.some(
-                  (slot) => slot.branding?.mode === 'inherit'
-                ))
-          )
-          .map((channel) => channel.id)
-      )
-      await Promise.all(
-        channelWorkers
-          .listStates()
-          .filter(
-            (state) => state.viewerCount > 0 && inherited.has(state.channelId)
-          )
-          .map((state) =>
-            channelWorkers.restart(
-              state.channelId,
-              'Default channel branding changed'
-            )
-          )
-      )
+    // Logos are client chrome only; changing one never restarts video workers.
+    onLogoUpdated: async () => {},
+    onLibraryMonitoringUpdated: (intervalMinutes) => {
+      daemon.configureLibrarySafetyScan(intervalMinutes)
     },
+    libraryMonitoring: () => daemon.getLibraryMonitoringStatus(),
   })
 
   const dashboardController = createDashboardController({
@@ -321,6 +329,7 @@ export async function createServer(
     channels: channelService,
     workers: channelWorkers,
     outputRoot: getDataPath('streams'),
+    lineup: lineupSessions,
   })
 
   const collectionLibraryController = createCollectionLibraryController({
@@ -345,6 +354,7 @@ export async function createServer(
   const metadataSettingsController = createMetadataSettingsController(
     metadataService,
     async () => {
+      await reconcileGeneratedStations()
       await daemon.getEngine().refreshCache(true)
       await playbackService.reconcilePrequeue()
       await Promise.all(
@@ -363,6 +373,9 @@ export async function createServer(
   const clientPresenceController = createClientPresenceController({
     presence: clientPresenceService,
     onPresenceChanged: async (current, previous) => {
+      // A heartbeat keeps the client's entire lineup alive, not just the
+      // watched channel. Unknown sessions (legacy clients) are a no-op.
+      lineupSessions.refresh(current.clientId)
       const changedChannel = previous?.channelId !== current.channelId
       const usesChannelWorker =
         current.playbackMode === 'transcode' ||

@@ -48,6 +48,8 @@ const probe: IMediaProbe = {
       height: 1080,
       fps: 24,
       bitrateMbps: 4,
+      hasAudio: true,
+      audioCodec: 'aac',
     }
   },
 }
@@ -190,6 +192,8 @@ describe('collection-first catalog integration', () => {
       height: 1080,
       fps: 24,
       bitrateMbps: 4,
+      hasAudio: true,
+      audioCodec: 'aac',
     })
     expect(await scan).toBe(1)
 

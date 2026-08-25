@@ -347,6 +347,53 @@ describe('metadata enrichment and policy integration', () => {
     })
   })
 
+  test('retries only unresolved titles without touching parent-decided collections', async () => {
+    const retryable = await addCollection('A Close Shave', 1995)
+    const parentDecided = await addCollection('Mystery Cartoon', 2001)
+    const initiallyUnmatched = new MetadataEnrichmentService(
+      repository,
+      providerFor({ candidates: [] }),
+      runtimeConfig
+    )
+    await initiallyUnmatched.runPending()
+    await repository.updateCollectionOverride(parentDecided.id, 'allow')
+
+    const exact: MetadataCandidate = {
+      provider: 'tmdb',
+      externalId: '532',
+      mediaType: 'tv',
+      title: 'A Close Shave',
+      year: 1995,
+    }
+    const retry = new MetadataEnrichmentService(
+      repository,
+      providerFor({
+        candidates: [exact],
+        candidatesForSearch(input) {
+          return input.title === 'A Close Shave' ? [exact] : []
+        },
+        certification: 'TV-Y7',
+      }),
+      runtimeConfig
+    )
+
+    expect(await retry.retryReviewLibrary()).toMatchObject({
+      status: 'completed',
+      processed: 1,
+      matched: 1,
+    })
+    expect(await repository.getCollectionById(retryable.id)).toMatchObject({
+      metadataExternalId: '532',
+      metadataStatus: 'matched',
+      policyDecision: 'allow',
+    })
+    expect(await repository.getCollectionById(parentDecided.id)).toMatchObject({
+      metadataStatus: 'unmatched',
+      parentOverride: 'allow',
+      effectiveDecision: 'allow',
+    })
+  })
+
   test('stores TMDB episode titles separately from filename-derived titles', async () => {
     const collection = await addCollection('The Magic School Bus')
     const service = new MetadataEnrichmentService(

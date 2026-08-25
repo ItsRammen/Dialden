@@ -73,6 +73,9 @@ export class ToastTVDaemon {
   private metadataService: MetadataEnrichmentService | null = null
   private metadataConfig: MetadataRuntimeConfig | null = null
   private stopping = false
+  private safetyScanTimer: Timer | null = null
+  private safetyScanIntervalMinutes = 15
+  private lastSafetyScanAt: string | null = null
 
   constructor(
     configPath = './data/config.json',
@@ -142,6 +145,44 @@ export class ToastTVDaemon {
   getIndexer(): MediaIndexer {
     if (!this.indexer) throw new Error('Daemon not started')
     return this.indexer
+  }
+
+  getLibraryMonitoringStatus(): {
+    watcherActive: boolean
+    watcherStartedAt: string | null
+    lastWatcherEventAt: string | null
+    safetyScanIntervalMinutes: number
+    lastSafetyScanAt: string | null
+  } {
+    const watcher = this.indexer?.getWatcherState() ?? {
+      active: false,
+      startedAt: null,
+      lastEventAt: null,
+    }
+    return {
+      watcherActive: watcher.active,
+      watcherStartedAt: watcher.startedAt,
+      lastWatcherEventAt: watcher.lastEventAt,
+      safetyScanIntervalMinutes: this.safetyScanIntervalMinutes,
+      lastSafetyScanAt: this.lastSafetyScanAt,
+    }
+  }
+
+  configureLibrarySafetyScan(intervalMinutes: number): void {
+    if (this.safetyScanTimer) clearInterval(this.safetyScanTimer)
+    this.safetyScanTimer = null
+    this.safetyScanIntervalMinutes = normalizeSafetyScanMinutes(intervalMinutes)
+    if (
+      this.safetyScanIntervalMinutes === 0 ||
+      this.stopping ||
+      !this.indexer
+    ) return
+    this.safetyScanTimer = setInterval(() => {
+      this.lastSafetyScanAt = new Date().toISOString()
+      void this.indexer?.scanAll().catch((error) => {
+        console.error('Periodic library safety scan failed:', error)
+      })
+    }, this.safetyScanIntervalMinutes * 60_000)
   }
 
   getPlayer(): IMediaPlayer {
@@ -389,6 +430,13 @@ export class ToastTVDaemon {
         // Start file watcher for real-time updates
         if (!this.stopping) {
           this.indexer?.startWatching()
+          void this.appConfig.get().then((config) => {
+            if (!this.stopping) {
+              this.configureLibrarySafetyScan(
+                config.library.safetyScanIntervalMinutes
+              )
+            }
+          })
         }
       })
       .catch((e) => {
@@ -534,6 +582,8 @@ export class ToastTVDaemon {
 
     this.playbackService?.stopLoop()
     this.indexer?.stopWatching()
+    if (this.safetyScanTimer) clearInterval(this.safetyScanTimer)
+    this.safetyScanTimer = null
 
     if (this.scanTask) {
       await this.scanTask
@@ -574,4 +624,11 @@ export class ToastTVDaemon {
 
     console.log('ToastTV daemon stopped')
   }
+}
+
+function normalizeSafetyScanMinutes(value: number): number {
+  if (!Number.isFinite(value)) return 15
+  const minutes = Math.trunc(value)
+  if (minutes <= 0) return 0
+  return Math.max(5, Math.min(1440, minutes))
 }

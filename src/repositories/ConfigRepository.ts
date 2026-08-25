@@ -49,6 +49,10 @@ export interface AppConfig {
   playback: {
     safeMode: boolean // Exclude incompatible files from queue (default: true)
   }
+  library: {
+    /** Zero disables the periodic fallback; filesystem watching remains active. */
+    safetyScanIntervalMinutes: number
+  }
 }
 
 export type DeepPartial<T> = {
@@ -94,6 +98,9 @@ const DEFAULT_CONFIG: AppConfig = {
   },
   playback: {
     safeMode: true,
+  },
+  library: {
+    safetyScanIntervalMinutes: 15,
   },
 }
 
@@ -197,6 +204,10 @@ export class ConfigRepository {
     await setIfMissing('logo.x', DEFAULT_CONFIG.logo.x.toString())
     await setIfMissing('logo.y', DEFAULT_CONFIG.logo.y.toString())
     await setIfMissing('logo.imagePath', this.defaultLogoPath)
+    await setIfMissing(
+      'library.safetyScanIntervalMinutes',
+      DEFAULT_CONFIG.library.safetyScanIntervalMinutes.toString()
+    )
     // Note: Special media discovery (intro/outro/offair) is now handled by ConfigService.discoverSpecialMedia()
   }
 
@@ -246,6 +257,11 @@ export class ConfigRepository {
       },
       playback: {
         safeMode: s['playback.safeMode'] !== 'false', // Default true
+      },
+      library: {
+        safetyScanIntervalMinutes: parseSafetyScanInterval(
+          s['library.safetyScanIntervalMinutes']
+        ),
       },
     }
   }
@@ -331,7 +347,27 @@ export class ConfigRepository {
       if (partial.logo.y !== undefined)
         await this.repository.setSetting('logo.y', partial.logo.y.toString())
     }
+
+    if (partial.library?.safetyScanIntervalMinutes !== undefined) {
+      await this.repository.setSetting(
+        'library.safetyScanIntervalMinutes',
+        normalizeSafetyScanInterval(
+          partial.library.safetyScanIntervalMinutes
+        ).toString()
+      )
+    }
   }
+}
+
+function parseSafetyScanInterval(value: string | undefined): number {
+  return normalizeSafetyScanInterval(Number.parseInt(value ?? '15', 10))
+}
+
+function normalizeSafetyScanInterval(value: number): number {
+  if (!Number.isFinite(value)) return 15
+  const minutes = Math.trunc(value)
+  if (minutes <= 0) return 0
+  return Math.max(5, Math.min(1440, minutes))
 }
 
 // Re-export ConfigManager as alias for backward compatibility

@@ -41,6 +41,7 @@ export interface HeadlessChannelViewModel {
     readonly status: 'starting' | 'live' | 'transitioning' | 'idle' | 'error' | 'stopped'
     readonly transcoding: boolean
     readonly usingFallback: boolean
+    readonly sessionHeld?: boolean
     readonly errorMessage?: string
   }
 }
@@ -242,6 +243,7 @@ function renderChannel(channel: HeadlessChannelViewModel): string {
         channel.worker
           ? `<p class="headless-worker headless-worker-${channel.worker.status}">
               Channel worker: <strong>${escapeHtml(channel.worker.status)}</strong>
+              ${channel.worker.sessionHeld ? ' · held by lineup session' : ''}
               ${channel.worker.transcoding ? ' · H.264/AAC transcoding' : ' · no active encoder'}
               ${channel.worker.usingFallback ? ' · emergency fallback' : ''}
               ${channel.worker.errorMessage ? `<span>${escapeHtml(channel.worker.errorMessage)}</span>` : ''}

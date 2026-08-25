@@ -14,10 +14,13 @@ export interface ChannelTimelinePosition {
   readonly sourceDurationSeconds?: number
   /** Set false for silent media so the pipeline synthesizes normalized audio. */
   readonly hasAudio?: boolean
+  /**
+   * 'hw' marks a source the hardware decoder is known to handle, letting the
+   * pipeline offload that input's decode. Undefined or 'sw' decodes on CPU.
+   */
+  readonly decodeHint?: 'hw' | 'sw'
   /** Loop a finite emergency asset until the scheduled replacement range ends. */
   readonly loopSource?: boolean
-  /** Undefined uses the channel default; null explicitly disables branding. */
-  readonly overlay?: ChannelVideoOverlay | null
   readonly timelineRevision: string
   readonly type:
     | 'program'
@@ -42,16 +45,6 @@ export interface ChannelTimelineResolver {
     missing: ChannelTimelinePosition | null,
     at: Date
   ): Promise<ChannelTimelinePosition | null>
-  overlay?(channelId: string, at?: Date): Promise<ChannelVideoOverlay | null>
-}
-
-export interface ChannelVideoOverlay {
-  readonly sourcePath: string
-  readonly opacity: number
-  readonly position: 0 | 2 | 6 | 8
-  readonly x: number
-  readonly y: number
-  readonly sizePercent: number
 }
 
 export interface ChannelWorkerClock {
@@ -99,7 +92,6 @@ export interface ChannelPipelineRequest {
   /** Existing output must be appended to atomically; never replace the URL. */
   /** False for a cold worker so stale playlists are replaced before tuning. */
   readonly appendToExistingPlaylist: boolean
-  readonly overlay?: ChannelVideoOverlay
 }
 
 export interface ChannelPipelineFactory {
@@ -120,6 +112,8 @@ export interface ContinuousChannelWorkerState {
   readonly channelId: string
   readonly status: ChannelWorkerStatus
   readonly viewerCount: number
+  /** True when an open lineup session — not a direct viewer — holds this worker. */
+  readonly sessionHeld?: boolean
   readonly currentScheduleItemId?: string
   readonly nextScheduleItemId?: string
   readonly sourceOffsetSeconds?: number
@@ -140,6 +134,8 @@ export interface ContinuousChannelWorkerManagerOptions {
   /** Maximum number of zero-viewer channels kept ready for fast tuning. */
   readonly maximumWarmChannels?: number
   readonly warmLeaseTtlMs?: number
+  /** How long a session lease survives without a heartbeat refresh. */
+  readonly sessionLeaseTtlMs?: number
   readonly profile?: Partial<ContinuousHlsProfile>
 }
 
@@ -154,6 +150,7 @@ interface WorkerRecord {
   anonymousViewers: number
   leases: Map<string, { expiresAt: number; timer: unknown }>
   warmLeases: Map<string, { expiresAt: number; timer: unknown }>
+  sessionLeases: Map<string, { expiresAt: number; timer: unknown }>
   lastWarmedAt?: number
   appendNextStart: boolean
 }
@@ -169,7 +166,7 @@ const DEFAULT_PROFILE: ContinuousHlsProfile = {
   audioCodec: 'aac',
   audioChannels: 2,
   segmentSeconds: 1,
-  playlistWindowSegments: 12,
+  playlistWindowSegments: 5,
   maximumWidth: 1920,
   maximumHeight: 1080,
 }
@@ -187,6 +184,7 @@ export class ContinuousChannelWorkerManager {
   private readonly clientLeaseTtlMs: number
   private readonly maximumWarmChannels: number
   private readonly warmLeaseTtlMs: number
+  private readonly sessionLeaseTtlMs: number
 
   constructor(
     private readonly timeline: ChannelTimelineResolver,
@@ -200,8 +198,9 @@ export class ContinuousChannelWorkerManager {
     this.clientLeaseTtlMs = options.clientLeaseTtlMs ?? 45_000
     this.maximumWarmChannels = options.maximumWarmChannels ?? 2
     this.warmLeaseTtlMs = options.warmLeaseTtlMs ?? 30_000
-    if (this.idleTimeoutMs < 60_000 || this.idleTimeoutMs > 120_000) {
-      throw new Error('Channel worker idle timeout must be between 60 and 120 seconds')
+    this.sessionLeaseTtlMs = options.sessionLeaseTtlMs ?? 180_000
+    if (this.idleTimeoutMs < 10_000 || this.idleTimeoutMs > 600_000) {
+      throw new Error('Channel worker idle timeout must be between 10 seconds and 10 minutes')
     }
     if (this.restartDelayMs < 0) {
       throw new Error('Channel worker restart delay cannot be negative')
@@ -209,11 +208,14 @@ export class ContinuousChannelWorkerManager {
     if (this.clientLeaseTtlMs < 10_000 || this.clientLeaseTtlMs > 120_000) {
       throw new Error('Channel client lease TTL must be between 10 and 120 seconds')
     }
-    if (this.maximumWarmChannels < 0 || this.maximumWarmChannels > 4) {
-      throw new Error('At most four adjacent channels may be kept warm')
+    if (this.maximumWarmChannels < 0 || this.maximumWarmChannels > 16) {
+      throw new Error('At most sixteen channels may be kept warm')
     }
     if (this.warmLeaseTtlMs < 10_000 || this.warmLeaseTtlMs > 60_000) {
       throw new Error('Channel warm lease TTL must be between 10 and 60 seconds')
+    }
+    if (this.sessionLeaseTtlMs < 30_000 || this.sessionLeaseTtlMs > 600_000) {
+      throw new Error('Channel session lease TTL must be between 30 seconds and 10 minutes')
     }
     this.profile = { ...DEFAULT_PROFILE, ...options.profile }
   }
@@ -283,6 +285,104 @@ export class ContinuousChannelWorkerManager {
     record.state = { ...record.state, viewerCount: record.anonymousViewers + record.leases.size }
     this.enterIdleIfUnused(record)
     return this.snapshot(record)
+  }
+
+  /**
+   * Registers a session-scoped demand marker and kicks a background start.
+   * Session leases never count as viewers, so dashboard figures stay honest,
+   * and the returned snapshot does not wait for the first HLS segment: the
+   * lineup spin-up staggers these starts deliberately.
+   */
+  async holdSession(
+    channelId: string,
+    clientId: string
+  ): Promise<ContinuousChannelWorkerState> {
+    if (!/^[a-zA-Z0-9._:-]{1,160}$/.test(clientId)) {
+      throw new Error('Client ID is not a safe session lease identifier')
+    }
+    const record = this.record(channelId)
+    this.renewSessionLease(record, clientId)
+    record.state = { ...record.state, idleSince: undefined }
+    if (record.idleTimer !== undefined) {
+      this.clock.clearTimeout(record.idleTimer)
+      record.idleTimer = undefined
+    }
+    if (record.stopping) await record.stopping
+    if (!record.pipeline && record.restartTimer === undefined && !record.startup) {
+      void this.ensureStarted(record).catch(() => {
+        // A failed speculative start is surfaced through state.lastError; the
+        // next explicit tune or heartbeat retry takes the blocking path.
+      })
+    }
+    return this.snapshot(record)
+  }
+
+  /** Blocking readiness for the one channel a client is actively joining. */
+  async whenReady(channelId: string): Promise<ContinuousChannelWorkerState> {
+    const record = this.record(channelId)
+    if (record.stopping) await record.stopping
+    if (!record.pipeline && record.restartTimer === undefined) {
+      await this.ensureStarted(record)
+    }
+    return this.snapshot(record)
+  }
+
+  hasSessionLease(channelId: string, clientId: string): boolean {
+    return this.records.get(channelId)?.sessionLeases.has(clientId) ?? false
+  }
+
+  refreshSession(channelId: string, clientId: string): boolean {
+    const record = this.records.get(channelId)
+    if (!record || !record.sessionLeases.has(clientId)) return false
+    this.renewSessionLease(record, clientId)
+    return true
+  }
+
+  async releaseSession(channelId: string, clientId: string): Promise<void> {
+    const record = this.records.get(channelId)
+    const lease = record?.sessionLeases.get(clientId)
+    if (!record || !lease) return
+    this.clock.clearTimeout(lease.timer)
+    record.sessionLeases.delete(clientId)
+    if (
+      record.sessionLeases.size === 0 &&
+      record.warmLeases.size === 0 &&
+      record.state.viewerCount === 0
+    ) {
+      await this.stopRecord(record, 'stopped')
+      return
+    }
+    this.enterIdleIfUnused(record)
+  }
+
+  private renewSessionLease(record: WorkerRecord, clientId: string): void {
+    const existing = record.sessionLeases.get(clientId)
+    if (existing) this.clock.clearTimeout(existing.timer)
+    const expiresAt = this.clock.now().getTime() + this.sessionLeaseTtlMs
+    const timer = this.clock.setTimeout(
+      () => this.expireSessionLease(record, clientId, expiresAt),
+      this.sessionLeaseTtlMs
+    )
+    record.sessionLeases.set(clientId, { expiresAt, timer })
+  }
+
+  private async expireSessionLease(
+    record: WorkerRecord,
+    clientId: string,
+    expiresAt: number
+  ): Promise<void> {
+    const lease = record.sessionLeases.get(clientId)
+    if (!lease || lease.expiresAt !== expiresAt) return
+    record.sessionLeases.delete(clientId)
+    if (
+      record.sessionLeases.size === 0 &&
+      record.warmLeases.size === 0 &&
+      record.state.viewerCount === 0
+    ) {
+      await this.stopRecord(record, 'stopped')
+      return
+    }
+    this.enterIdleIfUnused(record)
   }
 
   /**
@@ -381,8 +481,10 @@ export class ContinuousChannelWorkerManager {
     if (!record) return null
     for (const lease of record.leases.values()) this.clock.clearTimeout(lease.timer)
     for (const lease of record.warmLeases.values()) this.clock.clearTimeout(lease.timer)
+    for (const lease of record.sessionLeases.values()) this.clock.clearTimeout(lease.timer)
     record.leases.clear()
     record.warmLeases.clear()
+    record.sessionLeases.clear()
     record.anonymousViewers = 0
     record.state = { ...record.state, viewerCount: 0 }
     await this.stopRecord(record, 'stopped', false)
@@ -406,6 +508,10 @@ export class ContinuousChannelWorkerManager {
         this.clock.clearTimeout(lease.timer)
       }
       record.warmLeases.clear()
+      for (const lease of record.sessionLeases.values()) {
+        this.clock.clearTimeout(lease.timer)
+      }
+      record.sessionLeases.clear()
     }
     await Promise.all(
       [...this.records.values()].map((record) =>
@@ -425,6 +531,7 @@ export class ContinuousChannelWorkerManager {
       anonymousViewers: 0,
       leases: new Map(),
       warmLeases: new Map(),
+      sessionLeases: new Map(),
       appendNextStart: false,
       state: {
         channelId,
@@ -464,7 +571,13 @@ export class ContinuousChannelWorkerManager {
     const outputDirectory = `${this.options.outputRoot.replace(/[\\/]+$/, '')}/${record.state.channelId}/live`
     try {
       await this.files.prepareOutput(outputDirectory)
-      await this.files.cleanupOutput(outputDirectory)
+      try {
+        void Promise.resolve(this.files.cleanupOutput(outputDirectory)).catch(
+          () => undefined
+        )
+      } catch {
+        // Cleanup must never block or fail a spawn.
+      }
       let sequence = this.timeline.resolveWindow
         ? [...(await this.timeline.resolveWindow(record.state.channelId, startedAt, 3))]
         : []
@@ -472,20 +585,24 @@ export class ContinuousChannelWorkerManager {
       if (sequence.length === 0 && position) sequence = [position]
       let usingFallback = false
       const availableSequence: ChannelTimelinePosition[] = []
-      for (const candidate of sequence) {
-        if (await this.files.sourceExists(candidate.sourcePath)) {
-          availableSequence.push(candidate)
-          continue
+      // The resolver already stats every window item before returning it, so a
+      // second NAS round trip per lookahead item would only delay the spawn.
+      // The live item alone is re-verified because its offset must be exact.
+      const [head, ...tail] = sequence
+      if (head) {
+        if (await this.files.sourceExists(head.sourcePath)) {
+          availableSequence.push(head)
+        } else {
+          const fallback = (await this.timeline.fallback?.(record.state.channelId, head, startedAt)) ?? null
+          usingFallback = true
+          if (fallback && (await this.files.sourceExists(fallback.sourcePath))) {
+            availableSequence.push(fallback)
+          } else {
+            throw new Error(`Scheduled source is missing: ${head.sourcePath}`)
+          }
         }
-        const fallback = (await this.timeline.fallback?.(record.state.channelId, candidate, startedAt)) ?? null
-        usingFallback = true
-        if (fallback && (await this.files.sourceExists(fallback.sourcePath))) {
-          availableSequence.push(fallback)
-          continue
-        }
-        if (availableSequence.length === 0) throw new Error(`Scheduled source is missing: ${candidate.sourcePath}`)
-        break
       }
+      availableSequence.push(...tail)
       if (!position && availableSequence.length === 0) {
         const fallback = (await this.timeline.fallback?.(record.state.channelId, null, startedAt)) ?? null
         usingFallback = true
@@ -496,19 +613,6 @@ export class ContinuousChannelWorkerManager {
       if (!position) throw new Error('No scheduled source is available')
       const activePosition: ChannelTimelinePosition = position
       if (sequence.length === 0) sequence = [activePosition]
-      const requestedOverlay =
-        (await this.timeline.overlay?.(record.state.channelId, startedAt)) ?? null
-      const overlay =
-        requestedOverlay &&
-        (await this.files.sourceExists(requestedOverlay.sourcePath))
-          ? requestedOverlay
-          : undefined
-      sequence = await Promise.all(sequence.map(async (item) => {
-        if (item.overlay === undefined || item.overlay === null) return item
-        return (await this.files.sourceExists(item.overlay.sourcePath))
-          ? item
-          : { ...item, overlay: null }
-      }))
       const outputReadyAfter = this.clock.now().getTime()
       const pipeline = await this.pipelines.start({
         channelId: record.state.channelId,
@@ -519,7 +623,6 @@ export class ContinuousChannelWorkerManager {
         sequence,
         profile: this.profile,
         appendToExistingPlaylist,
-        ...(overlay ? { overlay } : {}),
       })
       if (generation !== record.generation) {
         await pipeline.stop()
@@ -555,7 +658,10 @@ export class ContinuousChannelWorkerManager {
       }
       record.state = {
         ...record.state,
-        status: record.state.viewerCount > 0 ? 'live' : 'idle',
+        status:
+          record.state.viewerCount > 0 || record.sessionLeases.size > 0
+            ? 'live'
+            : 'idle',
         currentScheduleItemId: activePosition.scheduleItemId,
         nextScheduleItemId: sequence[1]?.scheduleItemId ?? activePosition.nextScheduleItemId,
         sourceOffsetSeconds: activePosition.sourceOffsetSeconds,
@@ -682,13 +788,18 @@ export class ContinuousChannelWorkerManager {
   }
 
   private hasDemand(record: WorkerRecord): boolean {
-    return record.state.viewerCount > 0 || record.warmLeases.size > 0
+    return (
+      record.state.viewerCount > 0 ||
+      record.warmLeases.size > 0 ||
+      record.sessionLeases.size > 0
+    )
   }
 
   private enterIdleIfUnused(record: WorkerRecord): void {
     if (
       record.state.viewerCount !== 0 ||
       record.warmLeases.size > 0 ||
+      record.sessionLeases.size > 0 ||
       !record.pipeline ||
       record.idleTimer !== undefined
     ) return
@@ -728,6 +839,7 @@ export class ContinuousChannelWorkerManager {
   }
 
   private snapshot(record: WorkerRecord): ContinuousChannelWorkerState {
-    return { ...record.state }
+    const { sessionHeld: _stale, ...state } = record.state
+    return { ...state, sessionHeld: record.sessionLeases.size > 0 }
   }
 }

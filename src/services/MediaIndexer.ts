@@ -260,6 +260,7 @@ export class MediaIndexer {
     console.log(
       `Indexed ${total} files (${videoCount} library, ${interludeCount} interludes), removed ${removed} stale`
     )
+    await this.backfillAudioProbes()
     this.scanState = {
       ...this.scanState,
       status: 'completed',
@@ -269,6 +270,42 @@ export class MediaIndexer {
     }
     await this.emitScanEvent('library.scan.completed')
     return total
+  }
+
+  /**
+   * Rows indexed before audio-presence probing existed stay NULL until this
+   * bounded pass probes them. Each scan converges a slice of the library so
+   * channel workers eventually never need a runtime ffprobe.
+   */
+  private async backfillAudioProbes(): Promise<void> {
+    if (typeof this.repository.listMissingAudioProbe !== 'function') return
+    let pending: Awaited<ReturnType<IMediaRepository['listMissingAudioProbe']>> | undefined
+    try {
+      pending = await this.repository.listMissingAudioProbe(40)
+    } catch (error) {
+      console.error('Audio probe backfill query failed', error)
+      return
+    }
+    if (!Array.isArray(pending) || pending.length === 0) return
+    const results = await this.probeParallel(
+      pending.map((item) => item.path),
+      4
+    )
+    let updated = 0
+    for (let index = 0; index < pending.length; index++) {
+      const item = pending[index]
+      const metadata = results[index]
+      if (!item || !metadata || typeof metadata.hasAudio !== 'boolean') continue
+      await this.repository.updateAudioProbe(
+        item.id,
+        metadata.hasAudio,
+        metadata.audioCodec
+      )
+      updated += 1
+    }
+    if (updated > 0) {
+      console.log(`Backfilled audio probe for ${updated} files`)
+    }
   }
 
   /**
@@ -292,6 +329,8 @@ export class MediaIndexer {
         height: item.height,
         fps: null, // Not stored currently, use null
         bitrateMbps: null, // Not stored currently, use null
+        hasAudio: item.hasAudio ?? null,
+        audioCodec: item.audioCodec ?? null,
       }
 
       const newCompatibility = this.checkCompatibility(metadata)
@@ -443,6 +482,8 @@ export class MediaIndexer {
         height: descriptor.existing?.height ?? null,
         fps: null,
         bitrateMbps: null,
+        hasAudio: descriptor.existing?.hasAudio ?? null,
+        audioCodec: descriptor.existing?.audioCodec ?? null,
       }
       const metadata = probeFailed
         ? { ...previousMetadata, durationSeconds: 0 }
@@ -477,6 +518,8 @@ export class MediaIndexer {
         width: metadata.width,
         height: metadata.height,
         warning,
+        hasAudio: metadata.hasAudio,
+        audioCodec: metadata.audioCodec,
         mtime: probeFailed || !descriptor.shouldProbe
           ? (descriptor.existing?.mtime ?? null)
           : descriptor.mtime,
@@ -638,6 +681,8 @@ export class MediaIndexer {
       height: null,
       fps: null,
       bitrateMbps: null,
+      hasAudio: null,
+      audioCodec: null,
     }
   }
 
@@ -795,6 +840,8 @@ export class MediaIndexer {
 
   private watcher: import('./FileWatcherService').FileWatcherService | null =
     null
+  private watcherStartedAt: string | null = null
+  private lastWatcherEventAt: string | null = null
 
   /**
    * Start watching media directories for changes
@@ -817,11 +864,13 @@ export class MediaIndexer {
     )
 
     watcher.on('batch', (paths: string[]) => {
+      this.lastWatcherEventAt = new Date().toISOString()
       this.indexBatch(paths).catch(console.error)
     })
 
     watcher.start()
     this.watcher = watcher
+    this.watcherStartedAt = new Date().toISOString()
     console.log('MediaIndexer: File watcher started')
   }
 
@@ -832,6 +881,7 @@ export class MediaIndexer {
     if (this.watcher) {
       this.watcher.stop()
       this.watcher = null
+      this.watcherStartedAt = null
       console.log('MediaIndexer: File watcher stopped')
     }
   }
@@ -846,5 +896,17 @@ export class MediaIndexer {
     // must be reconciled only inside its own root. Reuse the authoritative
     // root-aware scan instead of maintaining a second, weaker indexing path.
     return this.scanAll()
+  }
+
+  getWatcherState(): {
+    active: boolean
+    startedAt: string | null
+    lastEventAt: string | null
+  } {
+    return {
+      active: this.watcher !== null,
+      startedAt: this.watcherStartedAt,
+      lastEventAt: this.lastWatcherEventAt,
+    }
   }
 }

@@ -17,7 +17,7 @@ export interface MetadataSettingsDraft {
 export interface MetadataSettingsRenderOptions {
   readonly saved?: boolean
   readonly testResult?: 'success' | 'failed'
-  readonly reevaluationStarted?: boolean
+  readonly maintenanceStarted?: 'policy' | 'review' | 'full'
   readonly reevaluationUnavailable?: boolean
   readonly errors?: Partial<Record<MetadataConfigField, string>>
   /** Non-secret values may be redisplayed after validation. */
@@ -208,14 +208,28 @@ export function renderMetadataSettings(
         <div class="card-header metadata-card-heading">
           <div>
             <p class="metadata-step">Library maintenance</p>
-            <h2>Re-evaluate matches and policy</h2>
+            <h2>Re-evaluate library decisions</h2>
           </div>
         </div>
-        <p>Search automatic TMDB matches again, refresh genres, networks, studios, episode details, and ratings, then recalculate the Kids 7 policy and channel categories.</p>
-        <p class="hint"><strong>Parent approve and Parent block choices are preserved.</strong> Manually confirmed TMDB identities stay locked and are refreshed without choosing a different title.</p>
-        <form method="post" action="/settings/metadata/reevaluate" onsubmit="return confirm('Re-evaluate metadata and automatic policy decisions for the whole library? This may make many TMDB requests.');">
-          <button class="btn btn-secondary" type="submit" ${config.configured ? '' : 'disabled'}>Re-evaluate entire library</button>
-        </form>
+        <p>Choose the smallest operation that fits the change. Parent approvals and blocks are always preserved.</p>
+        <div class="metadata-maintenance-actions">
+          <form method="post" action="/settings/metadata/reapply-policy">
+            <h3>Apply updated rules</h3>
+            <p>Recalculate the Kids 7 policy and station eligibility from cached metadata. No TMDB requests.</p>
+            <button class="btn btn-secondary" type="submit">Apply cached rules</button>
+          </form>
+          <form method="post" action="/settings/metadata/retry-review" onsubmit="return confirm('Retry automatic matching and ratings only for unresolved collections?');">
+            <h3>Retry Needs Review</h3>
+            <p>Retry ambiguous, unmatched, unrated, and failed collections without touching parent-decided titles.</p>
+            <button class="btn btn-primary" type="submit" ${config.configured ? '' : 'disabled'}>Retry review queue</button>
+          </form>
+          <form method="post" action="/settings/metadata/reevaluate" onsubmit="return confirm('Rebuild automatic metadata for the whole library? This may make many TMDB requests.');">
+            <h3>Rebuild all metadata</h3>
+            <p>Refresh every automatic match, provider field, episode record, rating, and category.</p>
+            <button class="btn btn-secondary" type="submit" ${config.configured ? '' : 'disabled'}>Rebuild entire library</button>
+          </form>
+        </div>
+        <p class="hint"><strong>Manual TMDB identities remain locked.</strong> Explicit Parent approve and Parent block choices are never replaced.</p>
       </section>
 
       <aside class="metadata-settings-note">
@@ -245,8 +259,14 @@ export function renderMetadataTestResult(
 function renderPageAlert(options: MetadataSettingsRenderOptions): string {
   const messages: string[] = []
   if (options.saved) messages.push('Metadata settings saved in appdata.')
-  if (options.reevaluationStarted) {
-    messages.push('Library re-evaluation started. Progress appears on the dashboard and library pages.')
+  if (options.maintenanceStarted === 'policy') {
+    messages.push('Cached policy re-evaluation started. No TMDB requests are required.')
+  }
+  if (options.maintenanceStarted === 'review') {
+    messages.push('Needs Review retry started. Progress appears on the dashboard and library pages.')
+  }
+  if (options.maintenanceStarted === 'full') {
+    messages.push('Full metadata rebuild started. Progress appears on the dashboard and library pages.')
   }
   if (options.reevaluationUnavailable) {
     messages.push('Configure a TMDB API key before re-evaluating the library.')

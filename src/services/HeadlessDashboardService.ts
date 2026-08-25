@@ -297,12 +297,14 @@ function channelModel(
           status: worker.status,
           transcoding: worker.transcoding,
           usingFallback: worker.usingFallback,
+          sessionHeld: worker.sessionHeld === true,
           ...(worker.lastError ? { errorMessage: worker.lastError } : {}),
         }
       : {
           status: 'stopped',
           transcoding: false,
           usingFallback: false,
+          sessionHeld: false,
         },
   }
 }

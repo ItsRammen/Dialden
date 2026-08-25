@@ -3,17 +3,24 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import type { ChannelService } from '../services/ChannelService'
 import type { ContinuousChannelWorkerManager } from '../services/ContinuousChannelWorkerManager'
+import type {
+  LineupSessionService,
+  LineupSessionSnapshotEntry,
+} from '../services/LineupSessionService'
 
 interface ChannelStreamControllerDeps {
   channels: Pick<ChannelService, 'list'>
   workers: Pick<ContinuousChannelWorkerManager, 'touch' | 'warm' | 'getState'>
   outputRoot: string
+  lineup?: Pick<LineupSessionService, 'open' | 'close' | 'snapshot'>
 }
 
 export const CLIENT_CHANNEL_WARM_ROUTE = '/api/client/v1/channels/warm'
 export const CLIENT_CHANNEL_STARTUP_ROUTE = '/api/client/v1/channels/startup'
 export const CLIENT_CHANNEL_PREPARE_ROUTE =
   '/api/client/v1/channels/:id/prepare'
+export const CLIENT_SESSION_ROUTE = '/api/client/v1/session'
+export const CLIENT_SESSION_CLOSE_ROUTE = '/api/client/v1/session/close'
 
 const SEGMENT_NAME = /^segment-\d{13}\.ts$/
 
@@ -22,11 +29,30 @@ export function createChannelStreamController({
   channels,
   workers,
   outputRoot,
+  lineup,
 }: ChannelStreamControllerDeps) {
   const controller = new Hono()
 
   controller.use(
     '/api/client/v1/channels/*',
+    cors({
+      origin: '*',
+      allowMethods: ['POST', 'OPTIONS'],
+      allowHeaders: ['Content-Type'],
+      maxAge: 300,
+    })
+  )
+  controller.use(
+    CLIENT_SESSION_ROUTE,
+    cors({
+      origin: '*',
+      allowMethods: ['POST', 'OPTIONS'],
+      allowHeaders: ['Content-Type'],
+      maxAge: 300,
+    })
+  )
+  controller.use(
+    CLIENT_SESSION_CLOSE_ROUTE,
     cors({
       origin: '*',
       allowMethods: ['POST', 'OPTIONS'],
@@ -64,21 +90,14 @@ export function createChannelStreamController({
       request.lastChannelId !== selected.id
     try {
       const state = await workers.touch(selected.id, request.clientId)
-      let warmed: string[] = []
-      if (request.warmAdjacent !== false && available.length > 1) {
-        const selectedIndex = available.findIndex(
-          (channel) => channel.id === selected.id
-        )
-        const adjacent = adjacentChannelIds(available, selectedIndex)
-        warmed = (await workers.warm(adjacent, request.clientId)).map(
-          (worker) => worker.channelId
-        )
-      }
+      // Adjacent warming retired: lineup sessions hold every channel hot for
+      // session clients, and speculative encoders starved software boxes.
+      // The legacy response shape is preserved for sideloaded clients.
       return c.json({
         channel: selected,
         status: state.status === 'error' ? 'unavailable' : 'ready',
         streamUrl: `/api/v1/channels/${encodeURIComponent(selected.id)}/live/index.m3u8`,
-        warmed,
+        warmed: [],
         serverTimeMs: Date.now(),
         fallbackReason: fellBack
           ? 'The last channel is no longer available; the first on-air channel was selected.'
@@ -90,6 +109,76 @@ export function createChannelStreamController({
         503
       )
     }
+  })
+
+  controller.post(CLIENT_SESSION_ROUTE, async (c) => {
+    c.header('Cache-Control', 'no-store')
+    const parsed = await parseClientRequest(c)
+    if ('response' in parsed) return parsed.response
+    const request = parsed.input as {
+      clientId?: unknown
+      lastChannelId?: unknown
+      lineup?: unknown
+    }
+    if (
+      typeof request.clientId !== 'string' ||
+      (request.lastChannelId !== undefined &&
+        request.lastChannelId !== null &&
+        typeof request.lastChannelId !== 'string')
+    ) {
+      return c.json({ error: 'Session requires a clientId' }, 400)
+    }
+    if (!lineup || request.lineup === false) {
+      return c.json({ error: 'Lineup sessions are not available' }, 501)
+    }
+    const available = availableChannels(channels)
+    if (available.length === 0) {
+      return c.json({ error: 'No channels are currently on air' }, 404)
+    }
+    const selected =
+      available.find((channel) => channel.id === request.lastChannelId) ??
+      available[0]!
+    const fellBack =
+      typeof request.lastChannelId === 'string' &&
+      request.lastChannelId !== selected.id
+    try {
+      const entry: LineupSessionSnapshotEntry = await lineup.open(
+        request.clientId,
+        selected.id
+      )
+      const state = workers.getState(selected.id)
+      return c.json({
+        channel: selected,
+        status: state && state.status === 'error' ? 'unavailable' : 'ready',
+        streamUrl: `/api/v1/channels/${encodeURIComponent(selected.id)}/live/index.m3u8`,
+        serverTimeMs: Date.now(),
+        fallbackReason: fellBack
+          ? 'The last channel is no longer available; the first on-air channel was selected.'
+          : null,
+        lineup: {
+          total: entry.channelIds.length,
+          ready: entry.ready,
+          pending: entry.pending,
+        },
+      })
+    } catch (error) {
+      return c.json(
+        { error: error instanceof Error ? error.message : 'Session could not be opened' },
+        503
+      )
+    }
+  })
+
+  controller.post(CLIENT_SESSION_CLOSE_ROUTE, async (c) => {
+    c.header('Cache-Control', 'no-store')
+    const parsed = await parseClientRequest(c)
+    if ('response' in parsed) return parsed.response
+    const request = parsed.input as { clientId?: unknown }
+    if (typeof request.clientId !== 'string') {
+      return c.json({ error: 'Close requires a clientId' }, 400)
+    }
+    await lineup?.close(request.clientId)
+    return c.json({ ok: true, serverTimeMs: Date.now() })
   })
 
   controller.post(CLIENT_CHANNEL_PREPARE_ROUTE, async (c) => {
@@ -248,18 +337,6 @@ function availableChannels(channels: Pick<ChannelService, 'list'>) {
   return channels
     .list()
     .channels.filter((channel) => channel.enabled && channel.onAir)
-}
-
-function adjacentChannelIds(
-  channels: ReturnType<typeof availableChannels>,
-  selectedIndex: number
-): string[] {
-  const ids: string[] = []
-  const previous = channels[(selectedIndex - 1 + channels.length) % channels.length]
-  const next = channels[(selectedIndex + 1) % channels.length]
-  if (previous) ids.push(previous.id)
-  if (next && !ids.includes(next.id)) ids.push(next.id)
-  return ids.slice(0, 2)
 }
 
 function hasChannel(

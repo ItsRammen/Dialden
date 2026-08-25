@@ -23,6 +23,7 @@ const config: AppConfig = {
   },
   detection: { cecEnabled: true, heartbeatIntervalMs: 30_000 },
   playback: { safeMode: true },
+  library: { safetyScanIntervalMinutes: 15 },
 }
 
 describe('settings template', () => {

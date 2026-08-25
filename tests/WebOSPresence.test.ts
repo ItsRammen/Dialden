@@ -51,24 +51,24 @@ describe('LG webOS presence telemetry', () => {
       'utf8'
     )
 
-    expect(script).toContain('var LIVE_STREAM_RETRY_DELAYS = [750, 1500, 3000, 5000, 8000]')
-    expect(script).toContain('var TUNING_STABLE_MS = 850')
+    expect(script).toContain('var LIVE_STREAM_RETRY_DELAYS = [300, 750, 1500, 3000, 5000]')
+    expect(script).toContain('var TUNING_STABLE_MS = 150')
     expect(script).toContain('var LIVE_EDGE_TOLERANCE_SECONDS = 3')
     expect(script).toContain('scheduleLiveRetry(failedUrl, channel.id)')
     expect(script).toContain('state.failedLiveUrl = null')
     expect(script).toContain("beginTuning('Retrying the live channel…')")
     expect(script).toContain('seekHlsLiveEdge()')
     expect(script).toContain("'tune=' + encodeURIComponent(String(state.tuneGeneration))")
-    expect(script).toContain('liveEdge - elements.video.currentTime > DRIFT_LIMIT_SECONDS')
+    expect(script).toContain('liveEdge - video.currentTime > DRIFT_LIMIT_SECONDS')
     expect(script).toContain('detachVideoForTune();')
-    expect(script).toContain('window.ToastTVPlaybackPolicy.resetMediaElement(elements.video)')
-    expect(script).toContain('window.ToastTVPlaybackPolicy.loadMediaElement(elements.video, source.url)')
+    expect(script).toContain('window.ToastTVPlaybackPolicy.resetMediaElement(activeVideo())')
+    expect(script).toContain('window.ToastTVPlaybackPolicy.loadMediaElement(activeVideo(), source.url)')
     expect(script).toContain('window.ToastTVPlaybackPolicy.isPlaybackStable(video)')
-    expect(script).toContain('event.currentTarget !== elements.video')
-    expect(script).toContain('elements.video.muted = false')
+    expect(script).toContain('event.currentTarget !== activeVideo()')
+    expect(script).toContain('video.muted = false')
     expect(script).toContain('if (!state.hlsSeekPending)')
     expect(script).toContain('generation !== state.tuneGeneration')
-    expect(script).toContain('video !== elements.video')
+    expect(script).toContain('video !== activeVideo()')
     expect(script).not.toContain('LIVE_EDGE_LOCK_TIMEOUT_MS')
     expect(script).not.toContain("retryLiveStream('Tuning — reacquiring the live position…')")
     expect(script).not.toContain('cloneNode(false)')
@@ -137,17 +137,19 @@ describe('LG webOS presence telemetry', () => {
     expect(script).not.toMatch(/createElement\(['"]video['"]\)/)
   })
 
-  test('warms only the two neighboring server channels after playback stabilizes', () => {
+  test('relies on the server lineup session instead of adjacent warm calls', () => {
     const script = readFileSync(
       join(import.meta.dir, '..', 'clients', 'webos', 'app.js'),
       'utf8'
     )
 
-    expect(script).toContain("state.serverUrl + '/api/client/v1/channels/warm'")
-    expect(script).toContain('warmChannelIds(ids.slice(0, 2))')
-    expect(script).toContain('ADJACENT_WARM_REFRESH_MS = 12000')
-    expect(script).toContain('scheduleAdjacentWarm()')
-    expect(script).toContain('{ clientId: state.clientId, channelIds: [] }')
+    expect(script).toContain("'/api/client/v1/session'")
+    expect(script).toContain("'/api/client/v1/session/close'")
+    expect(script).toContain('navigator.sendBeacon')
+    expect(script).toContain("if (state.view === 'player') reopenLineupSession()")
+    expect(script).not.toContain('/api/client/v1/channels/warm')
+    expect(script).not.toContain('scheduleAdjacentWarm')
+    expect(script).not.toContain('ADJACENT_WARM_REFRESH_MS')
   })
 
   test('auto-starts the last channel and prepares zaps before replacing video', () => {
@@ -160,9 +162,10 @@ describe('LG webOS presence telemetry', () => {
       'utf8'
     )
 
-    expect(script).toContain("'/api/client/v1/channels/startup'")
+    expect(script).toContain("'/api/client/v1/session'")
+    expect(script).toContain("'/api/client/v1/session/close'")
     expect(script).toContain("'/api/client/v1/channels/' + encodeURIComponent(channel.id) + '/prepare'")
-    expect(script).toContain('var ZAP_DEBOUNCE_MS = 200')
+    expect(script).toContain('var ZAP_DEBOUNCE_MS = 80')
     expect(script).toContain('function commitPreparedChannel(')
     expect(script.indexOf('function prepareChannel(')).toBeLessThan(
       script.indexOf('function commitPreparedChannel(')

@@ -7,6 +7,7 @@
 
 import type { AppConfig } from '../repositories/ConfigRepository'
 import type { FfmpegTranscodingStatus } from '../services/FfmpegTranscodingBackend'
+import type { TierDecision } from '../services/ChannelQualityTierService'
 import { renderLayout } from './layout'
 import { escapeHtml } from './utils'
 
@@ -20,6 +21,15 @@ export interface SettingsProps {
   latestVersion?: string | null
   /** Resolved once at startup from the container's transcoding environment. */
   transcodingStatus?: FfmpegTranscodingStatus
+  /** The lineup-wide quality decision derived from the probe and channel count. */
+  qualityTier?: TierDecision
+  libraryMonitoring?: {
+    watcherActive: boolean
+    watcherStartedAt: string | null
+    lastWatcherEventAt: string | null
+    safetyScanIntervalMinutes: number
+    lastSafetyScanAt: string | null
+  }
 }
 
 export function renderSettings(props: SettingsProps): string {
@@ -53,7 +63,7 @@ export function renderSettings(props: SettingsProps): string {
             <div>
               <p class="settings-card-kicker">Channel identity</p>
               <h2>Default channel logo</h2>
-              <p class="settings-card-description">Shown in TV app info bars when a channel uses global branding. Each channel can separately opt into permanent video burn-in.</p>
+              <p class="settings-card-description">Shown only in ToastTV app menus and programme information. Logos are never burned into the video.</p>
             </div>
             <label class="toggle" aria-label="Enable default channel logo">
               <input type="checkbox" id="logoEnabled" name="logoEnabled" value="true" ${config.logo.enabled ? 'checked' : ''}>
@@ -64,14 +74,15 @@ export function renderSettings(props: SettingsProps): string {
           <div class="logo-settings-grid">
             <div class="logo-controls">
               ${renderLogoUpload(hasLogo)}
-              ${renderPositionGrid(config.logo.position)}
-              ${renderOffsetControls(config.logo.x, config.logo.y)}
-              ${renderOpacitySlider(config.logo.opacity)}
+              <input type="hidden" name="logoPosition" value="${config.logo.position}">
+              <input type="hidden" name="logoX" value="${config.logo.x}">
+              <input type="hidden" name="logoY" value="${config.logo.y}">
+              <input type="hidden" name="logoOpacity" value="${config.logo.opacity}">
             </div>
             
             ${renderLogoPreview(hasLogo, config.logo.opacity, config.logo.position, config.logo.x, config.logo.y)}
           </div>
-          <p class="settings-restart-note">Position, offsets, and opacity apply only when a channel opts into video burn-in. App-only logos remain clean and client-controlled.</p>
+          <p class="settings-restart-note">The video stream remains clean. The LG app shows this artwork only while its channel or programme menu is visible.</p>
         </section>
 
         <section class="settings-group" id="playback">
@@ -158,6 +169,17 @@ export function renderSettings(props: SettingsProps): string {
             </div>
 
             ${renderTranscodingStatus(props.transcodingStatus)}
+            ${
+              props.qualityTier
+                ? `<div class="form-group" id="quality-tier">
+              <label>Channel quality tier</label>
+              <div class="hardware-profile-display">
+                <span class="profile-badge">${escapeHtml(props.qualityTier.tier.toUpperCase())} · ${escapeHtml(String(props.qualityTier.profile.maximumHeight))}p</span>
+                <span class="hint">${escapeHtml(props.qualityTier.reason)} Up to ${escapeHtml(String(props.qualityTier.maximumConcurrentWorkers))} encoder${props.qualityTier.maximumConcurrentWorkers === 1 ? '' : 's'} run at once; extra channels start on demand. (${escapeHtml(props.qualityTier.source)})</span>
+              </div>
+            </div>`
+                : ''
+            }
           </section>
           </div>
         </section>
@@ -180,6 +202,14 @@ export function renderSettings(props: SettingsProps): string {
               <label>Media directory</label>
               <code class="path-display">${escapeHtml(mediaDirectory)}</code>
             </div>
+            <div class="form-group">
+              <label for="safetyScanIntervalMinutes">Safety scan interval</label>
+              <select id="safetyScanIntervalMinutes" name="safetyScanIntervalMinutes">
+                ${renderSafetyScanOptions(config.library.safetyScanIntervalMinutes)}
+              </select>
+              <span class="hint">Filesystem changes are watched immediately. This fallback catches events missed by Docker bind mounts.</span>
+            </div>
+            ${renderLibraryMonitoring(props.libraryMonitoring)}
             <div class="settings-card-actions">
               <button type="button" class="btn btn-secondary"
                     hx-post="/api/rescan"
@@ -317,6 +347,43 @@ export function renderSettings(props: SettingsProps): string {
   `,
     { updateAvailable: props.updateAvailable }
   )
+}
+
+function renderSafetyScanOptions(selected: number): string {
+  const options = [
+    [0, 'Disabled'],
+    [5, 'Every 5 minutes'],
+    [10, 'Every 10 minutes'],
+    [15, 'Every 15 minutes'],
+    [30, 'Every 30 minutes'],
+    [60, 'Every hour'],
+    [360, 'Every 6 hours'],
+  ] as const
+  return options
+    .map(
+      ([value, label]) =>
+        `<option value="${value}" ${selected === value ? 'selected' : ''}>${label}</option>`
+    )
+    .join('')
+}
+
+function renderLibraryMonitoring(
+  status: SettingsProps['libraryMonitoring']
+): string {
+  if (!status) return ''
+  return `<dl class="settings-status-list settings-library-monitoring">
+    <div><dt>Change detection</dt><dd>${status.watcherActive ? 'Watching mounted libraries' : 'Starting after the current scan'}</dd></div>
+    <div><dt>Last filesystem event</dt><dd>${formatMonitoringTime(status.lastWatcherEventAt)}</dd></div>
+    <div><dt>Last safety scan</dt><dd>${formatMonitoringTime(status.lastSafetyScanAt)}</dd></div>
+  </dl>`
+}
+
+function formatMonitoringTime(value: string | null): string {
+  if (!value) return 'Not yet'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime())
+    ? 'Not yet'
+    : escapeHtml(date.toLocaleString())
 }
 
 function renderTranscodingStatus(
@@ -526,22 +593,19 @@ function renderOpacitySlider(opacity: number): string {
 
 function renderLogoPreview(
   hasLogo: boolean,
-  opacity: number,
-  position: number,
-  x: number,
-  y: number
+  _opacity: number,
+  _position: number,
+  _x: number,
+  _y: number
 ): string {
-  const isTop = position === 0 || position === 2
-  const isLeft = position === 0 || position === 6
-
   return `
     <div class="logo-preview-area">
       <div class="logo-screen-preview" id="logoScreenPreview">
-        <div class="screen-content">TV Screen</div>
+        <div class="screen-content">App menu preview</div>
         ${
           hasLogo
             ? `<img src="/logo" alt="Logo preview" class="screen-logo" id="screenLogo" 
-                    style="opacity: ${opacity / 255}; ${isLeft ? `left: ${x}px;` : `right: ${x}px;`} ${isTop ? `top: ${y}px;` : `bottom: ${y}px;`}">`
+                    style="opacity: 1; right: 24px; top: 24px;">`
             : ''
         }
       </div>

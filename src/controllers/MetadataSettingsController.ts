@@ -18,6 +18,8 @@ type MetadataSettingsService = Pick<
   | 'testConfiguration'
   | 'runPending'
   | 'reevaluateLibrary'
+  | 'retryReviewLibrary'
+  | 'reapplyCachedPolicies'
 >
 
 export function createMetadataSettingsController(
@@ -31,7 +33,7 @@ export function createMetadataSettingsController(
     return c.html(
       renderMetadataSettings(metadata.getPublicConfig(), metadata.getState(), {
         saved: c.req.query('saved') === '1',
-        reevaluationStarted: c.req.query('reevaluate') === 'started',
+        maintenanceStarted: maintenanceQuery(c.req.query('maintenance')),
         testResult:
           result === 'success' || result === 'failed' ? result : undefined,
       })
@@ -132,10 +134,42 @@ export function createMetadataSettingsController(
       .reevaluateLibrary()
       .then(() => onLibraryReevaluated?.())
       .catch(() => {})
-    return c.redirect('/settings/metadata?reevaluate=started', 303)
+    return c.redirect('/settings/metadata?maintenance=full', 303)
+  })
+
+  controller.post('/settings/metadata/retry-review', (c) => {
+    if (!metadata.getPublicConfig().configured) {
+      return c.html(
+        renderMetadataSettings(metadata.getPublicConfig(), metadata.getState(), {
+          reevaluationUnavailable: true,
+        }),
+        409
+      )
+    }
+    void metadata
+      .retryReviewLibrary()
+      .then(() => onLibraryReevaluated?.())
+      .catch(() => {})
+    return c.redirect('/settings/metadata?maintenance=review', 303)
+  })
+
+  controller.post('/settings/metadata/reapply-policy', (c) => {
+    void metadata
+      .reapplyCachedPolicies()
+      .then(() => onLibraryReevaluated?.())
+      .catch(() => {})
+    return c.redirect('/settings/metadata?maintenance=policy', 303)
   })
 
   return controller
+}
+
+function maintenanceQuery(
+  value: string | undefined
+): 'policy' | 'review' | 'full' | undefined {
+  return value === 'policy' || value === 'review' || value === 'full'
+    ? value
+    : undefined
 }
 
 function metadataInput(

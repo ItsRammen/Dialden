@@ -56,6 +56,8 @@ describe('MediaIndexer', () => {
       height: 1080,
       fps: 30,
       bitrateMbps: 10,
+      hasAudio: true,
+      audioCodec: 'aac',
     })
 
     indexer = new MediaIndexer(mediaConfig, interludeConfig, repo, fs, probe)
@@ -257,6 +259,8 @@ describe('MediaIndexer', () => {
         height: 1080,
         fps: 30,
         bitrateMbps: 10,
+      hasAudio: true,
+      audioCodec: 'aac',
       }
     })
     indexer = new MediaIndexer(
@@ -470,6 +474,8 @@ describe('MediaIndexer', () => {
       height: number | null
       fps: number | null
       bitrateMbps: number | null
+      hasAudio: boolean | null
+      audioCodec: string | null
     }) => void
     let markStarted!: () => void
     const started = new Promise<void>((resolve) => (markStarted = resolve))
@@ -480,6 +486,8 @@ describe('MediaIndexer', () => {
       height: number | null
       fps: number | null
       bitrateMbps: number | null
+      hasAudio: boolean | null
+      audioCodec: string | null
     }>((resolve) => (releaseProbe = resolve))
     const metadata = {
       durationSeconds: 420,
@@ -488,6 +496,8 @@ describe('MediaIndexer', () => {
       height: 1080,
       fps: 24,
       bitrateMbps: 4,
+      hasAudio: true,
+      audioCodec: 'aac',
     }
     probe.getMetadata
       .mockImplementationOnce(async () => {

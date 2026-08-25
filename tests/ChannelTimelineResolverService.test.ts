@@ -32,180 +32,59 @@ function program(
 }
 
 describe('ChannelTimelineResolverService', () => {
-  test('burns channel logos only when explicitly enabled and the source exists', async () => {
-    const base = {
-      getNow: async () => null,
-      getGuide: async () => null,
-      administrationSnapshot: () => ({
-        channels: [
-          {
-            id: 'kids',
-            name: 'Kids',
-            enabled: true,
-            timezone: 'UTC',
-            slots: [],
-            branding: {
-              mode: 'custom' as const,
-              burnIn: true,
-              opacity: 204,
-              position: 8 as const,
-              x: 20,
-              y: 30,
-              sizePercent: 14,
-            },
-          },
-          {
-            id: 'family',
-            name: 'Family',
-            enabled: true,
-            timezone: 'UTC',
-            slots: [],
-            branding: {
-              mode: 'inherit' as const,
-              burnIn: true,
-              opacity: 210,
-              position: 2 as const,
-              x: 24,
-              y: 24,
-              sizePercent: 12,
-            },
-          },
-          {
-            id: 'app-only',
-            name: 'App only',
-            enabled: true,
-            timezone: 'UTC',
-            slots: [],
-            branding: {
-              mode: 'custom' as const,
-              opacity: 210,
-              position: 2 as const,
-              x: 24,
-              y: 24,
-              sizePercent: 12,
-            },
-          },
-          {
-            id: 'missing',
-            name: 'Missing',
-            enabled: true,
-            timezone: 'UTC',
-            slots: [],
-            branding: {
-              mode: 'custom' as const,
-              burnIn: true,
-              opacity: 210,
-              position: 2 as const,
-              x: 24,
-              y: 24,
-              sizePercent: 12,
-            },
-          },
-        ],
-        manuallyOffAir: [],
-        programmingGroups: [],
-        configurationError: null,
-      }),
+  test('emits one clean-video position per program', async () => {
+    const episode = program(
+      'episode-a',
+      1,
+      '2026-08-24T19:30:00.000Z',
+      '2026-08-24T20:30:00.000Z'
+    )
+    const now: ChannelNowResult = {
+      channelId: 'kids',
+      serverTime: '2026-08-24T19:55:00.000Z',
+      serverTimeMs: Date.parse('2026-08-24T19:55:00.000Z'),
+      timezone: 'UTC',
+      timelineRevision: 'r-brand',
+      program: {
+        ...episode,
+        playback: { mode: 'direct', url: '/media/1', sourceOffsetAtPlaybackZeroMs: 0 },
+        offsetMs: 1_500_000,
+        offsetSeconds: 1_500,
+      },
+      next: null,
+    }
+    const channel = {
+      id: 'kids', name: 'Kids', enabled: true, timezone: 'UTC',
+      branding: { mode: 'inherit' as const, burnIn: true, opacity: 210, position: 2 as const, x: 24, y: 24, sizePercent: 12 },
+      slots: [
+        { days: ['mon' as const], start: '00:00', end: '20:00', groups: ['kids'], branding: { mode: 'custom' as const, logoId: 'nick' } },
+        { days: ['mon' as const], start: '20:00', end: '24:00', groups: ['kids'], branding: { mode: 'custom' as const, logoId: 'adult-swim' } },
+      ],
     }
     const resolver = new ChannelTimelineResolverService(
-      base,
-      { resolveForChannelWorker: async () => null },
-      { getById: async () => null },
-      async () => ({
-        session: {
-          limitMinutes: 0,
-          resetHour: 6,
-          introVideoId: null,
-          outroVideoId: null,
-          offAirAssetId: null,
-        },
-        logo: {
-          enabled: true,
-          imagePath: '/data/logo.png',
-          opacity: 128,
-          position: 2,
-          x: 8,
-          y: 9,
-        },
-      }),
       {
-        path: (id) => `/data/channel-logos/${id}.png`,
-        has: (id) => id !== 'missing',
-      },
-      () => true
-    )
-
-    expect(await resolver.overlay('kids')).toEqual({
-      sourcePath: '/data/channel-logos/kids.png',
-      opacity: 0.8,
-      position: 8,
-      x: 20,
-      y: 30,
-      sizePercent: 14,
-    })
-    expect(await resolver.overlay('family')).toMatchObject({
-      sourcePath: '/data/logo.png',
-      position: 2,
-      x: 8,
-      y: 9,
-      sizePercent: 12,
-    })
-    expect(await resolver.overlay('app-only')).toBeNull()
-    expect(await resolver.overlay('missing')).toBeNull()
-  })
-
-  test('does not return a stale inherited logo path for burn-in', async () => {
-    const resolver = new ChannelTimelineResolverService(
-      {
-        getGuide: async () => null,
-        administrationSnapshot: () => ({
-          channels: [
-            {
-              id: 'family',
-              name: 'Family',
-              enabled: true,
-              timezone: 'UTC',
-              slots: [],
-              branding: {
-                mode: 'inherit' as const,
-                burnIn: true,
-                opacity: 210,
-                position: 2 as const,
-                x: 24,
-                y: 24,
-                sizePercent: 12,
-              },
-            },
-          ],
-          manuallyOffAir: [],
-          programmingGroups: [],
-          configurationError: null,
+        getNow: async () => now,
+        getGuide: async () => ({
+          channelId: 'kids', serverTime: now.serverTime, serverTimeMs: now.serverTimeMs,
+          timezone: 'UTC', timelineRevision: 'r-brand', requestedEnd: episode.scheduledEnd,
+          coverageEnd: episode.scheduledEnd, truncated: false, programs: [episode],
         }),
+        administrationSnapshot: () => ({ channels: [channel], manuallyOffAir: [], programmingGroups: ['kids'], configurationError: null }),
       },
-      { resolveForChannelWorker: async () => null },
+      { resolveForChannelWorker: async () => ({ path: '/media/1.mkv', size: 1, mimeType: 'video/x-matroska', lastModified: new Date(0) }) },
       { getById: async () => null },
-      async () => ({
-        session: {
-          limitMinutes: 0,
-          resetHour: 6,
-          introVideoId: null,
-          outroVideoId: null,
-          offAirAssetId: null,
-        },
-        logo: {
-          enabled: true,
-          imagePath: '/data/missing-logo.png',
-          opacity: 210,
-          position: 2,
-          x: 24,
-          y: 24,
-        },
-      }),
-      undefined,
-      () => false
+      async () => ({ session: { limitMinutes: 0, resetHour: 6, introVideoId: null, outroVideoId: null, offAirAssetId: null } }),
+      { path: (id, logoId) => `/logos/${id}--${logoId}.png` }
     )
 
-    expect(await resolver.overlay('family')).toBeNull()
+    const window = await resolver.resolveWindow('kids', new Date(now.serverTime), 2)
+    expect(window).toHaveLength(1)
+    expect(window[0]).toMatchObject({
+      scheduleItemId: 'episode-a',
+      sourceOffsetSeconds: 1500,
+      sourceDurationSeconds: 2100,
+    })
+    expect(window[0]).not.toHaveProperty('overlay')
   })
 
   test('resolves effective app logo metadata for channel and scheduled branding', async () => {
@@ -314,6 +193,94 @@ describe('ChannelTimelineResolverService', () => {
     ).toEqual({ enabled: true, logoUrl: '/logo' })
     expect(await resolver.presentation('missing')).toEqual({ enabled: false })
     expect(await resolver.presentation('hidden')).toEqual({ enabled: false })
+  })
+
+  test('hints hardware decode only for h264 sources a QSV backend can handle', async () => {
+    const episodeA = program(
+      'episode-a',
+      1,
+      '2026-08-24T12:00:00.000Z',
+      '2026-08-24T12:30:00.000Z'
+    )
+    const bumper = program(
+      'bumper',
+      2,
+      '2026-08-24T12:30:00.000Z',
+      '2026-08-24T12:30:20.000Z',
+      'interlude'
+    )
+    const mediaById = new Map<number, Partial<MediaItem>>([
+      [1, { codec: 'h264', compatibility: 'compatible' }],
+      [2, { codec: 'mpeg4', compatibility: 'marginal' }],
+    ])
+    const resolver = new ChannelTimelineResolverService(
+      {
+        getGuide: async () => ({
+          channelId: 'kids',
+          serverTime: '2026-08-24T12:05:00.000Z',
+          serverTimeMs: Date.parse('2026-08-24T12:05:00.000Z'),
+          timezone: 'UTC',
+          timelineRevision: 'revision-1',
+          requestedEnd: bumper.scheduledEnd,
+          coverageEnd: bumper.scheduledEnd,
+          truncated: false,
+          programs: [episodeA, bumper],
+        }),
+      },
+      {
+        resolveForChannelWorker: async (id) => ({
+          path: `/media/${id}.mkv`,
+          size: 1,
+          mimeType: 'video/x-matroska',
+          lastModified: new Date(0),
+        }),
+      },
+      { getById: async (id) => (mediaById.get(id) ?? null) as MediaItem | null },
+      undefined,
+      undefined,
+      () => true,
+      () => true
+    )
+
+    const window = await resolver.resolveWindow('kids', new Date(), 2)
+    expect(window[0]).toMatchObject({ decodeHint: 'hw' })
+    expect(window[1]).toMatchObject({ decodeHint: 'sw' })
+
+    const softwareResolver = new ChannelTimelineResolverService(
+      {
+        getGuide: async () => ({
+          channelId: 'kids',
+          serverTime: '2026-08-24T12:05:00.000Z',
+          serverTimeMs: Date.parse('2026-08-24T12:05:00.000Z'),
+          timezone: 'UTC',
+          timelineRevision: 'revision-1',
+          requestedEnd: bumper.scheduledEnd,
+          coverageEnd: bumper.scheduledEnd,
+          truncated: false,
+          programs: [episodeA, bumper],
+        }),
+      },
+      {
+        resolveForChannelWorker: async (id) => ({
+          path: `/media/${id}.mkv`,
+          size: 1,
+          mimeType: 'video/x-matroska',
+          lastModified: new Date(0),
+        }),
+      },
+      { getById: async (id) => (mediaById.get(id) ?? null) as MediaItem | null },
+      undefined,
+      undefined,
+      () => true,
+      () => false
+    )
+    const softwareWindow = await softwareResolver.resolveWindow(
+      'kids',
+      new Date(),
+      2
+    )
+    expect(softwareWindow[0]).toMatchObject({ decodeHint: 'sw' })
+    expect(softwareWindow[1]).toMatchObject({ decodeHint: 'sw' })
   })
 
   test('resolves the live offset plus bumper and next episode as one window', async () => {
@@ -450,57 +417,6 @@ describe('ChannelTimelineResolverService', () => {
       sourcePath: '/media/2.mkv',
       sourceOffsetSeconds: 1,
     })
-  })
-
-  test('splits a playing item at a scheduled branding boundary', async () => {
-    const episode = program(
-      'episode-a',
-      1,
-      '2026-08-24T19:30:00.000Z',
-      '2026-08-24T20:30:00.000Z'
-    )
-    const now: ChannelNowResult = {
-      channelId: 'kids',
-      serverTime: '2026-08-24T19:55:00.000Z',
-      serverTimeMs: Date.parse('2026-08-24T19:55:00.000Z'),
-      timezone: 'UTC',
-      timelineRevision: 'r-brand',
-      program: {
-        ...episode,
-        playback: { mode: 'direct', url: '/media/1', sourceOffsetAtPlaybackZeroMs: 0 },
-        offsetMs: 1_500_000,
-        offsetSeconds: 1_500,
-      },
-      next: null,
-    }
-    const channel = {
-      id: 'kids', name: 'Kids', enabled: true, timezone: 'UTC',
-      branding: { mode: 'inherit' as const, burnIn: true, opacity: 210, position: 2 as const, x: 24, y: 24, sizePercent: 12 },
-      slots: [
-        { days: ['mon' as const], start: '00:00', end: '20:00', groups: ['kids'], branding: { mode: 'custom' as const, logoId: 'nick' } },
-        { days: ['mon' as const], start: '20:00', end: '24:00', groups: ['kids'], branding: { mode: 'custom' as const, logoId: 'adult-swim' } },
-      ],
-    }
-    const resolver = new ChannelTimelineResolverService(
-      {
-        getNow: async () => now,
-        getGuide: async () => ({
-          channelId: 'kids', serverTime: now.serverTime, serverTimeMs: now.serverTimeMs,
-          timezone: 'UTC', timelineRevision: 'r-brand', requestedEnd: episode.scheduledEnd,
-          coverageEnd: episode.scheduledEnd, truncated: false, programs: [episode],
-        }),
-        administrationSnapshot: () => ({ channels: [channel], manuallyOffAir: [], programmingGroups: ['kids'], configurationError: null }),
-      },
-      { resolveForChannelWorker: async () => ({ path: '/media/1.mkv', size: 1, mimeType: 'video/x-matroska', lastModified: new Date(0) }) },
-      { getById: async () => null },
-      async () => ({ session: { limitMinutes: 0, resetHour: 6, introVideoId: null, outroVideoId: null, offAirAssetId: null } }),
-      { path: (id, logoId) => `/logos/${id}--${logoId}.png` }
-    )
-
-    const window = await resolver.resolveWindow('kids', new Date(now.serverTime), 2)
-    expect(window).toHaveLength(2)
-    expect(window[0]).toMatchObject({ sourceOffsetSeconds: 1500, sourceDurationSeconds: 300, overlay: { sourcePath: '/logos/kids--nick.png' } })
-    expect(window[1]).toMatchObject({ sourceOffsetSeconds: 1800, sourceDurationSeconds: 1800, overlay: { sourcePath: '/logos/kids--adult-swim.png' } })
   })
 
   test('resolves the configured off-air asset as an emergency fallback', async () => {

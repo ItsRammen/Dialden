@@ -10,6 +10,7 @@ describe('ChannelStreamController', () => {
   let outputRoot: string
   let touches: Array<{ channelId: string; clientId: string }>
   let warms: Array<{ channelIds: readonly string[]; clientId: string }>
+  let closes: string[]
 
   beforeEach(() => {
     outputRoot = mkdtempSync(join(tmpdir(), 'toasttv-channel-stream-'))
@@ -24,11 +25,12 @@ describe('ChannelStreamController', () => {
     )
     touches = []
     warms = []
+    closes = []
   })
 
   afterEach(() => rmSync(outputRoot, { recursive: true, force: true }))
 
-  function app(options: { startedAt?: string; workerError?: string } = {}) {
+  function app(options: { startedAt?: string; workerError?: string; lineup?: boolean } = {}) {
     return createChannelStreamController({
       channels: {
         list: () => ({
@@ -79,6 +81,26 @@ describe('ChannelStreamController', () => {
             : null,
       },
       outputRoot,
+      ...(options.lineup
+        ? {
+            lineup: {
+              open: async (clientId: string, preferredChannelId?: string) => ({
+                clientId,
+                channelIds: [preferredChannelId ?? 'kids', 'cartoons'],
+                ready: 1,
+                pending: 1,
+                expiresAt: new Date(0).toISOString(),
+              }),
+              close: async (clientId: string) => {
+                closes.push(clientId)
+              },
+              snapshot: () => ({
+                sessions: [],
+                totalSessions: 0,
+              }),
+            },
+          }
+        : {}),
     })
   }
 
@@ -107,6 +129,90 @@ describe('ChannelStreamController', () => {
     expect(response.headers.get('Content-Type')).toContain('video/mp2t')
     expect(await response.text()).toBe('segment')
     expect(touches).toEqual([])
+  })
+
+  test('opens a lineup session on the last channel and reports spin-up progress', async () => {
+    const response = await app({ lineup: true }).request('/api/client/v1/session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'tv-1', lastChannelId: 'kids', lineup: true }),
+    })
+
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as Record<string, unknown>
+    expect(body.status).toBe('ready')
+    expect(body.streamUrl).toBe('/api/v1/channels/kids/live/index.m3u8')
+    expect(body.lineup).toEqual({ total: 2, ready: 1, pending: 1 })
+  })
+
+  test('session close releases the client and works without a lineup service', async () => {
+    const withLineup = await app({ lineup: true }).request('/api/client/v1/session/close', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'tv-1' }),
+    })
+    expect(withLineup.status).toBe(200)
+    expect(closes).toEqual(['tv-1'])
+
+    const withoutLineup = await app().request('/api/client/v1/session/close', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'tv-1' }),
+    })
+    expect(withoutLineup.status).toBe(200)
+  })
+
+  test('answers CORS preflights for the session routes', async () => {
+    for (const path of ['/api/client/v1/session', '/api/client/v1/session/close']) {
+      const response = await app({ lineup: true }).request(path, { method: 'OPTIONS' })
+      expect(response.status).toBe(204)
+      expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*')
+      expect(response.headers.get('Access-Control-Allow-Methods')).toContain('POST')
+    }
+  })
+
+  test('rejects a session request when no channels are on air', async () => {
+    const controller = createChannelStreamController({
+      channels: {
+        list: () => ({
+          serverTime: new Date(0).toISOString(),
+          serverTimeMs: 0,
+          channels: [
+            {
+              id: 'kids',
+              name: 'Kids',
+              enabled: true,
+              timezone: 'UTC',
+              onAir: false,
+              manuallyOffAir: true,
+            },
+          ],
+        }),
+      },
+      workers: {
+        touch: async () => ({}) as never,
+        warm: async () => [] as never,
+        getState: () => null,
+      },
+      outputRoot,
+      lineup: {
+        open: async () => ({
+          clientId: 'x',
+          channelIds: [],
+          ready: 0,
+          pending: 0,
+          expiresAt: new Date(0).toISOString(),
+        }),
+        close: async () => {},
+        snapshot: () => ({ sessions: [], totalSessions: 0 }),
+      },
+    })
+    const response = await controller.request('/api/client/v1/session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'tv-1', lineup: true }),
+    })
+    expect(response.status).toBe(404)
   })
 
   test('warms at most two configured on-air channels without viewer leases', async () => {
@@ -143,6 +249,7 @@ describe('ChannelStreamController', () => {
       channel: { id: string }
       status: string
       streamUrl: string
+      warmed: string[]
     }
     expect(body.channel.id).toBe('cartoons')
     expect(body.status).toBe('ready')
@@ -152,9 +259,8 @@ describe('ChannelStreamController', () => {
     expect(touches).toEqual([
       { channelId: 'cartoons', clientId: 'living-room-tv' },
     ])
-    expect(warms).toEqual([
-      { channelIds: ['kids'], clientId: 'living-room-tv' },
-    ])
+    expect(warms).toEqual([])
+    expect(body.warmed).toEqual([])
   })
 
   test('falls back from a missing or off-air last channel', async () => {

@@ -84,21 +84,9 @@
   var branding = document.querySelector('[data-branding-editor]')
   if (branding) {
     var brandingCustom = branding.querySelector('[data-branding-custom]')
-    var burnInToggle = branding.querySelector('[data-branding-burn-in]')
-    var burnInNote = branding.querySelector('[data-branding-burn-in-note]')
-    var burnInOptions = branding.querySelectorAll('[data-branding-burn-in-options]')
     var logoFile = branding.querySelector('[data-logo-file]')
     var logoPreview = branding.querySelector('[data-logo-preview]')
     var logoPlaceholder = branding.querySelector('[data-logo-placeholder]')
-    var logoScreen = branding.querySelector('[data-logo-screen]')
-    var logoPosition = branding.querySelector('[data-logo-position]')
-    var logoSize = branding.querySelector('[data-logo-size]')
-    var logoOpacity = branding.querySelector('[data-logo-opacity]')
-    var logoX = branding.querySelector('[data-logo-x]')
-    var logoY = branding.querySelector('[data-logo-y]')
-    var sizeOutput = branding.querySelector('[data-logo-size-output]')
-    var opacityOutput = branding.querySelector('[data-logo-opacity-output]')
-    var previewCaption = branding.querySelector('[data-logo-preview-caption]')
     var originalLogoSrc = logoPreview ? logoPreview.getAttribute('src') : ''
 
     var selectedBrandingMode = function () {
@@ -106,53 +94,16 @@
       return selected ? selected.value : 'inherit'
     }
 
-    var burnInEnabled = function () {
-      return selectedBrandingMode() !== 'off' && !!burnInToggle && burnInToggle.checked
-    }
-
     var refreshLogoPreview = function () {
-      if (!logoPreview || !logoScreen) return
-      var position = logoPosition ? logoPosition.value : '2'
-      var size = logoSize ? Number(logoSize.value) : 12
-      var opacity = logoOpacity ? Number(logoOpacity.value) : 210
-      var x = logoX ? Math.min(Number(logoX.value) || 0, 500) : 24
-      var y = logoY ? Math.min(Number(logoY.value) || 0, 500) : 24
-      var burnIn = burnInEnabled()
-      logoScreen.setAttribute('data-position', position)
-      logoScreen.setAttribute('data-burn-in', String(burnIn))
-      logoPreview.style.width = burnIn ? size + '%' : '28%'
-      logoPreview.style.opacity = burnIn ? String(opacity / 255) : '1'
-      logoPreview.style.setProperty('--logo-x', Math.min(x / 8, 40) + 'px')
-      logoPreview.style.setProperty('--logo-y', Math.min(y / 8, 40) + 'px')
-      if (sizeOutput) sizeOutput.textContent = size + '%'
-      if (opacityOutput) opacityOutput.textContent = Math.round((opacity / 255) * 100) + '%'
-      if (previewCaption) {
-        previewCaption.textContent = burnIn
-          ? 'Burn-in preview · final video'
-          : 'App logo preview · video remains clean'
-      }
+      if (!logoPreview) return
+      logoPreview.style.width = '28%'
+      logoPreview.style.opacity = '1'
     }
 
     var refreshBranding = function () {
       var mode = selectedBrandingMode()
-      var burnIn = mode !== 'off' && !!burnInToggle && burnInToggle.checked
       if (brandingCustom) brandingCustom.hidden = mode !== 'custom'
       if (logoFile) logoFile.disabled = mode !== 'custom'
-      if (burnInToggle) {
-        burnInToggle.disabled = mode === 'off'
-        if (mode === 'off') burnInToggle.checked = false
-        burnIn = mode !== 'off' && burnInToggle.checked
-      }
-      Array.prototype.forEach.call(burnInOptions, function (option) {
-        option.hidden = !burnIn
-      })
-      if (burnInNote) {
-        burnInNote.textContent = mode === 'off'
-          ? 'Choose a global or custom logo before enabling burn-in.'
-          : burnIn
-            ? 'The logo will appear in apps and in the encoded video.'
-            : 'App-only is recommended: the logo remains hideable by each client.'
-      }
       refreshLogoPreview()
     }
 
@@ -160,7 +111,7 @@
     branding.addEventListener('change', function (event) {
       if (
         event.target &&
-        (event.target.name === 'brandingMode' || event.target.name === 'brandingBurnIn')
+        event.target.name === 'brandingMode'
       ) {
         refreshBranding()
         return

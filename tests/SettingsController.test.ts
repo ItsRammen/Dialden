@@ -43,6 +43,7 @@ describe('SettingsController', () => {
     formData.append('interludeFrequency', '2')
     formData.append('mpvSocket', '/tmp/updated.sock')
     formData.append('logoOpacity', '255')
+    formData.append('safetyScanIntervalMinutes', '10')
 
     const req = new Request('http://localhost/api/config', {
       method: 'POST',
@@ -61,6 +62,7 @@ describe('SettingsController', () => {
         interlude: { enabled: true, frequency: 2 },
         mpv: expect.objectContaining({ ipcSocket: '/tmp/updated.sock' }),
         logo: expect.objectContaining({ opacity: 255 }),
+        library: { safetyScanIntervalMinutes: 10 },
       })
     )
   })
@@ -100,6 +102,31 @@ describe('SettingsController', () => {
     expect(json).toEqual({ server: { port: 3000 } })
   })
 
+  test('persists and applies the library safety-scan interval', async () => {
+    const applied: number[] = []
+    const controller = createSettingsController({
+      config: configService,
+      media: mediaService,
+      update: updateService,
+      onLibraryMonitoringUpdated: (minutes) => applied.push(minutes),
+    })
+    const local = new Hono().route('/', controller)
+    await local.request('/api/config', {
+      method: 'POST',
+      body: new URLSearchParams({
+        serverPort: '1993',
+        safetyScanIntervalMinutes: '30',
+      }),
+    })
+
+    expect(configService.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        library: { safetyScanIntervalMinutes: 30 },
+      })
+    )
+    expect(applied).toEqual([30])
+  })
+
   test('GET /settings renders the resolved transcoding backend status', async () => {
     configService.get.mockResolvedValue({
       server: { port: 1993 },
@@ -122,6 +149,7 @@ describe('SettingsController', () => {
       },
       detection: { cecEnabled: false, heartbeatIntervalMs: 30_000 },
       playback: { safeMode: true },
+      library: { safetyScanIntervalMinutes: 15 },
     })
     mediaService.getMediaDirectory.mockReturnValue('/media')
     const controller = createSettingsController({

@@ -36,7 +36,12 @@ export class FileWatcherService extends EventEmitter {
           dir,
           (_event, path) => {
             // Filter by extension
-            if (!this.extensions.some((ext) => path.endsWith(ext))) return
+            const normalizedPath = path.toLowerCase()
+            if (
+              !this.extensions.some((ext) =>
+                normalizedPath.endsWith(ext.toLowerCase())
+              )
+            ) return
 
             this.pending.add(path)
             this.resetDebounce()

@@ -253,17 +253,15 @@ function renderBrandingSummary(
 ): string {
   const branding = channel?.branding ?? defaultBranding()
   const hasCustomLogo = channel ? uploadedLogoIds.has(channel.id) : false
-  const burnIn = brandingBurnIn(branding)
   const summary =
     branding.mode === 'off'
-      ? 'Logo hidden in apps and omitted from the video.'
+      ? 'Logo hidden in ToastTV apps.'
       : branding.mode === 'inherit'
-        ? `Using the global logo in apps${burnIn ? ' and burning it into the video.' : '. The video stays clean.'}`
+        ? 'Using the global logo in ToastTV app menus.'
         : hasCustomLogo
-          ? `Using this channel’s custom logo in apps${burnIn ? ' and burning it into the video.' : '. The video stays clean.'}`
+          ? 'Using this channel’s custom logo in ToastTV app menus.'
           : 'Custom app logo selected, but no image has been uploaded yet.'
-  const status =
-    branding.mode === 'off' ? 'Hidden' : burnIn ? 'Apps + burn-in' : 'Apps only'
+  const status = branding.mode === 'off' ? 'Hidden' : 'App menus only'
   const image =
     channel && branding.mode === 'custom' && hasCustomLogo
       ? `<img src="/channels/${encodeURIComponent(channel.id)}/logo" alt="Current ${escapeHtml(channel.name)} logo">`
@@ -290,11 +288,10 @@ function renderBrandingEditor(
   const branding = channel.branding ?? defaultBranding()
   const hasCustomLogo = uploadedLogoIds.has(channel.id)
   const logoUrl = `/channels/${encodeURIComponent(channel.id)}/logo`
-  const burnIn = brandingBurnIn(branding)
   return `<section class="channel-branding-dialog" data-branding-editor>
     <header>
       <div><p class="channel-admin-eyebrow">Channel identity</p><h2>${escapeHtml(channel.name)} logo</h2></div>
-      <p>Choose where this channel’s logo appears. Video burn-in is optional and separate from app artwork.</p>
+      <p>Choose the logo shown by ToastTV clients when the channel menu or programme information is open. Video remains clean.</p>
     </header>
     ${renderBuilderNavigation(channel, 'branding')}
     <form method="post" enctype="multipart/form-data" action="/channels/${encodeURIComponent(channel.id)}/branding">
@@ -307,47 +304,22 @@ function renderBrandingEditor(
       ${brandingMode('custom', 'Custom channel logo', 'Show a separate transparent PNG for this channel.', branding.mode)}
       ${brandingMode('off', 'Hide channel logo', 'Do not show a logo for this channel in apps.', branding.mode)}
     </div>
-    <div class="channel-branding-burn-in" data-branding-burn-in-section>
-      <label>
-        <input type="checkbox" name="brandingBurnIn" value="true" data-branding-burn-in ${burnIn ? 'checked' : ''}>
-        <span>
-          <strong>Burn logo into video</strong>
-          <small>Optional. This adds transcoding work and permanently places the logo in the video; viewers cannot hide it in their app.</small>
-        </span>
-      </label>
-      <p data-branding-burn-in-note>${branding.mode === 'off' ? 'Choose a global or custom logo before enabling burn-in.' : burnIn ? 'The logo will appear in apps and in the encoded video.' : 'App-only is recommended: the logo remains hideable by each client.'}</p>
-    </div>
     <div class="channel-branding-workspace" data-branding-custom>
-      <div class="channel-logo-preview" data-logo-screen data-position="${branding.position}" data-burn-in="${burnIn}">
+      <div class="channel-logo-preview" data-logo-screen data-position="2" data-burn-in="false">
         <div class="channel-logo-preview-safe-area">
           ${hasCustomLogo ? `<img src="${logoUrl}" alt="Current logo preview" data-logo-preview>` : '<img alt="Selected logo preview" data-logo-preview hidden>'}
           <span data-logo-placeholder ${hasCustomLogo ? 'hidden' : ''}>Choose a transparent PNG to preview it here</span>
         </div>
-        <small data-logo-preview-caption>${burnIn ? 'Burn-in preview · final video' : 'App logo preview · video remains clean'}</small>
+        <small data-logo-preview-caption>App menu preview · video remains clean</small>
       </div>
       <div class="channel-branding-fields">
         <label>Custom app logo <input type="file" name="brandingLogo" accept="image/png" data-logo-file><small>Transparent PNG, up to 5 MB. Selecting a file updates the preview before saving.</small></label>
-        <div class="channel-branding-controls" data-branding-burn-in-options ${burnIn ? '' : 'hidden'}>
-          <strong class="channel-branding-controls-title">Burn-in placement</strong>
-          <label>Corner
-            <select name="brandingPosition" data-logo-position>
-              ${brandingPosition(0, 'Top left', branding.position)}
-              ${brandingPosition(2, 'Top right', branding.position)}
-              ${brandingPosition(6, 'Bottom left', branding.position)}
-              ${brandingPosition(8, 'Bottom right', branding.position)}
-            </select>
-          </label>
-          <label>Size <span><input type="range" name="brandingSizePercent" min="5" max="30" value="${branding.sizePercent}" data-logo-size><output data-logo-size-output>${branding.sizePercent}%</output></span></label>
-          <label>Opacity <span><input type="range" name="brandingOpacity" min="0" max="255" value="${branding.opacity}" data-logo-opacity><output data-logo-opacity-output>${Math.round((branding.opacity / 255) * 100)}%</output></span></label>
-          <label>X offset <input type="number" name="brandingX" min="0" max="500" value="${branding.x}" data-logo-x></label>
-          <label>Y offset <input type="number" name="brandingY" min="0" max="500" value="${branding.y}" data-logo-y></label>
-        </div>
       </div>
     </div>
     <div class="channel-branding-schedule-assets">
       <label>Scheduled logo variants (PNG, up to 5 MB each)
         <input type="file" name="brandingVariantLogos" accept="image/png" multiple>
-        <small>Switch app artwork by time block—for example, Kids by day and Adult Swim at night. When burn-in is enabled, the same scheduled logo is also placed in the video. The filename becomes its ID: <code>adult-swim.png</code> becomes <code>adult-swim</code>.</small>
+        <small>Switch app artwork by time block—for example, Kids by day and Adult Swim at night. The filename becomes its ID: <code>adult-swim.png</code> becomes <code>adult-swim</code>.</small>
       </label>
       <p>${scheduledLogoIds.length > 0 ? `Available IDs: ${scheduledLogoIds.map((id) => `<code>${escapeHtml(id)}</code>`).join(' ')}` : 'No scheduled logo variants uploaded yet.'}</p>
     </div>
@@ -359,7 +331,6 @@ function renderBrandingEditor(
 function defaultBranding(): NonNullable<LibraryChannelPolicy['branding']> {
   return {
     mode: 'inherit',
-    burnIn: false,
     opacity: 210,
     position: 2,
     x: 24,
@@ -368,15 +339,10 @@ function defaultBranding(): NonNullable<LibraryChannelPolicy['branding']> {
   }
 }
 
-function brandingBurnIn(branding: NonNullable<LibraryChannelPolicy['branding']>): boolean {
-  return branding.burnIn === true
-}
-
 function brandingHiddenFields(
   branding: NonNullable<LibraryChannelPolicy['branding']>
 ): string {
   return `<input type="hidden" name="brandingMode" value="${branding.mode}">
-    <input type="hidden" name="brandingBurnIn" value="${brandingBurnIn(branding)}">
     <input type="hidden" name="brandingOpacity" value="${branding.opacity}">
     <input type="hidden" name="brandingPosition" value="${branding.position}">
     <input type="hidden" name="brandingX" value="${branding.x}">

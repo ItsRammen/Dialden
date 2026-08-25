@@ -520,11 +520,13 @@ describe('ChannelController', () => {
       expect.objectContaining({
         branding: expect.objectContaining({
           mode: 'custom',
-          burnIn: true,
           position: 8,
         }),
         marathon: { enabled: true, frequency: 8, episodeCount: 3 },
       })
+    )
+    expect(channels.update.mock.calls[0]?.[1].branding).not.toHaveProperty(
+      'burnIn'
     )
     expect(restarted).toEqual(['kids-club'])
   })

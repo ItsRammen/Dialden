@@ -27,6 +27,57 @@ const request = (): ChannelPipelineRequest => ({
 })
 
 describe('FfmpegContinuousHlsPipelineFactory', () => {
+  test('applies the QSV decoder only to inputs hinted as hardware-decodable', () => {
+    const value = request()
+    const first = { ...value.sequence[0]!, decodeHint: 'hw' as const }
+    const second = { ...value.sequence[1]!, decodeHint: 'sw' as const }
+    const third = { ...value.sequence[2]! }
+    const factory = new FfmpegContinuousHlsPipelineFactory(
+      'ffmpeg',
+      undefined,
+      undefined,
+      () => 1_787_500_000_000,
+      {
+        configuredMode: 'intel-qsv',
+        activeBackend: 'intel-qsv',
+        hardwareAcceleration: true,
+        device: '/dev/dri/renderD129',
+      }
+    )
+    const command = factory.command({
+      ...value,
+      position: first,
+      sequence: [first, second, third],
+    })
+
+    const inputIndexes = command
+      .map((value, index) => (value === '-i' ? index : -1))
+      .filter((index) => index >= 0)
+    expect(inputIndexes).toHaveLength(3)
+    for (const index of inputIndexes) {
+      const before = command.slice(Math.max(0, index - 6), index)
+      if (command[index + 1] === '/media/a.mkv') {
+        expect(before).toContain('-hwaccel')
+        expect(before).toContain('qsv')
+      } else {
+        expect(before).not.toContain('-hwaccel')
+      }
+    }
+  })
+
+  test('ignores hardware decode hints in software mode', () => {
+    const value = request()
+    const sequence = value.sequence.map((item) => ({
+      ...item,
+      decodeHint: 'hw' as const,
+    }))
+    const command = new FfmpegContinuousHlsPipelineFactory().command({
+      ...value,
+      sequence,
+    })
+    expect(command).not.toContain('-hwaccel')
+  })
+
   test('builds one normalized graph for episode, bumper, and next episode', () => {
     const command = new FfmpegContinuousHlsPipelineFactory().command(request())
     expect(command.filter((value) => value === '-i')).toHaveLength(3)
@@ -46,7 +97,7 @@ describe('FfmpegContinuousHlsPipelineFactory', () => {
     expect(command).toContain('aac')
   })
 
-  test('uses Intel QSV for encode-only acceleration while preserving software overlays', () => {
+  test('uses Intel QSV for encode-only acceleration', () => {
     const factory = new FfmpegContinuousHlsPipelineFactory(
       'ffmpeg',
       undefined,
@@ -59,17 +110,7 @@ describe('FfmpegContinuousHlsPipelineFactory', () => {
         device: '/dev/dri/renderD129',
       }
     )
-    const command = factory.command({
-      ...request(),
-      overlay: {
-        sourcePath: '/data/channel-logos/kids.png',
-        opacity: 0.8,
-        position: 8,
-        x: 32,
-        y: 24,
-        sizePercent: 12,
-      },
-    })
+    const command = factory.command(request())
     const graph = command[command.indexOf('-filter_complex') + 1] ?? ''
 
     expect(command).toContain('vaapi=va:/dev/dri/renderD129')
@@ -77,7 +118,6 @@ describe('FfmpegContinuousHlsPipelineFactory', () => {
     expect(command).toContain('h264_qsv')
     expect(command).not.toContain('libx264')
     expect(command).not.toContain('zerolatency')
-    expect(graph).toContain('overlay=x=W-w-32:y=H-h-24:shortest=1')
     expect(graph).toContain('[joinedv]realtime=speed=1,format=nv12[outv]')
     expect(command[command.indexOf('-pix_fmt') + 1]).toBe('nv12')
   })
@@ -99,51 +139,16 @@ describe('FfmpegContinuousHlsPipelineFactory', () => {
     expect(command.at(-1)).toBe('/data/streams/kids/live/index.m3u8')
   })
 
-  test('burns a per-channel logo into the normalized video feed', () => {
-    const command = new FfmpegContinuousHlsPipelineFactory().command({
-      ...request(),
-      overlay: {
-        sourcePath: '/data/channel-logos/kids.png',
-        opacity: 0.8,
-        position: 8,
-        x: 32,
-        y: 24,
-        sizePercent: 12,
-      },
-    })
+  test('never burns a logo into the normalized video feed', () => {
+    const command = new FfmpegContinuousHlsPipelineFactory().command(request())
 
-    expect(command).toContain('/data/channel-logos/kids.png')
-    expect(command.slice(0, command.indexOf('/data/channel-logos/kids.png'))).toContain('-loop')
+    expect(command).not.toContain('-loop')
+    expect(command).not.toContain('/data/channel-logos/kids.png')
     const graph = command[command.indexOf('-filter_complex') + 1] ?? ''
-    expect(graph).toContain('colorchannelmixer=aa=0.8')
-    expect(graph).toContain('scale=230:-1[brand0]')
-    expect(graph).toContain('overlay=x=W-w-32:y=H-h-24:shortest=1')
+    expect(graph).not.toContain('overlay=')
+    expect(graph).not.toContain('[brand')
+    expect(command.filter((value) => value === '-i')).toHaveLength(3)
     expect(graph).toContain('[joinedv]realtime=speed=1[outv]')
-  })
-
-  test('switches scheduled logos between lookahead items before concatenation', () => {
-    const value = request()
-    const first = {
-      ...value.sequence[0]!,
-      overlay: { sourcePath: '/logos/nick.png', opacity: 1, position: 2 as const, x: 20, y: 20, sizePercent: 10 },
-    }
-    const second = {
-      ...value.sequence[1]!,
-      overlay: { sourcePath: '/logos/adult-swim.png', opacity: 0.7, position: 8 as const, x: 30, y: 30, sizePercent: 15 },
-    }
-    const third = { ...value.sequence[2]!, overlay: null }
-    const command = new FfmpegContinuousHlsPipelineFactory().command({
-      ...value,
-      position: first,
-      sequence: [first, second, third],
-    })
-    const graph = command[command.indexOf('-filter_complex') + 1] ?? ''
-    expect(command).toContain('/logos/nick.png')
-    expect(command).toContain('/logos/adult-swim.png')
-    expect(graph).toContain('[brand0]')
-    expect(graph).toContain('[brand1]')
-    expect(graph).toContain('[basev2]null[v2]')
-    expect(graph.indexOf('[brand0]')).toBeLessThan(graph.indexOf('concat=n=3'))
   })
 
   test('probes unknown audio layouts concurrently and caches them per source', async () => {

@@ -499,6 +499,7 @@ button { cursor: pointer; }
   height: 100%;
 }
 .player-video { object-fit: contain; background: #05090a; }
+.player-video--standby { visibility: hidden; }
 
 .player-backdrop {
   background: radial-gradient(circle at 50% 40%, #315855 0%, #172829 46%, #071011 100%);

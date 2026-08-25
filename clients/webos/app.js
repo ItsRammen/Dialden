@@ -8,14 +8,12 @@
   var DEFAULT_SERVER = 'http://TOWER:1993';
   var POLL_INTERVAL_MS = 30000;
   var CHANNEL_REFRESH_INTERVAL_MS = 15000;
-  var ADJACENT_WARM_DELAY_MS = 1200;
-  var ADJACENT_WARM_REFRESH_MS = 12000;
   var PRESENCE_INTERVAL_MS = 15000;
   var DRIFT_LIMIT_SECONDS = 8;
   var GUIDE_RENDER_LIMIT = 250;
-  var LIVE_STREAM_RETRY_DELAYS = [750, 1500, 3000, 5000, 8000];
-  var TUNING_STABLE_MS = 850;
-  var ZAP_DEBOUNCE_MS = 200;
+  var LIVE_STREAM_RETRY_DELAYS = [300, 750, 1500, 3000, 5000];
+  var TUNING_STABLE_MS = 150;
+  var ZAP_DEBOUNCE_MS = 80;
   var CHANNEL_OSD_MS = 2800;
   var LIVE_EDGE_TOLERANCE_SECONDS = 3;
   var RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 15000, 30000];
@@ -50,6 +48,7 @@
     connectSerial: 0,
     guideSerial: 0,
     channelRefreshSerial: 0,
+    videoSlot: 'A',
     tuneMetrics: null
   };
 
@@ -64,7 +63,6 @@
   var liveRetryTimer = null;
   var tuningTimer = null;
   var channelRefreshTimer = null;
-  var adjacentWarmTimer = null;
   var sourceRefreshTimer = null;
   var zapTimer = null;
   var channelOsdTimer = null;
@@ -102,7 +100,7 @@
       'bootScreen', 'bootMessage', 'bootSettingsButton', 'setupScreen', 'channelsScreen', 'playerScreen', 'serverInput',
       'connectButton', 'cancelSetupButton', 'setupMessage', 'settingsButton',
       'retryChannelsButton', 'channelGrid', 'emptyChannels', 'homeClock',
-      'serverLabel', 'video', 'playerBackdrop', 'playerHeader', 'playerChannelName',
+      'serverLabel', 'videoA', 'videoB', 'playerBackdrop', 'playerHeader', 'playerChannelName',
       'playerChannelLogo', 'playerStatus', 'playerClock', 'playerInfo', 'playerCollection', 'playerTitle',
       'timelineFill', 'programTimes', 'nextTitle', 'offAirPanel', 'offAirNext',
       'playbackError', 'playbackErrorTitle', 'playbackErrorText',
@@ -145,7 +143,9 @@
     }, false);
     elements.playerChannelLogo.addEventListener('error', hideChannelLogo, false);
 
-    bindVideoEvents(elements.video);
+    bindVideoEvents(elements.videoA);
+    bindVideoEvents(elements.videoB);
+    applyVideoVisibility();
 
     document.addEventListener('keydown', handleKeyDown, false);
     document.addEventListener('mouseover', function (event) {
@@ -159,20 +159,25 @@
       if (state.view === 'player') syncNow(false);
     }, false);
     document.addEventListener('visibilitychange', function () {
-      if (!document.hidden) {
-        refreshChannelList();
-        if (state.view === 'player') prepareCurrentChannel();
+      if (document.hidden) {
+        closeLineupSession();
+        return;
       }
+      refreshChannelList();
+      if (state.view === 'player') reopenLineupSession();
+      else if (state.channels.length) startTelevision();
     }, false);
+    window.addEventListener('pagehide', closeLineupSession, false);
+    window.addEventListener('beforeunload', closeLineupSession, false);
   }
 
   function bindVideoEvents(video) {
     video.addEventListener('loadedmetadata', function (event) {
-      if (event.currentTarget !== elements.video) return;
+      if (event.currentTarget !== activeVideo()) return;
       joinLive();
     }, false);
     video.addEventListener('canplay', function (event) {
-      if (event.currentTarget !== elements.video) return;
+      if (event.currentTarget !== activeVideo()) return;
       if (state.tuning && state.activeSource && state.activeSource.mode === 'channel-hls') {
         seekHlsLiveEdge();
         stabilizeTuning();
@@ -180,7 +185,7 @@
       if (state.pendingJoin) joinLive();
     }, false);
     video.addEventListener('playing', function (event) {
-      if (event.currentTarget !== elements.video) return;
+      if (event.currentTarget !== activeVideo()) return;
       state.awaitingGesture = false;
       if (state.tuning) {
         if (state.activeSource && state.activeSource.mode === 'channel-hls') seekHlsLiveEdge();
@@ -190,12 +195,12 @@
       queuePresenceHeartbeat();
     }, false);
     video.addEventListener('seeked', function (event) {
-      if (event.currentTarget !== elements.video) return;
+      if (event.currentTarget !== activeVideo()) return;
       state.hlsSeekPending = false;
       if (state.tuning && state.activeSource && state.activeSource.mode === 'channel-hls') stabilizeTuning();
     }, false);
     video.addEventListener('waiting', function (event) {
-      if (event.currentTarget !== elements.video) return;
+      if (event.currentTarget !== activeVideo()) return;
       if (state.tuning) {
         clearTuningTimer();
         setPlayerStatus('Tuning — preparing live video…');
@@ -203,14 +208,27 @@
       queuePresenceHeartbeat();
     }, false);
     video.addEventListener('pause', function (event) {
-      if (event.currentTarget !== elements.video) return;
+      if (event.currentTarget !== activeVideo()) return;
       if (state.localPaused) setPlayerStatus('Paused — press Play to rejoin live');
       queuePresenceHeartbeat();
     }, false);
     video.addEventListener('error', function (event) {
-      if (event.currentTarget !== elements.video) return;
+      if (event.currentTarget !== activeVideo()) return;
       handleMediaError();
     }, false);
+  }
+
+  function activeVideo() {
+    return state.videoSlot === 'A' ? elements.videoA : elements.videoB;
+  }
+
+  function standbyVideo() {
+    return state.videoSlot === 'A' ? elements.videoB : elements.videoA;
+  }
+
+  function applyVideoVisibility() {
+    elements.videoA.classList.toggle('player-video--standby', state.videoSlot !== 'A');
+    elements.videoB.classList.toggle('player-video--standby', state.videoSlot !== 'B');
   }
 
   function connectToServer(rawValue, remember, automatic) {
@@ -286,8 +304,8 @@
     var savedChannelId = readStorage(STORAGE_CHANNEL);
     showBootMessage('Tuning your last channel…', false);
     postJson(
-      state.serverUrl + '/api/client/v1/channels/startup',
-      { clientId: state.clientId, lastChannelId: savedChannelId, warmAdjacent: true },
+      state.serverUrl + '/api/client/v1/session',
+      { clientId: state.clientId, lastChannelId: savedChannelId, lineup: true },
       18000,
       function (error, data) {
         if (generation !== state.tuneGeneration) return;
@@ -303,10 +321,39 @@
           activateView('channels');
           return;
         }
-        state.tuneMetrics = { requestedAt: requestedAt, preparedAt: Date.now(), firstFrameAt: 0, channelId: state.channels[index].id };
+        state.tuneMetrics = { requestedAt: requestedAt, preparedAt: Date.now(), attachedAt: 0, firstFrameAt: 0, channelId: state.channels[index].id, src: 'startup' };
         showChannelOsd(index, 'Tuning…');
         safeReplaceHistory({ view: 'player' });
         commitPreparedChannel(index, generation, false);
+      }
+    );
+  }
+
+  function closeLineupSession() {
+    if (!state.serverUrl || !state.clientId) return;
+    var payload = JSON.stringify({ clientId: state.clientId });
+    try {
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon(
+          state.serverUrl + '/api/client/v1/session/close',
+          new Blob([payload], { type: 'application/json' })
+        );
+        return;
+      }
+    } catch (ignore) {}
+    postJson(state.serverUrl + '/api/client/v1/session/close', { clientId: state.clientId }, 3000);
+  }
+
+  function reopenLineupSession() {
+    var channel = currentChannel();
+    if (!channel || !state.serverUrl) return;
+    postJson(
+      state.serverUrl + '/api/client/v1/session',
+      { clientId: state.clientId, lastChannelId: channel.id, lineup: true },
+      18000,
+      function (error) {
+        if (error || state.view !== 'player' || !currentChannel() || currentChannel().id !== channel.id) return;
+        syncNow(true);
       }
     );
   }
@@ -338,7 +385,6 @@
       function (error) {
         if (error || state.view !== 'player' || !currentChannel() || currentChannel().id !== channel.id) return;
         syncNow(true);
-        scheduleAdjacentWarm();
       }
     );
   }
@@ -560,7 +606,7 @@
     state.tuneGeneration += 1;
     var generation = state.tuneGeneration;
     state.requestedChannelIndex = targetIndex;
-    state.tuneMetrics = { requestedAt: Date.now(), preparedAt: 0, firstFrameAt: 0, channelId: channel.id };
+    state.tuneMetrics = { requestedAt: Date.now(), preparedAt: 0, attachedAt: 0, firstFrameAt: 0, channelId: channel.id, src: 'zap' };
     showChannelOsd(targetIndex, 'Tuning…');
     if (zapTimer) window.clearTimeout(zapTimer);
     zapTimer = window.setTimeout(function () {
@@ -612,7 +658,6 @@
     state.liveRetryAttempt = 0;
     state.hlsSeekPending = false;
     detachVideoForTune();
-    clearAdjacentWarmTimer();
     clearLiveRetryTimer();
     clearPlaybackError();
     hideChannelLogo();
@@ -677,7 +722,6 @@
     }
     elements.playerChannelName.textContent = currentChannel().name;
     syncNow(false);
-    scheduleAdjacentWarm();
   }
 
   function channelListSignature(channels) {
@@ -704,38 +748,6 @@
       }
     }
     state.channelIndex = Math.max(0, Math.min(Number(fallbackIndex) || 0, state.channels.length - 1));
-  }
-
-  function scheduleAdjacentWarm() {
-    clearAdjacentWarmTimer();
-    if (state.view !== 'player' || state.channels.length < 2 || !currentChannel()) return;
-    adjacentWarmTimer = window.setTimeout(warmAdjacentChannels, ADJACENT_WARM_DELAY_MS);
-  }
-
-  function warmAdjacentChannels() {
-    adjacentWarmTimer = null;
-    if (state.view !== 'player' || state.channels.length < 2 || !currentChannel()) return;
-    var previous = state.channels[(state.channelIndex - 1 + state.channels.length) % state.channels.length];
-    var next = state.channels[(state.channelIndex + 1) % state.channels.length];
-    var ids = [];
-    if (previous && previous.id !== currentChannel().id) ids.push(previous.id);
-    if (next && next.id !== currentChannel().id && ids.indexOf(next.id) === -1) ids.push(next.id);
-    warmChannelIds(ids.slice(0, 2));
-    adjacentWarmTimer = window.setTimeout(warmAdjacentChannels, ADJACENT_WARM_REFRESH_MS);
-  }
-
-  function warmChannelIds(channelIds) {
-    if (!state.serverUrl || !state.clientId) return;
-    postJson(
-      state.serverUrl + '/api/client/v1/channels/warm',
-      { clientId: state.clientId, channelIds: channelIds },
-      5000
-    );
-  }
-
-  function clearAdjacentWarmTimer() {
-    if (adjacentWarmTimer) window.clearTimeout(adjacentWarmTimer);
-    adjacentWarmTimer = null;
   }
 
   function syncNow(forceReload) {
@@ -792,7 +804,7 @@
       }
 
       if (source.mode === 'direct' && !forceReload && previousProgramId === data.program.id &&
-          !window.ToastTVPlaybackPolicy.shouldReload(state.activeSource, source) && elements.video.readyState >= 1) {
+          !window.ToastTVPlaybackPolicy.shouldReload(state.activeSource, source) && activeVideo().readyState >= 1) {
         reconcileLivePosition();
         return;
       }
@@ -811,7 +823,8 @@
     state.hlsSeekPending = false;
     state.activeSource = source;
     state.playToken += 1;
-    if (!window.ToastTVPlaybackPolicy.loadMediaElement(elements.video, source.url)) handleMediaError();
+    if (!window.ToastTVPlaybackPolicy.loadMediaElement(activeVideo(), source.url)) handleMediaError();
+    if (state.tuneMetrics && !state.tuneMetrics.attachedAt) state.tuneMetrics.attachedAt = Date.now();
   }
 
   function joinLive() {
@@ -823,8 +836,8 @@
       return;
     }
     var target = expectedPositionSeconds();
-    if (isFinite(elements.video.duration) && elements.video.duration > 0) {
-      target = Math.min(target, Math.max(0, elements.video.duration - 0.25));
+    if (isFinite(activeVideo().duration) && activeVideo().duration > 0) {
+      target = Math.min(target, Math.max(0, activeVideo().duration - 0.25));
     }
     target = Math.max(0, target);
     var token = ++state.playToken;
@@ -832,13 +845,13 @@
     function finishSeek() {
       if (completed || token !== state.playToken) return;
       completed = true;
-      elements.video.removeEventListener('seeked', finishSeek, false);
+      activeVideo().removeEventListener('seeked', finishSeek, false);
       attemptPlay(token);
     }
-    elements.video.addEventListener('seeked', finishSeek, false);
+    activeVideo().addEventListener('seeked', finishSeek, false);
     window.setTimeout(finishSeek, 1800);
     try {
-      if (Math.abs(elements.video.currentTime - target) > 0.5) elements.video.currentTime = target;
+      if (Math.abs(activeVideo().currentTime - target) > 0.5) activeVideo().currentTime = target;
       else window.setTimeout(finishSeek, 0);
     } catch (error) {
       finishSeek();
@@ -847,15 +860,16 @@
 
   function seekHlsLiveEdge() {
     try {
-      if (!elements.video.seekable || elements.video.seekable.length < 1) return false;
-      var edge = elements.video.seekable.end(elements.video.seekable.length - 1);
-      if (!isFinite(edge) || !isFinite(elements.video.currentTime)) return false;
-      if (elements.video.seeking) return false;
-      var lag = edge - elements.video.currentTime;
+      var video = activeVideo();
+      if (!video.seekable || video.seekable.length < 1) return false;
+      var edge = video.seekable.end(video.seekable.length - 1);
+      if (!isFinite(edge) || !isFinite(video.currentTime)) return false;
+      if (video.seeking) return false;
+      var lag = edge - video.currentTime;
       if (lag > LIVE_EDGE_TOLERANCE_SECONDS || lag < -1) {
         if (!state.hlsSeekPending) {
           state.hlsSeekPending = true;
-          elements.video.currentTime = Math.max(0, edge - 0.75);
+          video.currentTime = Math.max(0, edge - 0.75);
         }
         return false;
       }
@@ -883,13 +897,13 @@
     clearTuningTimer();
     setPlayerStatus('Locking onto live broadcast…');
     var generation = state.tuneGeneration;
-    var video = elements.video;
+    var video = activeVideo();
     var sourceUrl = state.activeSource && state.activeSource.url;
     tuningTimer = window.setTimeout(function () {
       tuningTimer = null;
       if (
         generation !== state.tuneGeneration ||
-        video !== elements.video ||
+        video !== activeVideo() ||
         !state.activeSource ||
         state.activeSource.url !== sourceUrl ||
         !state.tuning ||
@@ -903,7 +917,8 @@
       state.liveRetryAttempt = 0;
       state.failedLiveUrl = null;
       state.hlsSeekPending = false;
-      elements.video.muted = false;
+      video.muted = false;
+      window.ToastTVPlaybackPolicy.resetMediaElement(standbyVideo());
       elements.playerScreen.classList.add('has-video');
       writeStorage(STORAGE_CHANNEL, currentChannel().id);
       if (state.tuneMetrics && state.tuneMetrics.channelId === currentChannel().id) {
@@ -914,11 +929,10 @@
       setPlayerStatus('Playing live');
       scheduleChromeHide();
       queuePresenceHeartbeat();
-      scheduleAdjacentWarm();
       window.setTimeout(function () {
         if (
           generation === state.tuneGeneration &&
-          video === elements.video &&
+          video === activeVideo() &&
           state.activeSource &&
           state.activeSource.url === sourceUrl &&
           state.view === 'player' &&
@@ -936,7 +950,7 @@
   function attemptPlay(token) {
     if (token !== state.playToken || state.localPaused) return;
     var result;
-    try { result = elements.video.play(); } catch (error) { handlePlayRejected(); return; }
+    try { result = activeVideo().play(); } catch (error) { handlePlayRejected(); return; }
     if (result && typeof result.then === 'function') {
       result.then(function () {}, handlePlayRejected);
     }
@@ -959,9 +973,10 @@
     if (!state.currentNow || !state.currentNow.program || state.localPaused) return;
     if (state.activeSource && state.activeSource.mode === 'channel-hls') {
       try {
-        if (elements.video.seekable && elements.video.seekable.length > 0) {
-          var liveEdge = elements.video.seekable.end(elements.video.seekable.length - 1);
-          if (liveEdge - elements.video.currentTime > DRIFT_LIMIT_SECONDS) {
+        var video = activeVideo();
+        if (video.seekable && video.seekable.length > 0) {
+          var liveEdge = video.seekable.end(video.seekable.length - 1);
+          if (liveEdge - video.currentTime > DRIFT_LIMIT_SECONDS) {
             seekHlsLiveEdge();
             setPlayerStatus('Rejoined live');
           }
@@ -970,10 +985,10 @@
       return;
     }
     var target = expectedPositionSeconds();
-    if (Math.abs(elements.video.currentTime - target) > DRIFT_LIMIT_SECONDS) {
+    if (Math.abs(activeVideo().currentTime - target) > DRIFT_LIMIT_SECONDS) {
       try {
-        if (isFinite(elements.video.duration)) target = Math.min(target, Math.max(0, elements.video.duration - 0.25));
-        elements.video.currentTime = Math.max(0, target);
+        if (isFinite(activeVideo().duration)) target = Math.min(target, Math.max(0, activeVideo().duration - 0.25));
+        activeVideo().currentTime = Math.max(0, target);
         setPlayerStatus('Rejoined live');
       } catch (ignore) {}
     }
@@ -1014,7 +1029,7 @@
   function pauseLocally() {
     if (state.view !== 'player' || !state.currentNow || !state.currentNow.program) return;
     state.localPaused = true;
-    elements.video.pause();
+    activeVideo().pause();
     queuePresenceHeartbeat();
     showChrome();
   }
@@ -1088,11 +1103,16 @@
     elements.nowTimelineFill.style.width = percent.toFixed(2) + '%';
   }
 
+  function resetAllVideos() {
+    window.ToastTVPlaybackPolicy.resetMediaElement(elements.videoA);
+    window.ToastTVPlaybackPolicy.resetMediaElement(elements.videoB);
+  }
+
   function showOffAir(nextProgram) {
     state.pendingJoin = false;
     state.playToken += 1;
     state.activeSource = null;
-    window.ToastTVPlaybackPolicy.resetMediaElement(elements.video);
+    resetAllVideos();
     elements.playerScreen.classList.remove('has-video');
     elements.offAirPanel.classList.remove('hidden');
     elements.offAirNext.textContent = nextProgram ? 'Next: ' + nextProgram.title + ' at ' + formatTime(nextProgram.scheduledStart) : 'Check the guide for what’s next.';
@@ -1512,7 +1532,9 @@
   function detachVideoForTune() {
     state.pendingJoin = false;
     state.playToken += 1;
-    window.ToastTVPlaybackPolicy.resetMediaElement(elements.video);
+    state.videoSlot = state.videoSlot === 'A' ? 'B' : 'A';
+    applyVideoVisibility();
+    window.ToastTVPlaybackPolicy.resetMediaElement(activeVideo());
   }
 
   function retryLiveStream(message) {
@@ -1525,7 +1547,7 @@
     state.activeSource = null;
     state.pendingJoin = false;
     state.playToken += 1;
-    window.ToastTVPlaybackPolicy.resetMediaElement(elements.video);
+    window.ToastTVPlaybackPolicy.resetMediaElement(activeVideo());
     beginTuning(message);
     scheduleLiveRetry(failedUrl, channel.id);
   }
@@ -1561,15 +1583,7 @@
     state.liveRetryAttempt = 0;
     clearTuningTimer();
     clearSourceRefreshTimer();
-    clearAdjacentWarmTimer();
-    if (state.serverUrl && state.clientId) {
-      postJson(
-        state.serverUrl + '/api/client/v1/channels/warm',
-        { clientId: state.clientId, channelIds: [] },
-        3000
-      );
-    }
-    window.ToastTVPlaybackPolicy.resetMediaElement(elements.video);
+    resetAllVideos();
     elements.playerScreen.classList.remove('has-video');
     hideChannelLogo();
     hideOffAir();
@@ -1680,9 +1694,14 @@
 
   function logTuneMetrics(metrics) {
     var prepareMs = metrics.preparedAt ? metrics.preparedAt - metrics.requestedAt : 0;
+    var attachMs = metrics.attachedAt ? metrics.attachedAt - metrics.requestedAt : 0;
+    var frameAfterAttachMs = metrics.firstFrameAt && metrics.attachedAt
+      ? metrics.firstFrameAt - metrics.attachedAt : 0;
     var firstFrameMs = metrics.firstFrameAt - metrics.requestedAt;
     try {
-      console.log('[ToastTV Tune] channel=' + metrics.channelId + ' prepareMs=' + prepareMs + ' firstFrameMs=' + firstFrameMs);
+      console.log('[ToastTV Tune] channel=' + metrics.channelId + ' src=' + (metrics.src || '?') +
+        ' prepareMs=' + prepareMs + ' attachMs=' + attachMs +
+        ' frameAfterAttachMs=' + frameAfterAttachMs + ' firstFrameMs=' + firstFrameMs);
     } catch (ignore) {}
   }
 
@@ -1769,7 +1788,7 @@
     if (elements.playbackError && !elements.playbackError.classList.contains('hidden')) return 'error';
     if (!state.currentNow || !state.currentNow.program) return 'idle';
     if (state.localPaused) return 'paused';
-    if (elements.video.paused || elements.video.readyState < 3) return 'buffering';
+    if (activeVideo().paused || activeVideo().readyState < 3) return 'buffering';
     if (state.activeSource && state.activeSource.mode === 'channel-hls') return 'transcode';
     return 'direct-play';
   }

@@ -56,6 +56,7 @@ function fixture(options: {
   overlay?: boolean
   readiness?: Promise<void>
   stopGate?: Promise<void>
+  sessionLeaseTtlMs?: number
 } = {}) {
   const clock = new FakeClock()
   const requests: ChannelPipelineRequest[] = []
@@ -71,16 +72,6 @@ function fixture(options: {
       fallback: options.noFallback
         ? undefined
         : async () => position({ scheduleItemId: 'stand-by', sourcePath: '/fallback.mp4', type: 'offair' }),
-      overlay: options.overlay
-        ? async () => ({
-            sourcePath: '/data/channel-logos/kids.png',
-            opacity: 0.8,
-            position: 2,
-            x: 20,
-            y: 20,
-            sizePercent: 12,
-          })
-        : undefined,
     },
     {
       start: async (request) => {
@@ -105,7 +96,7 @@ function fixture(options: {
         ? { waitForFreshSegment: () => options.readiness! }
         : {}),
     },
-    { outputRoot: '/data/streams', idleTimeoutMs: 60_000, restartDelayMs: 10 },
+    { outputRoot: '/data/streams', idleTimeoutMs: 60_000, restartDelayMs: 10, ...(options.sessionLeaseTtlMs ? { sessionLeaseTtlMs: options.sessionLeaseTtlMs } : {}) },
     clock
   )
   return { manager, clock, requests, exits, get stops() { return stops }, get resolves() { return resolves } }
@@ -168,14 +159,13 @@ describe('ContinuousChannelWorkerManager', () => {
     expect(state.lastError).toBe('unsupported codec')
   })
 
-  test('passes an available channel overlay to the pipeline', async () => {
-    const f = fixture({ overlay: true })
+  test('never passes a burn-in overlay to the pipeline', async () => {
+    const f = fixture()
     await f.manager.acquire('kids')
-    expect(f.requests[0]?.overlay).toMatchObject({
-      sourcePath: '/data/channel-logos/kids.png',
-      opacity: 0.8,
-      position: 2,
-    })
+    expect(f.requests[0]).not.toHaveProperty('overlay')
+    for (const item of f.requests[0]?.sequence ?? []) {
+      expect(item).not.toHaveProperty('overlay')
+    }
   })
 
   test('keeps an idle worker warm, cancels shutdown on rejoin, then stops after timeout', async () => {
@@ -258,6 +248,72 @@ describe('ContinuousChannelWorkerManager', () => {
     expect(f.manager.getState('preschool')?.status).toBe('stopped')
     expect(f.manager.getState('cartoons')?.status).toBe('stopped')
     expect(f.stops).toBe(2)
+  })
+
+  test('session leases hold workers without inflating viewer counts', async () => {
+    const f = fixture()
+    const state = await f.manager.holdSession('kids', 'tv-1')
+    await settle()
+    expect(state.viewerCount).toBe(0)
+    expect(state.sessionHeld).toBe(true)
+    expect(f.requests).toHaveLength(1)
+
+    // A session-held worker must never idle out while the session is open.
+    f.clock.advance(120_000)
+    await settle()
+    expect(f.manager.getState('kids')?.status).toBe('live')
+
+    // A second client's session keeps the lineup up after the first leaves.
+    await f.manager.holdSession('kids', 'tv-2')
+    await f.manager.releaseSession('kids', 'tv-1')
+    f.clock.advance(120_000)
+    await settle()
+    expect(f.manager.getState('kids')?.status).toBe('live')
+
+    // Releasing the last session tears the worker down promptly.
+    await f.manager.releaseSession('kids', 'tv-2')
+    expect(f.manager.getState('kids')?.status).toBe('stopped')
+  })
+
+  test('an expired session lease tears the idle lineup down without viewers', async () => {
+    const f = fixture({ sessionLeaseTtlMs: 60_000 })
+    await f.manager.holdSession('kids', 'tv-1')
+    await settle()
+    expect(f.manager.getState('kids')?.status).toBe('live')
+    f.clock.advance(59_000)
+    expect(f.manager.getState('kids')?.status).toBe('live')
+    f.clock.advance(2_000)
+    await settle()
+    expect(f.manager.getState('kids')?.status).toBe('stopped')
+  })
+
+  test('refreshSession extends a lease and rejects unknown clients', async () => {
+    const f = fixture({ sessionLeaseTtlMs: 60_000 })
+    await f.manager.holdSession('kids', 'tv-1')
+    await settle()
+    expect(f.manager.refreshSession('kids', 'tv-1')).toBe(true)
+    expect(f.manager.refreshSession('kids', 'stranger')).toBe(false)
+
+    // Repeated refreshes keep pushing expiry forward; the worker stays live.
+    for (let index = 0; index < 5; index += 1) {
+      f.clock.advance(30_000)
+      f.manager.refreshSession('kids', 'tv-1')
+      await settle()
+    }
+    expect(f.manager.getState('kids')?.status).toBe('live')
+
+    // Stop refreshing: the lease finally lapses.
+    f.clock.advance(61_000)
+    await settle()
+    expect(f.manager.getState('kids')?.status).toBe('stopped')
+  })
+
+  test('deactivating an off-air channel removes session leases too', async () => {
+    const f = fixture()
+    await f.manager.holdSession('kids', 'tv-1')
+    await f.manager.deactivate('kids')
+    expect(f.manager.hasSessionLease('kids', 'tv-1')).toBe(false)
+    expect(f.manager.getState('kids')?.sessionHeld ?? false).toBe(false)
   })
 
   test('starts both adjacent warm workers concurrently', async () => {
