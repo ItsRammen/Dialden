@@ -37,7 +37,7 @@ npm run webos:package
 The package is written to:
 
 ```text
-dist/webos/com.itsrammen.app.toasttv_0.2.2_all.ipk
+dist/webos/com.itsrammen.app.toasttv_0.2.3_all.ipk
 ```
 
 LG documents the CLI installation and packaging commands in its
@@ -82,7 +82,7 @@ npm install --global @webos-tools/cli@3.2.5
 7. Install and launch ToastTV:
 
    ```powershell
-   ares-install --device toasttv-lg dist/webos/com.itsrammen.app.toasttv_0.2.2_all.ipk
+   ares-install --device toasttv-lg dist/webos/com.itsrammen.app.toasttv_0.2.3_all.ipk
    ares-launch --device toasttv-lg com.itsrammen.app.toasttv
    ```
 

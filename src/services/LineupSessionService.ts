@@ -36,6 +36,11 @@ interface LineupSessionRecord {
   closeTimer: unknown
 }
 
+interface LineupOpening {
+  preferredChannelId?: string
+  promise: Promise<LineupSessionSnapshotEntry>
+}
+
 export interface LineupSessionSnapshotEntry {
   readonly clientId: string
   readonly channelIds: readonly string[]
@@ -62,6 +67,7 @@ export class LineupSessionService {
   private readonly maximumConcurrentWorkers: number
   private readonly clock: ChannelWorkerClock
   private readonly sessions = new Map<string, LineupSessionRecord>()
+  private readonly openings = new Map<string, LineupOpening>()
   private startQueue: Promise<void> = Promise.resolve()
 
   constructor(
@@ -93,7 +99,34 @@ export class LineupSessionService {
    * channel is watchable; the remaining channels start in the background,
    * ordered outward from the preferred position to make nearby zaps hot first.
    */
-  async open(
+  open(
+    clientId: string,
+    preferredChannelId?: string
+  ): Promise<LineupSessionSnapshotEntry> {
+    const current = this.openings.get(clientId)
+    if (current && current.preferredChannelId === preferredChannelId) {
+      return current.promise
+    }
+
+    // webOS can dispatch duplicate visibility/startup events. Serialize a
+    // changed preference and share an identical in-flight open so two requests
+    // for one TV can never replace and release each other's worker lease.
+    const currentPromise = current?.promise
+    const promise = currentPromise
+      ? currentPromise
+          .catch(() => undefined)
+          .then(() => this.openOnce(clientId, preferredChannelId))
+      : this.openOnce(clientId, preferredChannelId)
+    const opening: LineupOpening = { preferredChannelId, promise }
+    this.openings.set(clientId, opening)
+    void promise.then(
+      () => this.finishOpening(clientId, opening),
+      () => this.finishOpening(clientId, opening)
+    )
+    return promise
+  }
+
+  private async openOnce(
     clientId: string,
     preferredChannelId?: string
   ): Promise<LineupSessionSnapshotEntry> {
@@ -161,6 +194,10 @@ export class LineupSessionService {
 
     await this.workers.whenReady(preferred!)
     return this.describe(clientId, record)
+  }
+
+  private finishOpening(clientId: string, opening: LineupOpening): void {
+    if (this.openings.get(clientId) === opening) this.openings.delete(clientId)
   }
 
   /** Heartbeat-driven liveness. Unknown sessions are ignored. */

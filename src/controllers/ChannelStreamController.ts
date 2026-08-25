@@ -96,6 +96,7 @@ export function createChannelStreamController({
       return c.json({
         channel: selected,
         status: state.status === 'error' ? 'unavailable' : 'ready',
+        error: state.status === 'error' ? state.lastError ?? 'Channel encoder failed' : null,
         streamUrl: `/api/v1/channels/${encodeURIComponent(selected.id)}/live/index.m3u8`,
         warmed: [],
         serverTimeMs: Date.now(),
@@ -150,6 +151,10 @@ export function createChannelStreamController({
       return c.json({
         channel: selected,
         status: state && state.status === 'error' ? 'unavailable' : 'ready',
+        error:
+          state && state.status === 'error'
+            ? state.lastError ?? 'Channel encoder failed'
+            : null,
         streamUrl: `/api/v1/channels/${encodeURIComponent(selected.id)}/live/index.m3u8`,
         serverTimeMs: Date.now(),
         fallbackReason: fellBack
@@ -198,6 +203,7 @@ export function createChannelStreamController({
       return c.json({
         channelId,
         status: state.status === 'error' ? 'unavailable' : 'ready',
+        error: state.status === 'error' ? state.lastError ?? 'Channel encoder failed' : null,
         streamUrl: `/api/v1/channels/${encodeURIComponent(channelId)}/live/index.m3u8`,
         serverTimeMs: Date.now(),
       })

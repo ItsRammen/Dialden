@@ -49,6 +49,8 @@
     guideSerial: 0,
     channelRefreshSerial: 0,
     videoSlot: 'A',
+    lineupOpening: false,
+    lineupOpen: false,
     tuneMetrics: null
   };
 
@@ -159,13 +161,13 @@
       if (state.view === 'player') syncNow(false);
     }, false);
     document.addEventListener('visibilitychange', function () {
-      if (document.hidden) {
-        closeLineupSession();
-        return;
-      }
+      /* webOS fires transient visibility changes while its own system UI is
+         opening. Closing and immediately reopening the lineup here races the
+         encoder startup. pagehide/beforeunload still close a genuine exit,
+         while the server TTL handles a suspended or killed application. */
+      if (document.hidden) return;
       refreshChannelList();
       if (state.view === 'player') reopenLineupSession();
-      else if (state.channels.length) startTelevision();
     }, false);
     window.addEventListener('pagehide', closeLineupSession, false);
     window.addEventListener('beforeunload', closeLineupSession, false);
@@ -299,6 +301,8 @@
   }
 
   function startTelevision() {
+    if (state.lineupOpening) return;
+    state.lineupOpening = true;
     var generation = ++state.tuneGeneration;
     var requestedAt = Date.now();
     var savedChannelId = readStorage(STORAGE_CHANNEL);
@@ -308,12 +312,22 @@
       { clientId: state.clientId, lastChannelId: savedChannelId, lineup: true },
       18000,
       function (error, data) {
+        state.lineupOpening = false;
         if (generation !== state.tuneGeneration) return;
-        if (error || !data || !data.channel || data.status !== 'ready') {
-          showBootMessage('Server unavailable — reconnecting…', true);
-          scheduleStartupReconnect(state.serverUrl);
+        if (error || !data || !data.channel) {
+          if (data && data.error) {
+            showChannelStartupFailure(data.error);
+          } else {
+            showBootMessage('The channel is taking longer to start — retrying…', true);
+            scheduleStartupRetry();
+          }
           return;
         }
+        if (data.status !== 'ready') {
+          showChannelStartupFailure(data.error || 'The last channel could not start. Choose another channel to continue.');
+          return;
+        }
+        state.lineupOpen = true;
         var index = findChannelIndex(data.channel.id);
         if (index < 0) index = firstAvailableChannelIndex();
         if (index < 0) {
@@ -331,6 +345,7 @@
 
   function closeLineupSession() {
     if (!state.serverUrl || !state.clientId) return;
+    state.lineupOpen = false;
     var payload = JSON.stringify({ clientId: state.clientId });
     try {
       if (navigator.sendBeacon) {
@@ -346,16 +361,36 @@
 
   function reopenLineupSession() {
     var channel = currentChannel();
-    if (!channel || !state.serverUrl) return;
+    if (!channel || !state.serverUrl || state.lineupOpening) return;
+    state.lineupOpening = true;
     postJson(
       state.serverUrl + '/api/client/v1/session',
       { clientId: state.clientId, lastChannelId: channel.id, lineup: true },
       18000,
-      function (error) {
+      function (error, data) {
+        state.lineupOpening = false;
         if (error || state.view !== 'player' || !currentChannel() || currentChannel().id !== channel.id) return;
+        state.lineupOpen = !!data && data.status === 'ready';
         syncNow(true);
       }
     );
+  }
+
+  function showChannelStartupFailure(message) {
+    safeReplaceHistory({ view: 'channels' });
+    activateView('channels');
+    showToast(message || 'The channel could not be started.');
+  }
+
+  function scheduleStartupRetry() {
+    if (startupReconnectTimer) return;
+    var index = Math.min(state.reconnectAttempt, RECONNECT_DELAYS.length - 1);
+    var delay = RECONNECT_DELAYS[index];
+    state.reconnectAttempt += 1;
+    startupReconnectTimer = window.setTimeout(function () {
+      startupReconnectTimer = null;
+      startTelevision();
+    }, delay);
   }
 
   function scheduleStartupReconnect(serverUrl) {
@@ -627,6 +662,7 @@
         if (error || !data || data.status !== 'ready') {
           state.requestedChannelIndex = null;
           showChannelOsd(index, 'Signal unavailable');
+          if (data && data.error) showToast(data.error);
           return;
         }
         if (state.tuneMetrics) state.tuneMetrics.preparedAt = Date.now();

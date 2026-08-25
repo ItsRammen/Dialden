@@ -135,6 +135,22 @@ describe('LineupSessionService', () => {
     expect(entry.ready).toBe(4)
   })
 
+  test('deduplicates overlapping opens for the same TV and preferred channel', async () => {
+    const gate = deferred<void>()
+    const f = fixture({ preferredGate: gate })
+    const first = f.service.open('tv-1', 'one')
+    const duplicate = f.service.open('tv-1', 'one')
+    expect(duplicate).toBe(first)
+    await settle()
+    expect(f.holds).toHaveLength(0)
+
+    gate.resolve()
+    await Promise.all([first, duplicate])
+    expect(f.holds).toEqual([{ clientId: 'tv-1', channelId: 'one' }])
+    expect(f.releases).toHaveLength(0)
+    expect(f.service.snapshot().totalSessions).toBe(1)
+  })
+
   test('falls back to the first channel when the preferred one is unavailable', async () => {
     const f = fixture()
     await f.service.open('tv-1', 'does-not-exist')
