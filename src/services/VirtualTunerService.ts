@@ -755,7 +755,7 @@ export class VirtualTunerService {
           record.revision = nextRevision
           transitioned = true
           record.sourceKeys.clear()
-          await this.commitStaged(record, staged)
+          await this.commitStaged(record, staged, true)
           committed = true
           record.lastEdgeAdvancedAt = this.clock.now().getTime()
           this.rememberSourceSnapshot(record, channelId, nextRevision, parsed)
@@ -877,7 +877,7 @@ export class VirtualTunerService {
           record.revision = nextRevision
           transitioned = true
           record.sourceKeys.clear()
-          await this.commitStaged(record, staged)
+          await this.commitStaged(record, staged, true)
           committed = true
           record.lastEdgeAdvancedAt = this.clock.now().getTime()
           this.rememberSourceSnapshot(
@@ -1162,15 +1162,25 @@ export class VirtualTunerService {
 
   private async commitStaged(
     record: VirtualTunerRecord,
-    staged: StagedSegments
+    staged: StagedSegments,
+    replaceAdvertised = false
   ): Promise<void> {
     record.nextSequence = staged.nextSequence
     for (const segment of staged.segments) record.sourceKeys.add(segment.sourceKey)
+    // A cross-channel commit is a hard live-window cut. Keeping the outgoing
+    // entries advertised lets a lagging native HLS player continue requesting
+    // the old channel after the tune response has already identified the new
+    // one. Retain their bytes for requests already in flight, but make the
+    // prepared destination edge the only playable window for the next reload.
+    const replaced = replaceAdvertised
+      ? record.entries.splice(0, record.entries.length)
+      : []
     record.entries.push(...staged.segments)
-    const retiredNow = record.entries.splice(
+    const overflow = record.entries.splice(
       0,
       Math.max(0, record.entries.length - this.playlistWindowSegments)
     )
+    const retiredNow = [...replaced, ...overflow]
     record.discontinuitySequence += retiredNow.filter(
       (segment) => segment.discontinuityBefore
     ).length

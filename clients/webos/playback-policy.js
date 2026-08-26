@@ -24,6 +24,17 @@
     return url + (url.indexOf('?') === -1 ? '?' : '&') + 'clientId=' + encodeURIComponent(clientId);
   }
 
+  function withTunerRevision(url, revision, attachAttempt) {
+    var value = Number(revision);
+    if (!url || !isFinite(value) || value < 1 || Math.floor(value) !== value) return url;
+    var attach = Number(attachAttempt);
+    var suffix = 'tunerRevision=' + encodeURIComponent(String(value));
+    if (isFinite(attach) && attach >= 1 && Math.floor(attach) === attach) {
+      suffix += '&tunerAttach=' + encodeURIComponent(String(attach));
+    }
+    return url + (url.indexOf('?') === -1 ? '?' : '&') + suffix;
+  }
+
   function choose(nowResult, serverUrl, failedLiveUrl, clientId) {
     var live = liveDescriptor(nowResult);
     var liveUrl = live ? resolveUrl(live.url, serverUrl) : null;
@@ -95,6 +106,7 @@
     nextTunerRequestId: nextTunerRequestId,
     resetMediaElement: resetMediaElement,
     resolveUrl: resolveUrl,
-    shouldReload: shouldReload
+    shouldReload: shouldReload,
+    withTunerRevision: withTunerRevision
   };
 }));

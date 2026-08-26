@@ -13,6 +13,7 @@ const policy = require(join(import.meta.dir, '..', 'clients', 'webos', 'playback
   loadMediaElement: (video: unknown, url: string) => boolean
   nextTunerRequestId: (current: number, requestIdFloor: number) => number
   resetMediaElement: (video: unknown) => void
+  withTunerRevision: (url: string, revision: number, attachAttempt?: number) => string
 }
 
 function now(channelId: string, programId: string, offsetMs = 420_000) {
@@ -143,5 +144,21 @@ describe('LG webOS channel playback policy', () => {
     expect(policy.nextTunerRequestId(0, 87)).toBe(88)
     expect(policy.nextTunerRequestId(88, 87)).toBe(89)
     expect(policy.nextTunerRequestId(4, -1)).toBe(5)
+  })
+
+  test('revision-cache-busts each stable tuner decoder attachment', () => {
+    expect(
+      policy.withTunerRevision(
+        'http://toasttv:1993/api/v1/tuner-sessions/session/live/index.m3u8',
+        12,
+        4
+      )
+    ).toBe(
+      'http://toasttv:1993/api/v1/tuner-sessions/session/live/index.m3u8?tunerRevision=12&tunerAttach=4'
+    )
+    expect(policy.withTunerRevision('/live/index.m3u8?clientId=tv', 13, 5)).toBe(
+      '/live/index.m3u8?clientId=tv&tunerRevision=13&tunerAttach=5'
+    )
+    expect(policy.withTunerRevision('/live/index.m3u8', 0, 1)).toBe('/live/index.m3u8')
   })
 })

@@ -175,7 +175,7 @@ describe('VirtualTunerService', () => {
     expect(await readFile(secondPath!, 'utf8')).toBe('kids-107')
   })
 
-  test('switches channels at a discontinuity without changing the manifest URL', async () => {
+  test('switches to a target-only advertised edge while retaining outgoing segments', async () => {
     const opened = await service.open('living-room', OWNER_ID, 'kids')
     const tuned = await service.tune(
       'living-room',
@@ -192,8 +192,18 @@ describe('VirtualTunerService', () => {
     })
     const playlist = await service.playlist(opened.sessionId)
     expect(playlist).toContain('#EXT-X-DISCONTINUITY')
-    expect(playlist.match(/#EXTINF:/g)).toHaveLength(4)
+    expect(playlist).toContain('#EXT-X-MEDIA-SEQUENCE:3')
+    expect(playlist.match(/#EXTINF:/g)).toHaveLength(2)
+    expect(playlist).not.toContain('segment-0000000000001.ts')
+    expect(playlist).not.toContain('segment-0000000000002.ts')
     expect(releases.some((release) => release.channelId === 'kids')).toBe(true)
+
+    const outgoingSegment = await service.segmentPath(
+      opened.sessionId,
+      'segment-0000000000001.ts'
+    )
+    expect(outgoingSegment).not.toBeNull()
+    expect(await readFile(outgoingSegment!, 'utf8')).toBe('kids-1')
 
     const newSegment = await service.segmentPath(
       opened.sessionId,
@@ -240,6 +250,17 @@ describe('VirtualTunerService', () => {
     expect(committed.channelId).toBe('nature')
     expect(committed.revision).toBe(2)
     expect(service.descriptorForClient('living-room')?.channelId).toBe('nature')
+    const playlist = await service.playlist(opened.sessionId)
+    expect(playlist.match(/#EXTINF:/g)).toHaveLength(2)
+    const advertised = playlist
+      .split(/\r?\n/)
+      .filter((line) => /^segment-\d{13}\.ts$/.test(line))
+    expect(advertised).toHaveLength(2)
+    for (const segment of advertised) {
+      const path = await service.segmentPath(opened.sessionId, segment)
+      expect(path).not.toBeNull()
+      expect(await readFile(path!, 'utf8')).toStartWith('nature-')
+    }
   })
 
   test('never reuses segment names after superseded cleanup fails', async () => {
@@ -448,7 +469,7 @@ describe('VirtualTunerService', () => {
     expect(restarted).not.toContain('segment-0000000000005.ts')
   })
 
-  test('keeps discontinuity sequence monotonic when switch boundaries roll out', async () => {
+  test('keeps media and discontinuity sequences monotonic across hard switch cuts', async () => {
     const opened = await service.open('living-room', OWNER_ID, 'kids')
     await service.tune(
       'living-room',
@@ -458,6 +479,7 @@ describe('VirtualTunerService', () => {
       1
     )
     const first = await service.playlist(opened.sessionId)
+    expect(first).toContain('#EXT-X-MEDIA-SEQUENCE:3')
     expect(first).toContain('#EXT-X-DISCONTINUITY-SEQUENCE:0')
     await service.tune(
       'living-room',
@@ -467,7 +489,8 @@ describe('VirtualTunerService', () => {
       2
     )
     const second = await service.playlist(opened.sessionId)
-    expect(second).toContain('#EXT-X-DISCONTINUITY-SEQUENCE:0')
+    expect(second).toContain('#EXT-X-MEDIA-SEQUENCE:5')
+    expect(second).toContain('#EXT-X-DISCONTINUITY-SEQUENCE:1')
     await service.tune(
       'living-room',
       OWNER_ID,
@@ -476,7 +499,27 @@ describe('VirtualTunerService', () => {
       3
     )
     const third = await service.playlist(opened.sessionId)
-    expect(third).toContain('#EXT-X-DISCONTINUITY-SEQUENCE:1')
+    expect(third).toContain('#EXT-X-MEDIA-SEQUENCE:7')
+    expect(third).toContain('#EXT-X-DISCONTINUITY-SEQUENCE:2')
+  })
+
+  test('uses the same target-only cut for a cross-channel reopen', async () => {
+    const opened = await service.open('living-room', OWNER_ID, 'kids')
+    const reopened = await service.open('living-room', OWNER_ID, 'cartoons')
+
+    expect(reopened).toMatchObject({
+      sessionId: opened.sessionId,
+      channelId: 'cartoons',
+      revision: 2,
+    })
+    const playlist = await service.playlist(opened.sessionId)
+    expect(playlist).toContain('#EXT-X-MEDIA-SEQUENCE:3')
+    expect(playlist.match(/#EXTINF:/g)).toHaveLength(2)
+    expect(playlist).not.toContain('segment-0000000000001.ts')
+    expect(await service.segmentPath(
+      opened.sessionId,
+      'segment-0000000000001.ts'
+    )).not.toBeNull()
   })
 
   test('replaces app owners and ignores an exact close from the old launch', async () => {

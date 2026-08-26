@@ -15,7 +15,7 @@ describe('LG webOS package assets', () => {
     const manifest = JSON.parse(readFileSync(join(root, 'appinfo.json'), 'utf8'))
     expect(manifest).toMatchObject({
       id: 'com.itsrammen.app.toasttv',
-      version: '0.3.5',
+      version: '0.3.6',
       type: 'web',
       main: 'index.html',
       title: 'ToastTV',
@@ -47,6 +47,7 @@ describe('LG webOS package assets', () => {
     expect(app).toContain("mode: 'stable-hls'")
     expect(app).toContain("state.serverUrl + '/api/client/v1/session/tune'")
     expect(policy).toContain('function nextTunerRequestId(')
+    expect(policy).toContain('function withTunerRevision(')
     expect(html).toContain('id="playerChannelLogo"')
     expect(app).not.toMatch(/(?:drawImage|getContext\(['"]2d['"]\)|createElement\(['"]canvas['"]\))/)
     expect(html).not.toMatch(/<(?:script|link)[^>]+(?:src|href)="https?:\/\//i)
