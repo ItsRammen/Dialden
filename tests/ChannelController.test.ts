@@ -39,17 +39,57 @@ describe('ChannelController', () => {
     expect(missing.status).toBe(404)
   })
 
-  test('validates guide horizon before querying the schedule', async () => {
+  test('validates guide horizon and anchor before querying the schedule', async () => {
     const channels = mock<ChannelService>()
     const app = new Hono().route('/', createChannelController({ channels }))
 
-    for (const query of ['hours=0', 'hours=25', 'hours=2.5', 'hours=oops']) {
+    for (const query of [
+      'hours=0',
+      'hours=169',
+      'hours=2.5',
+      'hours=oops',
+      'from=nonsense',
+      'from=12:30',
+      'hours=24&from=nonsense',
+    ]) {
       const response = await app.request(
         `/api/v1/channels/kids-club/guide?${query}`
       )
       expect(response.status).toBe(400)
     }
     expect(channels.getGuide).not.toHaveBeenCalled()
+
+    channels.getGuide.mockResolvedValue({
+      channelId: 'kids-club',
+      serverTime: '2026-08-24T12:00:00.000Z',
+      serverTimeMs: 1787572800000,
+      timezone: 'UTC',
+      timelineRevision: 'rev-1',
+      requestedEnd: '2026-08-31T12:00:00.000Z',
+      coverageEnd: null,
+      truncated: false,
+      programs: [],
+    })
+
+    const anchored = await app.request(
+      '/api/v1/channels/kids-club/guide?hours=168&from=1790000000000'
+    )
+    expect(anchored.status).toBe(200)
+    expect(channels.getGuide).toHaveBeenCalledWith(
+      'kids-club',
+      168,
+      { from: new Date(1_790_000_000_000) }
+    )
+
+    const isoAnchored = await app.request(
+      '/api/v1/channels/kids-club/guide?hours=48&from=2026-09-01T00:00:00.000Z'
+    )
+    expect(isoAnchored.status).toBe(200)
+    expect(channels.getGuide).toHaveBeenCalledWith(
+      'kids-club',
+      48,
+      { from: new Date('2026-09-01T00:00:00.000Z') }
+    )
   })
 
   test('publishes one stable channel HLS URL independently of the current item', async () => {

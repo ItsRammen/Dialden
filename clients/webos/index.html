@@ -151,32 +151,24 @@
 
     <aside id="guideOverlay" class="overlay" aria-hidden="true">
       <div class="overlay__shade"></div>
-      <div class="guide-panel">
+      <div class="guide-panel guide-panel--catalog">
         <header class="guide-panel__header">
           <div>
-            <p class="eyebrow">Up next</p>
+            <p class="eyebrow">Week ahead</p>
             <h2 id="guideChannelName">Channel guide</h2>
           </div>
           <button id="closeGuideButton" type="button" class="round-button" aria-label="Close guide" data-focusable>×</button>
         </header>
+        <nav id="catalogRail" class="catalog-rail" aria-label="Channels"></nav>
+        <nav id="catalogDays" class="catalog-days" aria-label="Days"></nav>
         <div id="guideList" class="guide-list"></div>
         <p id="guideMessage" class="message"></p>
-        <footer class="guide-panel__footer"><span class="remote-key">BACK</span> close guide</footer>
-      </div>
-    </aside>
-
-    <aside id="nowOverlay" class="overlay overlay--center" aria-hidden="true">
-      <div class="overlay__shade"></div>
-      <div class="now-card">
-        <p class="eyebrow">Now on <span id="nowChannelName">ToastTV</span></p>
-        <h2 id="nowTitle">—</h2>
-        <p id="nowTime">—</p>
-        <div class="timeline timeline--large"><div id="nowTimelineFill" class="timeline__fill"></div></div>
-        <div class="now-card__next">
-          <span>UP NEXT</span>
-          <p id="nowNextTitle">No later program scheduled</p>
-        </div>
-        <button id="closeNowButton" type="button" class="button button--quiet" data-focusable>Keep watching</button>
+        <footer class="guide-panel__footer">
+          <span><b class="remote-key remote-key--arrow">← →</b> day</span>
+          <span><b class="remote-key">↑ ↓</b> browse</span>
+          <span><b class="remote-key">OK</b> watch</span>
+          <span><b class="remote-key">BACK</b> close</span>
+        </footer>
       </div>
     </aside>
 

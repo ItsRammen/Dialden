@@ -106,9 +106,8 @@
       'timelineFill', 'programTimes', 'nextTitle', 'offAirPanel', 'offAirNext',
       'playbackError', 'playbackErrorTitle', 'playbackErrorText',
       'retryPlaybackButton', 'errorBackButton', 'guideOverlay', 'guideChannelName',
-      'guideList', 'guideMessage', 'closeGuideButton', 'nowOverlay',
-      'nowChannelName', 'nowTitle', 'nowTime', 'nowTimelineFill', 'nowNextTitle',
-      'closeNowButton', 'tuningPanel', 'channelOsd', 'channelOsdNumber',
+      'catalogRail', 'catalogDays',
+      'guideList', 'guideMessage', 'closeGuideButton', 'tuningPanel', 'channelOsd', 'channelOsdNumber',
       'channelOsdName', 'channelOsdProgram', 'toast'
     ];
     var index;
@@ -136,7 +135,14 @@
     elements.retryPlaybackButton.addEventListener('click', retryPlayback, false);
     elements.errorBackButton.addEventListener('click', goBack, false);
     elements.closeGuideButton.addEventListener('click', goBack, false);
-    elements.closeNowButton.addEventListener('click', goBack, false);
+    elements.catalogRail.addEventListener('focusin', function (event) {
+      var chip = event.target && event.target.closest ? event.target.closest('[data-catalog-channel]') : null;
+      if (chip) setCatalogChannel(chip.getAttribute('data-catalog-channel'));
+    }, false);
+    elements.catalogDays.addEventListener('focusin', function (event) {
+      var chip = event.target && event.target.closest ? event.target.closest('[data-catalog-day]') : null;
+      if (chip) setCatalogDay(Number(chip.getAttribute('data-catalog-day')));
+    }, false);
     elements.playerChannelLogo.addEventListener('load', function () {
       if (elements.playerChannelLogo.getAttribute('src')) {
         elements.playerChannelLogo.classList.remove('hidden');
@@ -1083,7 +1089,6 @@
     var channel = currentChannel();
     if (!data || !channel) return;
     elements.playerChannelName.textContent = channel.name;
-    elements.nowChannelName.textContent = channel.name;
     renderChannelLogo(data, channel);
     if (!data.program) {
       elements.playerCollection.textContent = 'Off air';
@@ -1091,10 +1096,6 @@
       elements.programTimes.textContent = '—';
       elements.nextTitle.textContent = data.next ? 'Next: ' + data.next.title : 'No later program scheduled';
       elements.timelineFill.style.width = '0%';
-      elements.nowTitle.textContent = 'This channel is off air';
-      elements.nowTime.textContent = data.next ? 'Returns at ' + formatTime(data.next.scheduledStart) : 'No later program scheduled';
-      elements.nowNextTitle.textContent = data.next ? data.next.title : 'No later program scheduled';
-      elements.nowTimelineFill.style.width = '0%';
       return;
     }
     var program = data.program;
@@ -1102,9 +1103,6 @@
     elements.playerTitle.textContent = program.title;
     elements.programTimes.textContent = formatTime(program.scheduledStart) + ' – ' + formatTime(program.scheduledEnd);
     elements.nextTitle.textContent = data.next ? 'Next: ' + data.next.title : 'Last show on the schedule';
-    elements.nowTitle.textContent = program.title;
-    elements.nowTime.textContent = formatTime(program.scheduledStart) + ' – ' + formatTime(program.scheduledEnd);
-    elements.nowNextTitle.textContent = data.next ? data.next.title : 'No later program scheduled';
     updateTimeline();
   }
 
@@ -1132,7 +1130,6 @@
     if (!duration) return;
     var percent = Math.max(0, Math.min(100, expectedPositionSeconds() * 1000 / duration * 100));
     elements.timelineFill.style.width = percent.toFixed(2) + '%';
-    elements.nowTimelineFill.style.width = percent.toFixed(2) + '%';
   }
 
   function resetAllVideos() {
@@ -1170,43 +1167,173 @@
 
   function openGuide() {
     var channel = currentChannel();
-    if (state.view !== 'player' || !channel) return;
-    var guideRequestId = ++state.guideSerial;
+    if (state.view !== 'player' || !channel || !state.channels.length) return;
+    state.guideSerial += 1;
     state.overlay = 'guide';
+    state.catalog = { channelId: channel.id, dayIndex: 0, programsByDay: {} };
     safePushHistory({ view: 'player', overlay: 'guide' });
     renderOverlayState();
-    elements.guideChannelName.textContent = channel.name;
-    elements.guideMessage.textContent = 'Loading the guide…';
-    clearChildren(elements.guideList);
     showChrome();
-    requestJson(state.serverUrl + '/api/v1/channels/' + encodeURIComponent(channel.id) + '/guide?hours=8', 7000, function (error, data) {
-      if (
-        guideRequestId !== state.guideSerial ||
-        state.overlay !== 'guide' ||
-        !currentChannel() ||
-        currentChannel().id !== channel.id
-      ) return;
-      if (error || !data || !isArray(data.programs)) {
-        elements.guideMessage.textContent = 'The guide is unavailable right now.';
-        return;
-      }
-      var visiblePrograms = data.programs.slice(0, GUIDE_RENDER_LIMIT);
-      if (!data.programs.length) {
-        elements.guideMessage.textContent = 'Nothing else is scheduled in the next eight hours.';
-      } else if (data.truncated === true) {
-        elements.guideMessage.textContent = 'This unusually dense guide was shortened at ' + formatTime(data.coverageEnd) + '.';
-      } else if (data.programs.length > GUIDE_RENDER_LIMIT) {
-        elements.guideMessage.textContent = 'Showing the first ' + GUIDE_RENDER_LIMIT + ' programs.';
-      } else {
-        elements.guideMessage.textContent = '';
-      }
-      renderGuide(visiblePrograms, guideRequestId, channel.id);
+    renderCatalogRail();
+    renderCatalogDays();
+    clearChildren(elements.guideList);
+    elements.guideMessage.textContent = '';
+    loadCatalogDay();
+    window.setTimeout(function () {
+      if (!state.catalog) return;
+      var active = elements.catalogRail.querySelector('[data-catalog-channel="' + state.catalog.channelId + '"]') ||
+        elements.catalogRail.querySelector('[data-focusable]');
+      focusNode(active || elements.closeGuideButton);
+    }, 50);
+  }
+
+  function catalogChannels() {
+    return state.channels.filter(function (channel) {
+      return channel.enabled !== false && channel.onAir !== false;
     });
   }
 
-  function renderGuide(programs, guideRequestId, channelId) {
+  function catalogDayStart(dayIndex) {
+    var start = new Date();
+    start.setHours(0, 0, 0, 0);
+    start.setTime(start.getTime() + dayIndex * 86400000);
+    return start;
+  }
+
+  function catalogDayLabel(dayIndex) {
+    if (dayIndex === 0) return 'Today';
+    if (dayIndex === 1) return 'Tomorrow';
+    var day = catalogDayStart(dayIndex);
+    try {
+      return day.toLocaleDateString([], { weekday: 'short', day: 'numeric' });
+    } catch (ignore) {
+      return 'Day ' + (dayIndex + 1);
+    }
+  }
+
+  function renderCatalogRail() {
+    if (!state.catalog) return;
+    clearChildren(elements.catalogRail);
+    var channels = catalogChannels();
+    var index;
+    for (index = 0; index < channels.length; index += 1) {
+      var channel = channels[index];
+      var chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'catalog-channel' + (channel.id === state.catalog.channelId ? ' is-active' : '');
+      chip.setAttribute('data-focusable', '');
+      chip.setAttribute('data-catalog-channel', channel.id);
+      var number = document.createElement('span');
+      number.className = 'catalog-channel__num';
+      number.textContent = 'CH ' + channelNumber(index);
+      var name = document.createElement('span');
+      name.className = 'catalog-channel__name';
+      name.textContent = channel.name;
+      chip.appendChild(number);
+      chip.appendChild(name);
+      chip.addEventListener('click', function (event) {
+        setCatalogChannel(event.currentTarget.getAttribute('data-catalog-channel'));
+      }, false);
+      elements.catalogRail.appendChild(chip);
+    }
+    elements.guideChannelName.textContent =
+      (state.channels[findChannelIndex(state.catalog.channelId)] || {}).name || 'Week ahead';
+  }
+
+  function renderCatalogDays() {
+    if (!state.catalog) return;
+    clearChildren(elements.catalogDays);
+    var index;
+    for (index = 0; index < 7; index += 1) {
+      var chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'catalog-day' +
+        (index === state.catalog.dayIndex ? ' is-active' : '') +
+        (index === 0 ? ' is-today' : '');
+      chip.setAttribute('data-focusable', '');
+      chip.setAttribute('data-catalog-day', String(index));
+      chip.textContent = catalogDayLabel(index);
+      chip.addEventListener('click', function (event) {
+        setCatalogDay(Number(event.currentTarget.getAttribute('data-catalog-day')));
+      }, false);
+      elements.catalogDays.appendChild(chip);
+    }
+  }
+
+  function setCatalogChannel(channelId) {
+    if (!state.catalog || state.catalog.channelId === channelId) return;
+    state.guideSerial += 1;
+    state.catalog.channelId = channelId;
+    state.catalog.dayIndex = Math.min(state.catalog.dayIndex, 6);
+    renderCatalogRail();
+    loadCatalogDay();
+    var nextFocus = elements.catalogRail.querySelector('[data-catalog-channel="' + channelId + '"]');
+    if (nextFocus) focusNode(nextFocus);
+  }
+
+  function setCatalogDay(dayIndex) {
+    if (!state.catalog || state.catalog.dayIndex === dayIndex) return;
+    state.catalog.dayIndex = dayIndex;
+    renderCatalogDays();
+    loadCatalogDay();
+  }
+
+  function shiftCatalogDay(delta) {
+    if (!state.catalog) return;
+    var next = Math.max(0, Math.min(6, state.catalog.dayIndex + delta));
+    setCatalogDay(next);
+  }
+
+  function loadCatalogDay() {
+    var catalog = state.catalog;
+    if (!catalog) return;
+    var dayIndex = catalog.dayIndex;
+    var cacheKey = catalog.channelId + ':' + dayIndex;
+    var cached = catalog.programsByDay[cacheKey];
+    if (cached) {
+      renderCatalogPrograms(cached.programs, cached.truncated, cached.coverageEnd);
+      return;
+    }
+    clearChildren(elements.guideList);
+    elements.guideMessage.textContent = 'Loading ' + catalogDayLabel(dayIndex) + '…';
+    var requestId = ++state.guideSerial;
+    var channelId = catalog.channelId;
+    var fromMs = catalogDayStart(dayIndex).getTime();
+    requestJson(
+      state.serverUrl + '/api/v1/channels/' + encodeURIComponent(channelId) +
+        '/guide?hours=24&from=' + fromMs,
+      7000,
+      function (error, data) {
+        if (!state.catalog || state.catalog.channelId !== channelId) return;
+        if (requestId !== state.guideSerial || state.overlay !== 'guide') return;
+        if (error || !data || !isArray(data.programs)) {
+          elements.guideMessage.textContent = 'The guide is unavailable right now.';
+          return;
+        }
+        var entry = {
+          programs: data.programs.slice(0, GUIDE_RENDER_LIMIT),
+          truncated: data.truncated === true,
+          coverageEnd: data.coverageEnd
+        };
+        catalog.programsByDay[cacheKey] = entry;
+        if (state.catalog.dayIndex !== dayIndex) return;
+        renderCatalogPrograms(entry.programs, entry.truncated, entry.coverageEnd);
+      }
+    );
+  }
+
+  function renderCatalogPrograms(programs, truncated, coverageEnd) {
+    var catalog = state.catalog;
+    if (!catalog) return;
     clearChildren(elements.guideList);
     var currentId = state.currentNow && state.currentNow.program ? state.currentNow.program.id : null;
+    if (!programs.length) {
+      elements.guideMessage.textContent = 'Nothing is scheduled on this day yet.';
+      return;
+    }
+    elements.guideMessage.textContent = truncated && coverageEnd
+      ? 'This dense day was shortened at ' + formatTime(coverageEnd) + '.'
+      : '';
     var index;
     for (index = 0; index < programs.length; index += 1) {
       var program = programs[index];
@@ -1221,45 +1348,28 @@
       var title = document.createElement('h3');
       title.textContent = program.title;
       var collection = document.createElement('p');
-      collection.textContent = program.id === currentId ? 'On now' : (program.collectionTitle || 'Scheduled');
+      collection.textContent = program.id === currentId ? 'On now — watching' : (program.collectionTitle || 'Scheduled');
       details.appendChild(title);
       details.appendChild(collection);
       item.appendChild(time);
       item.appendChild(details);
-      item.addEventListener('click', function () { goBack(); }, false);
+      item.addEventListener('click', function () {
+        var targetIndex = findChannelIndex(state.catalog.channelId);
+        closeOverlays();
+        if (targetIndex >= 0) tuneChannel(targetIndex, true);
+      }, false);
       elements.guideList.appendChild(item);
     }
-    window.setTimeout(function () {
-      if (
-        guideRequestId !== state.guideSerial ||
-        state.overlay !== 'guide' ||
-        !currentChannel() ||
-        currentChannel().id !== channelId
-      ) return;
-      var current = elements.guideList.querySelector('.is-now');
-      focusNode(current || elements.guideList.querySelector('[data-focusable]') || elements.closeGuideButton);
-    }, 40);
-  }
-
-  function openNowOverlay() {
-    if (state.view !== 'player') return;
-    state.overlay = 'now';
-    safePushHistory({ view: 'player', overlay: 'now' });
-    renderProgramInfo();
-    renderOverlayState();
-    showChrome();
-    window.setTimeout(function () { focusNode(elements.closeNowButton); }, 50);
   }
 
   function renderOverlayState() {
     elements.guideOverlay.classList.toggle('is-open', state.overlay === 'guide');
     elements.guideOverlay.setAttribute('aria-hidden', state.overlay === 'guide' ? 'false' : 'true');
-    elements.nowOverlay.classList.toggle('is-open', state.overlay === 'now');
-    elements.nowOverlay.setAttribute('aria-hidden', state.overlay === 'now' ? 'false' : 'true');
   }
 
   function closeOverlays() {
     state.overlay = null;
+    state.catalog = null;
     renderOverlayState();
   }
 
@@ -1359,11 +1469,23 @@
       return;
     }
 
+    if (state.overlay === 'guide' && state.catalog && (code === 37 || code === 39)) {
+      /* Inside the catalog, LEFT/RIGHT page through days. The channel rail
+         keeps arrow-to-arrow chip movement instead, so previews follow focus. */
+      var focusInRail = closestFocusable(document.activeElement);
+      if (!(focusInRail && elements.catalogRail.contains(focusInRail))) {
+        event.preventDefault();
+        shiftCatalogDay(code === 39 ? 1 : -1);
+        var dayChip = elements.catalogDays.querySelector('[data-catalog-day="' + state.catalog.dayIndex + '"]');
+        if (dayChip) focusNode(dayChip);
+        return;
+      }
+    }
+
     if (state.view === 'player' && !state.overlay && elements.playbackError.classList.contains('hidden')) {
       if (code === 37) { event.preventDefault(); switchChannel(-1); return; }
       if (code === 39) { event.preventDefault(); switchChannel(1); return; }
       if (code === 38) { event.preventDefault(); openGuide(); return; }
-      if (code === 40) { event.preventDefault(); openNowOverlay(); return; }
       if (code === 13) {
         event.preventDefault();
         if (state.awaitingGesture) {
@@ -1429,7 +1551,6 @@
   function visibleFocusables() {
     var scope = document;
     if (state.overlay === 'guide') scope = elements.guideOverlay;
-    else if (state.overlay === 'now') scope = elements.nowOverlay;
     else if (state.view === 'setup') scope = elements.setupScreen;
     else if (state.view === 'channels') scope = elements.channelsScreen;
     else if (state.view === 'player') scope = elements.playerScreen;
@@ -1445,7 +1566,6 @@
   function focusFirst() {
     var preferred = null;
     if (state.overlay === 'guide') preferred = elements.guideList.querySelector('.is-now') || elements.closeGuideButton;
-    else if (state.overlay === 'now') preferred = elements.closeNowButton;
     else if (state.view === 'channels') preferred = elements.channelGrid.querySelector('.channel-card') || elements.retryChannelsButton;
     else if (state.view === 'setup') preferred = elements.serverInput;
     else if (state.view === 'player' && !elements.playbackError.classList.contains('hidden')) preferred = elements.retryPlaybackButton;

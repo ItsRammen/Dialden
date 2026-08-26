@@ -42,7 +42,38 @@ describe('LG webOS presence telemetry', () => {
     expect(script).toContain('var GUIDE_RENDER_LIMIT = 250')
     expect(script).toContain('data.programs.slice(0, GUIDE_RENDER_LIMIT)')
     expect(script).toContain('data.truncated === true')
-    expect(script).toContain('formatTime(data.coverageEnd)')
+    expect(script).toContain("'/guide?hours=24&from=' + fromMs")
+    expect(script).toContain('formatTime(coverageEnd)')
+  })
+
+  test('renders a weekly catalog with channel rail, day strip, and tune-on-select', () => {
+    const script = readFileSync(
+      join(import.meta.dir, '..', 'clients', 'webos', 'app.js'),
+      'utf8'
+    )
+    const markup = readFileSync(
+      join(import.meta.dir, '..', 'clients', 'webos', 'index.html'),
+      'utf8'
+    )
+    const styles = readFileSync(
+      join(import.meta.dir, '..', 'clients', 'webos', 'styles.css'),
+      'utf8'
+    )
+
+    expect(markup).toContain('id="catalogRail"')
+    expect(markup).toContain('id="catalogDays"')
+    expect(styles).toContain('.catalog-rail')
+    expect(styles).toContain('.catalog-days')
+    expect(script).toContain('function renderCatalogRail()')
+    expect(script).toContain('function setCatalogChannel(')
+    expect(script).toContain("var cacheKey = catalog.channelId + ':' + dayIndex")
+    expect(script).toMatch(/renderCatalogDays\(\);[\s\S]{0,180}loadCatalogDay\(\);/)
+    expect(script).toContain('shiftCatalogDay(code === 39 ? 1 : -1)')
+    // Selecting a program tunes the channel instead of closing back to playback.
+    expect(script).toContain('tuneChannel(targetIndex, true)')
+    // The old Now Playing overlay duplication is gone.
+    expect(script).not.toContain('openNowOverlay')
+    expect(markup).not.toContain('id="nowOverlay"')
   })
 
   test('backs off then retries a recovered stable HLS channel automatically', () => {

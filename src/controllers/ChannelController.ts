@@ -80,14 +80,27 @@ export function createChannelController({
   controller.get('/api/v1/channels/:id/guide', async (c) => {
     const value = c.req.query('hours')
     if (value !== undefined && !/^\d+$/.test(value)) {
-      return c.json({ error: 'hours must be a whole number from 1 to 24' }, 400)
+      return c.json({ error: 'hours must be a whole number from 1 to 168' }, 400)
     }
     const hours = value === undefined ? 8 : Number(value)
-    if (hours < 1 || hours > 24) {
-      return c.json({ error: 'hours must be a whole number from 1 to 24' }, 400)
+    if (hours < 1 || hours > 168) {
+      return c.json({ error: 'hours must be a whole number from 1 to 168' }, 400)
     }
 
-    const result = await channels.getGuide(c.req.param('id'), hours)
+    let from: Date | undefined
+    const rawFrom = c.req.query('from')
+    if (rawFrom !== undefined) {
+      // Accepts epoch milliseconds or an ISO-8601 instant.
+      const parsed = /^\d+$/.test(rawFrom)
+        ? new Date(Number(rawFrom))
+        : new Date(rawFrom)
+      if (Number.isNaN(parsed.getTime())) {
+        return c.json({ error: 'from must be an ISO-8601 instant or epoch milliseconds' }, 400)
+      }
+      from = parsed
+    }
+
+    const result = await channels.getGuide(c.req.param('id'), hours, { from })
     return result
       ? c.json(result)
       : c.json({ error: 'Channel not found' }, 404)

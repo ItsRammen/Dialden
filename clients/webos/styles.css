@@ -536,7 +536,11 @@ button { cursor: pointer; }
 .player-vignette {
   pointer-events: none;
   background: linear-gradient(to bottom, rgba(4, 8, 9, 0.74), transparent 25%, transparent 61%, rgba(4, 8, 9, 0.88));
+  /* The bands exist to keep chrome text legible; with the chrome hidden they
+     read as a mysterious dark tint over the picture, so they fade with it. */
+  transition: opacity 220ms ease;
 }
+.player-screen.chrome-hidden .player-vignette { opacity: 0; }
 
 .channel-osd {
   visibility: hidden;
@@ -639,8 +643,6 @@ button { cursor: pointer; }
   transition: width 500ms linear;
 }
 
-.timeline--large { height: 13px; background: rgba(24,37,43,0.16); }
-
 .player-info__meta {
   display: flex;
   justify-content: space-between;
@@ -723,6 +725,8 @@ button { cursor: pointer; }
   transition: transform 180ms ease;
 }
 
+.guide-panel--catalog { width: 1000px; padding-top: 38px; }
+
 .overlay.is-open .guide-panel { transform: translateX(0); }
 
 .guide-panel__header { display: flex; align-items: center; justify-content: space-between; }
@@ -730,8 +734,8 @@ button { cursor: pointer; }
 .guide-panel__header .round-button { border-color: rgba(24,37,43,0.16); }
 
 .guide-list {
-  height: calc(100% - 180px);
-  margin-top: 34px;
+  height: calc(100% - 268px);
+  margin-top: 20px;
   padding: 4px 10px 20px 5px;
   overflow-x: hidden;
   overflow-y: auto;
@@ -762,24 +766,61 @@ button { cursor: pointer; }
 .guide-item__time { color: var(--orange-dark); font-size: 18px; font-weight: 900; }
 .guide-item h3 { margin: 0 0 5px; font-family: Georgia, serif; font-size: 24px; }
 .guide-item p { margin: 0; color: #67726e; font-size: 16px; }
-.guide-panel__footer { color: #68736e; font-size: 16px; font-weight: 800; text-align: center; }
+.guide-panel__footer { display: flex; justify-content: center; color: #68736e; font-size: 16px; font-weight: 800; text-align: center; }
+.guide-panel__footer > span { margin: 0 13px; }
 
-.overlay--center { display: flex; align-items: center; justify-content: center; }
-.now-card {
-  position: relative;
-  width: 780px;
-  padding: 50px;
-  border-radius: 32px;
-  background: var(--cream-bright);
-  box-shadow: 0 35px 100px rgba(0,0,0,0.45);
+.catalog-rail {
+  display: flex;
+  margin-top: 24px;
+  padding-bottom: 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.catalog-channel { margin-right: 10px; }
+
+.catalog-channel {
+  flex: 0 0 auto;
+  max-width: 240px;
+  padding: 12px 16px;
+  border: 2px solid rgba(24,37,43,0.16);
+  border-radius: 14px;
+  outline: none;
+  background: #fdf7ea;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+}
+
+.catalog-channel.is-focused,
+.catalog-channel.is-active { border-color: rgba(199,71,32,0.55); background: #fff0d4; }
+.catalog-channel__num { display: block; color: var(--orange-dark); font-size: 13px; font-weight: 900; letter-spacing: 0.08em; }
+.catalog-channel__name { display: block; overflow: hidden; font-weight: 900; font-size: 17px; text-overflow: ellipsis; white-space: nowrap; }
+
+.catalog-days {
+  display: flex;
+  margin-top: 18px;
+}
+
+.catalog-day { margin-right: 8px; }
+.catalog-day:last-child { margin-right: 0; }
+
+.catalog-day {
+  flex: 1 1 0;
+  padding: 11px 4px;
+  border: 2px solid transparent;
+  border-radius: 12px;
+  outline: none;
+  background: transparent;
+  color: #5c6862;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 900;
   text-align: center;
 }
 
-.now-card h2 { margin: 12px 0 8px; font-family: Georgia, serif; font-size: 47px; }
-.now-card > p { color: #64706c; font-size: 19px; }
-.now-card__next { margin: 29px 0 25px; padding: 18px; border-radius: 15px; background: #f5ead0; text-align: left; }
-.now-card__next span { color: var(--orange-dark); font-size: 13px; font-weight: 900; letter-spacing: 0.14em; }
-.now-card__next p { margin: 5px 0 0; font-size: 20px; font-weight: 900; }
+.catalog-day.is-active { background: #efe2c4; color: var(--ink); }
+.catalog-day.is-today { color: var(--orange-dark); }
+.catalog-day.is-focused { border-color: rgba(199,71,32,0.55); }
 
 .toast {
   visibility: hidden;

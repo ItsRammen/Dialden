@@ -597,7 +597,8 @@ export class ChannelService {
 
   async getGuide(
     channelId: string,
-    hours = 8
+    hours = 8,
+    options?: { from?: Date }
   ): Promise<
     | {
         channelId: string
@@ -615,7 +616,14 @@ export class ChannelService {
     const channel = this.getChannel(channelId)
     if (!channel) return null
 
-    const boundedHours = Math.min(24, Math.max(1, Math.floor(hours)))
+    // A weekly catalog requests windows that start in the future, so the
+    // anchor is caller-controlled while `serverTime` stays authoritative.
+    const boundedHours = Math.min(168, Math.max(1, Math.floor(hours)))
+    const from = options?.from
+    const anchor =
+      from instanceof Date && Number.isFinite(from.getTime())
+        ? from
+        : this.clock.now()
     if (this.manuallyOffAir.has(channelId)) {
       const now = this.clock.now()
       return {
@@ -625,7 +633,7 @@ export class ChannelService {
         timezone: channel.timezone,
         timelineRevision: this.timelineRevision(channel, []),
         requestedEnd: new Date(
-          now.getTime() + boundedHours * 60 * 60 * 1000
+          anchor.getTime() + boundedHours * 60 * 60 * 1000
         ).toISOString(),
         coverageEnd: null,
         truncated: false,
@@ -634,20 +642,20 @@ export class ChannelService {
     }
 
     const media = await this.repository.getAll()
-    const around = this.clock.now()
     const programs = this.buildWindow(
       channel,
       media,
-      around,
+      anchor,
       1,
       boundedHours
     )
     const now = this.clock.now()
     const nowMs = now.getTime()
-    const horizonMs = nowMs + boundedHours * 60 * 60 * 1000
+    const anchorMs = anchor.getTime()
+    const horizonMs = anchorMs + boundedHours * 60 * 60 * 1000
     const visiblePrograms = programs.filter(
       (program) =>
-        Date.parse(program.scheduledEnd) > nowMs &&
+        Date.parse(program.scheduledEnd) > Math.max(nowMs, anchorMs) &&
         Date.parse(program.scheduledStart) < horizonMs
     )
     const coverageEnd =
