@@ -39,6 +39,56 @@ describe('ChannelController', () => {
     expect(missing.status).toBe(404)
   })
 
+  test('serves the complete lineup schedule in one non-cacheable response', async () => {
+    const channels = mock<ChannelService>()
+    channels.getLineupSchedule.mockResolvedValue({
+      serverTime: '2026-08-24T12:00:00.000Z',
+      serverTimeMs: 1787572800000,
+      schedules: [
+        {
+          channelId: 'kids-club',
+          serverTime: '2026-08-24T12:00:00.000Z',
+          serverTimeMs: 1787572800000,
+          timezone: 'UTC',
+          timelineRevision: 'revision-1',
+          program: null,
+          next: null,
+        },
+      ],
+    })
+    const app = new Hono().route(
+      '/',
+      createChannelController({
+        channels,
+        branding: {
+          presentation: async () => {
+            throw new Error('logo store temporarily unavailable')
+          },
+        },
+      })
+    )
+
+    const response = await app.request('/api/v1/channels/schedule')
+    const payload = (await response.json()) as {
+      schedules: Array<{
+        channelId: string
+        liveStream: { mode: string; url: string }
+        branding?: unknown
+      }>
+    }
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(payload.schedules[0]).toMatchObject({
+      channelId: 'kids-club',
+      liveStream: {
+        mode: 'hls',
+        url: '/api/v1/channels/kids-club/live/index.m3u8',
+      },
+    })
+    expect(payload.schedules[0]).not.toHaveProperty('branding')
+  })
+
   test('validates guide horizon and anchor before querying the schedule', async () => {
     const channels = mock<ChannelService>()
     const app = new Hono().route('/', createChannelController({ channels }))
@@ -89,6 +139,16 @@ describe('ChannelController', () => {
       'kids-club',
       48,
       { from: new Date('2026-09-01T00:00:00.000Z') }
+    )
+
+    const stationCalendar = await app.request(
+      '/api/v1/channels/kids-club/guide?hours=168&calendar=1&from=1790000000000'
+    )
+    expect(stationCalendar.status).toBe(200)
+    expect(channels.getGuide).toHaveBeenLastCalledWith(
+      'kids-club',
+      168,
+      { from: new Date(1_790_000_000_000), calendarDays: true }
     )
   })
 

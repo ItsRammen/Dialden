@@ -7,38 +7,50 @@
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
-    <div class="ambient ambient--one"></div>
-    <div class="ambient ambient--two"></div>
-
-    <main id="app" aria-live="polite">
+    <main id="app">
       <section id="bootScreen" class="screen boot-screen" aria-hidden="true">
-        <img src="assets/logo.png" alt="" class="boot-screen__logo">
-        <h1>ToastTV</h1>
-        <p id="bootMessage">Starting television…</p>
-        <button id="bootSettingsButton" type="button" class="button button--quiet hidden" data-focusable>Server settings</button>
+        <div class="boot-screen__glow" aria-hidden="true"></div>
+        <div class="boot-brand">
+          <img src="assets/logo.png" alt="" class="boot-screen__logo">
+          <div>
+            <p class="eyebrow">Your channels, always on</p>
+            <h1>ToastTV</h1>
+          </div>
+        </div>
+        <div class="boot-status" role="status">
+          <span class="signal-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+          <p id="bootMessage">Starting television…</p>
+        </div>
+        <div class="boot-actions">
+          <button id="bootRetryButton" type="button" class="button button--primary hidden" data-focusable>Try again</button>
+          <button id="bootBrowseButton" type="button" class="button button--primary hidden" data-focusable>Browse channels</button>
+          <button id="bootSettingsButton" type="button" class="button button--quiet hidden" data-focusable>Server settings</button>
+        </div>
       </section>
 
       <section id="setupScreen" class="screen setup-screen" aria-hidden="true">
-        <div class="setup-card">
-          <div class="brand brand--large">
-            <img src="assets/logo.png" alt="" class="brand__logo">
-            <div>
-              <p class="eyebrow">A little television of your own</p>
-              <h1>ToastTV</h1>
+        <div class="setup-shell">
+          <div class="setup-identity">
+            <img src="assets/logo.png" alt="" class="setup-identity__logo">
+            <p class="eyebrow">ToastTV for LG webOS</p>
+            <h1>Connect this TV</h1>
+            <p>Enter the address of the ToastTV server on your home network. This stays on this TV.</p>
+            <div class="setup-note"><span class="setup-note__dot"></span><span>Your media and viewing activity never leave your network.</span></div>
+          </div>
+          <div class="setup-card">
+            <p class="setup-card__step">SERVER CONNECTION</p>
+            <label for="serverInput">Server address</label>
+            <input id="serverInput" type="text" inputmode="url" value="http://TOWER:1993" spellcheck="false" autocomplete="off" data-focusable>
+            <p class="field-help">Example: <span>http://192.168.1.50:1993</span></p>
+            <p id="setupMessage" class="message" role="status"></p>
+            <div class="button-row">
+              <button id="connectButton" type="button" class="button button--primary" data-focusable>Connect</button>
+              <button id="cancelSetupButton" type="button" class="button button--quiet hidden" data-focusable>Cancel</button>
             </div>
-          </div>
-          <p class="setup-card__intro">Connect this TV to the ToastTV server on your home network.</p>
-          <label for="serverInput">Server address</label>
-          <input id="serverInput" type="text" inputmode="url" value="http://TOWER:1993" spellcheck="false" autocomplete="off" data-focusable>
-          <p class="field-help">Example: <span>http://192.168.1.50:1993</span></p>
-          <p id="setupMessage" class="message" role="status"></p>
-          <div class="button-row">
-            <button id="connectButton" type="button" class="button button--primary" data-focusable>Connect</button>
-            <button id="cancelSetupButton" type="button" class="button button--quiet hidden" data-focusable>Cancel</button>
-          </div>
-          <div class="setup-card__footer">
-            <span class="remote-key">OK</span> select
-            <span class="remote-key remote-key--arrow">↑↓</span> move
+            <div class="setup-card__footer">
+              <span><b class="remote-key">OK</b> select</span>
+              <span><b class="remote-key remote-key--arrow">↑ ↓</b> move</span>
+            </div>
           </div>
         </div>
       </section>
@@ -48,35 +60,66 @@
           <div class="brand">
             <img src="assets/logo.png" alt="" class="brand__logo">
             <div>
-              <p class="eyebrow">Home channels</p>
-              <h1>ToastTV</h1>
+              <p class="brand__name">ToastTV</p>
+              <p class="brand__status"><span></span> Home television</p>
             </div>
           </div>
           <div class="topbar__right">
-            <div>
-              <time id="homeClock" class="clock">--:--</time>
-              <p id="serverLabel" class="server-label"></p>
+            <div class="connection-state">
+              <span class="connection-state__dot"></span>
+              <div><p>Connected</p><p id="serverLabel" class="server-label"></p></div>
             </div>
+            <time id="homeClock" class="clock">--:--</time>
             <button id="settingsButton" type="button" class="round-button" aria-label="Change server" data-focusable>⚙</button>
           </div>
         </header>
 
-        <div class="home-heading">
-          <div>
-            <p class="eyebrow">What’s on</p>
-            <h2>Choose a channel</h2>
-          </div>
-          <p class="home-heading__hint">Every channel follows its schedule, already in progress.</p>
+        <div class="channel-browser">
+          <section class="channel-rail-shell" aria-labelledby="channel-list-heading">
+            <header class="section-heading">
+              <div><p class="eyebrow">Live lineup</p><h1 id="channel-list-heading">Channels</h1></div>
+              <span id="channelCount" class="channel-count">0</span>
+            </header>
+            <div id="channelGrid" class="channel-grid"></div>
+            <div id="emptyChannels" class="empty-state hidden">
+              <img src="assets/logo.png" alt="" class="empty-state__logo">
+              <h2>No channels yet</h2>
+              <p>Create or enable channels on the ToastTV server, then refresh this TV.</p>
+              <button id="retryChannelsButton" type="button" class="button button--primary" data-focusable>Refresh lineup</button>
+            </div>
+          </section>
+
+          <section id="channelPreview" class="channel-preview" aria-live="polite">
+            <div class="channel-preview__wash" aria-hidden="true"></div>
+            <header class="channel-preview__identity">
+              <div class="channel-preview__logo-plate">
+                <img id="channelPreviewLogo" class="channel-preview__logo hidden" alt="">
+                <span id="channelPreviewMonogram" class="channel-preview__monogram">TV</span>
+              </div>
+              <div class="channel-preview__channel">
+                <p><span id="channelPreviewNumber">101</span> <span id="channelPreviewState" class="air-state" data-air-status="checking">CHECKING</span></p>
+                <h2 id="channelPreviewName">Choose a channel</h2>
+              </div>
+            </header>
+            <div class="channel-preview__program">
+              <p class="eyebrow">Now playing</p>
+              <h3 id="channelPreviewProgram">Loading the live schedule…</h3>
+              <p id="channelPreviewEpisode" class="channel-preview__episode">Every channel joins at the point already in progress.</p>
+              <div class="preview-timeline" role="progressbar" aria-label="Program progress" aria-valuemin="0" aria-valuemax="100"><div id="channelPreviewTimelineFill" class="preview-timeline__fill"></div></div>
+              <div class="channel-preview__time-row"><span id="channelPreviewTime">—</span><span>LIVE</span></div>
+              <div class="channel-preview__next"><span>UP NEXT</span><p id="channelPreviewNext">Checking the schedule…</p></div>
+            </div>
+            <div class="channel-preview__actions">
+              <button id="channelWatchButton" type="button" class="button button--primary" data-focusable>Watch live</button>
+              <button id="channelGuideButton" type="button" class="button button--quiet" data-focusable>Weekly guide</button>
+            </div>
+          </section>
         </div>
-        <div id="channelGrid" class="channel-grid"></div>
-        <div id="emptyChannels" class="empty-state hidden">
-          <h2>No channels are on the schedule yet</h2>
-          <p>Finish the library scan and channel configuration on the ToastTV server, then try again.</p>
-          <button id="retryChannelsButton" type="button" class="button button--primary" data-focusable>Try again</button>
-        </div>
+
         <footer class="remote-hints">
-          <span><b class="remote-key">OK</b> watch</span>
-          <span><b class="remote-key remote-key--arrow">←↑↓→</b> choose</span>
+          <span><b class="remote-key remote-key--arrow">↑ ↓</b> browse</span>
+          <span><b class="remote-key">OK</b> watch live</span>
+          <span><b class="remote-key remote-key--arrow">→</b> actions</span>
           <span><b class="remote-key">BACK</b> exit</span>
         </footer>
       </section>
@@ -85,92 +128,85 @@
         <video id="videoA" class="player-video" preload="auto" playsinline></video>
         <video id="videoB" class="player-video player-video--standby" preload="auto" playsinline></video>
         <div id="playerBackdrop" class="player-backdrop">
+          <div class="player-backdrop__brand"><img src="assets/logo.png" alt=""><span>ToastTV</span></div>
           <div id="tuningPanel" class="tuning-panel" role="status" aria-live="polite">
             <span class="tuning-spinner" aria-hidden="true"></span>
-            <p>Tuning channel</p>
-            <small>Preparing the live broadcast…</small>
-          </div>
-        </div>
-        <div class="player-vignette"></div>
-
-        <div id="channelOsd" class="channel-osd" aria-hidden="true">
-          <span id="channelOsdNumber" class="channel-osd__number">101</span>
-          <div>
-            <p id="channelOsdName" class="channel-osd__name">ToastTV</p>
-            <p id="channelOsdProgram" class="channel-osd__program">Tuning…</p>
+            <div><p id="tuningChannelName">Tuning channel</p><small id="tuningMessage">Preparing the live broadcast…</small></div>
           </div>
         </div>
 
         <header id="playerHeader" class="player-header player-chrome">
-          <div class="live-badge"><span></span> LIVE</div>
           <div class="player-channel">
-            <p id="playerChannelName">ToastTV</p>
-            <p id="playerStatus" class="player-status">Tuning…</p>
+            <div class="player-channel__identity">
+              <img id="playerChannelLogo" class="player-channel-logo hidden" alt="">
+              <span id="playerChannelMonogram" class="player-channel__monogram">TV</span>
+              <span id="playerChannelNumber" class="player-channel__number">CH 101</span>
+            </div>
+            <div><p><span class="live-dot"></span><span id="playerChannelName">ToastTV</span></p><p id="playerStatus" class="player-status">Tuning…</p></div>
           </div>
-          <img id="playerChannelLogo" class="player-channel-logo hidden" alt="">
-          <time id="playerClock" class="player-clock">--:--</time>
+          <div class="player-header__right"><time id="playerClock" class="player-clock">--:--</time></div>
         </header>
 
         <div id="playerInfo" class="player-info player-chrome">
           <p id="playerCollection" class="eyebrow">Now playing</p>
           <h2 id="playerTitle">Tuning in…</h2>
-          <div class="timeline">
-            <div id="timelineFill" class="timeline__fill"></div>
-          </div>
-          <div class="player-info__meta">
-            <span id="programTimes">--:-- – --:--</span>
-            <span id="nextTitle">Next: —</span>
-          </div>
+          <p id="playerEpisode" class="player-info__episode"></p>
+          <div class="timeline" role="progressbar" aria-label="Program progress" aria-valuemin="0" aria-valuemax="100"><div id="timelineFill" class="timeline__fill"></div></div>
+          <div class="player-info__meta"><span id="programTimes">--:-- – --:--</span><span id="nextTitle">Next: —</span></div>
         </div>
 
         <div id="offAirPanel" class="off-air hidden">
           <img src="assets/logo.png" alt="" class="off-air__logo">
-          <p class="eyebrow">This channel is resting</p>
-          <h2>We’ll be back on the air soon.</h2>
-          <p id="offAirNext">Check the guide for what’s next.</p>
+          <div>
+            <p class="eyebrow">Off air</p><h2>This channel is taking a break.</h2><p id="offAirNext">Check the guide for what’s next.</p>
+            <div class="button-row"><button id="offAirGuideButton" type="button" class="button button--primary" data-focusable>Open guide</button><button id="offAirChannelsButton" type="button" class="button button--quiet" data-focusable>Channels</button></div>
+          </div>
         </div>
 
         <div id="playbackError" class="playback-error hidden">
-          <p class="eyebrow">Playback needs a hand</p>
-          <h2 id="playbackErrorTitle">This episode could not be played.</h2>
-          <p id="playbackErrorText">The TV may not support this file’s video or audio format yet.</p>
-          <div class="button-row">
-            <button id="retryPlaybackButton" type="button" class="button button--primary" data-focusable>Retry live</button>
-            <button id="errorBackButton" type="button" class="button button--quiet" data-focusable>Channels</button>
+          <div class="playback-error__mark">!</div>
+          <div class="playback-error__content">
+            <p class="eyebrow">Signal unavailable</p>
+            <h2 id="playbackErrorTitle">This program could not be played.</h2>
+            <p class="playback-error__help">ToastTV kept the channel information safe. Retry the normalized stream or choose another channel.</p>
+            <div class="playback-error__technical"><span>TECHNICAL DETAIL</span><p id="playbackErrorText">The TV may not support this file’s video or audio format yet.</p></div>
+            <div class="button-row"><button id="retryPlaybackButton" type="button" class="button button--primary" data-focusable>Retry live</button><button id="errorBackButton" type="button" class="button button--quiet" data-focusable>Browse channels</button></div>
           </div>
         </div>
 
         <footer id="playerHints" class="player-hints player-chrome">
-          <span><b class="remote-key remote-key--arrow">← →</b> change channel</span>
+          <span><b class="remote-key remote-key--arrow">← →</b> channel</span>
           <span><b class="remote-key remote-key--arrow">↑</b> guide</span>
+          <span><b class="remote-key remote-key--arrow">↓</b> channels</span>
           <span><b class="remote-key">OK</b> show / hide info</span>
-          <span><b class="remote-key">BACK</b> channels</span>
         </footer>
       </section>
     </main>
 
-    <aside id="guideOverlay" class="overlay" aria-hidden="true">
-      <div class="overlay__shade"></div>
+    <aside id="guideOverlay" class="overlay" role="dialog" aria-modal="true" aria-labelledby="guideChannelName" aria-hidden="true">
       <div class="guide-panel guide-panel--catalog">
         <header class="guide-panel__header">
-          <div>
-            <p class="eyebrow">Week ahead</p>
-            <h2 id="guideChannelName">Channel guide</h2>
-          </div>
-          <button id="closeGuideButton" type="button" class="round-button" aria-label="Close guide" data-focusable>×</button>
+          <div><p class="eyebrow">Live TV guide · video keeps playing</p><h2 id="guideChannelName">Channel guide</h2></div>
+          <div class="guide-panel__header-right"><time id="guideClock" class="guide-clock">--:--</time><button id="closeGuideButton" type="button" class="round-button" aria-label="Close guide" data-focusable>×</button></div>
         </header>
-        <nav id="catalogRail" class="catalog-rail" aria-label="Channels"></nav>
-        <nav id="catalogDays" class="catalog-days" aria-label="Days"></nav>
-        <div id="guideList" class="guide-list"></div>
-        <p id="guideMessage" class="message"></p>
+        <div class="guide-shell">
+          <nav id="catalogRail" class="catalog-rail" aria-label="Channels"></nav>
+          <section class="guide-schedule"><nav id="catalogDays" class="catalog-days" aria-label="Days"></nav><div id="guideList" class="guide-list"></div><p id="guideMessage" class="message"></p></section>
+        </div>
         <footer class="guide-panel__footer">
+          <span><b class="remote-key remote-key--arrow">↑ ↓</b> browse</span>
           <span><b class="remote-key remote-key--arrow">← →</b> day</span>
-          <span><b class="remote-key">↑ ↓</b> browse</span>
-          <span><b class="remote-key">OK</b> watch</span>
-          <span><b class="remote-key">BACK</b> close</span>
+          <span><b class="remote-key">CH</b> guide channel</span>
+          <span><b class="remote-key">OK</b> watch channel live</span>
+          <span><b class="remote-key">BACK</b> return to live TV</span>
         </footer>
       </div>
     </aside>
+
+    <div id="channelOsd" class="channel-osd" aria-hidden="true">
+      <span id="channelOsdNumber" class="channel-osd__number">101</span>
+      <div><p id="channelOsdName" class="channel-osd__name">ToastTV</p><p id="channelOsdProgram" class="channel-osd__program">Preparing…</p></div>
+    </div>
 
     <div id="toast" class="toast" role="status"></div>
     <script src="playback-policy.js"></script>

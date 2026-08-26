@@ -528,6 +528,226 @@ describe('ChannelService', () => {
     expect(endMs - startMs).toBe(420_000)
   })
 
+  test('returns a complete seven-day guide from the requested day boundary', async () => {
+    const repository = mock<IMediaRepository>()
+    repository.getAll.mockResolvedValue([
+      { ...video(1, 'Bluey (2018)'), durationSeconds: 600 },
+    ])
+    const weeklyPolicy: LibraryPolicyDocument = {
+      ...policy,
+      channels: [
+        {
+          id: 'weekly',
+          name: 'Weekly Station',
+          enabled: true,
+          timezone: 'UTC',
+          slots: [
+            {
+              days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'],
+              start: '00:00',
+              end: '24:00',
+              groups: ['comfort'],
+            },
+          ],
+        },
+      ],
+    }
+    const from = new Date('2026-08-23T00:00:00.000Z')
+    const guide = await new ChannelService(repository, weeklyPolicy, {
+      now: () => new Date('2026-08-23T12:00:00.000Z'),
+    }).getGuide('weekly', 168, { from })
+
+    expect(guide?.programs.length).toBeGreaterThan(1_000)
+    expect(guide?.programs[0]?.scheduledStart).toBe(from.toISOString())
+    expect(Date.parse(guide?.coverageEnd ?? '')).toBeGreaterThanOrEqual(
+      from.getTime() + 168 * 60 * 60 * 1000
+    )
+    expect(guide?.truncated).toBe(false)
+  })
+
+  test('keeps earlier-today and late-week programs in a sparse weekly guide', async () => {
+    const repository = mock<IMediaRepository>()
+    repository.getAll.mockResolvedValue([video(1, 'Bluey (2018)')])
+    const sparsePolicy: LibraryPolicyDocument = {
+      ...policy,
+      channels: [
+        {
+          id: 'sparse-week',
+          name: 'Sparse Week',
+          enabled: true,
+          timezone: 'UTC',
+          slots: [
+            { days: ['sun'], start: '06:30', end: '07:00', groups: ['comfort'] },
+            { days: ['sat'], start: '07:00', end: '08:00', groups: ['comfort'] },
+          ],
+        },
+      ],
+    }
+    const now = new Date('2026-08-23T12:00:00.000Z')
+    const guide = await new ChannelService(repository, sparsePolicy, {
+      now: () => now,
+    }).getGuide('sparse-week', 168, {
+      from: new Date('2026-08-23T00:00:00.000Z'),
+    })
+
+    expect(guide?.programs[0]?.scheduledStart).toBe('2026-08-23T06:30:00.000Z')
+    expect(Date.parse(guide?.programs[0]?.scheduledStart ?? '')).toBeLessThan(
+      now.getTime()
+    )
+    expect(
+      guide?.programs.some((item) => item.scheduledStart.startsWith('2026-08-29T'))
+    ).toBe(true)
+  })
+
+  test('returns station-calendar day boundaries across daylight-saving changes', async () => {
+    const repository = mock<IMediaRepository>()
+    repository.getAll.mockResolvedValue([video(1, 'Bluey (2018)')])
+    const baseChannel = policy.channels?.[0]
+    if (!baseChannel) throw new Error('Expected the shared test channel')
+    const service = new ChannelService(
+      repository,
+      {
+        ...policy,
+        channels: [
+          {
+            ...baseChannel,
+            id: 'west-coast',
+            timezone: 'America/Los_Angeles',
+            slots: [
+              {
+                days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'],
+                start: '00:00',
+                end: '24:00',
+                groups: ['comfort'],
+              },
+            ],
+          },
+        ],
+      },
+      { now: () => new Date('2026-11-01T18:00:00.000Z') }
+    )
+
+    const guide = await service.getGuide('west-coast', 168, {
+      from: new Date('2026-11-01T00:00:00.000Z'),
+      calendarDays: true,
+    })
+
+    expect(guide?.dayStarts).toHaveLength(8)
+    expect(guide?.dayStarts?.[0]).toBe('2026-11-01T07:00:00.000Z')
+    expect(guide?.dayStarts?.[1]).toBe('2026-11-02T08:00:00.000Z')
+    expect(guide?.requestedEnd).toBe(guide?.dayStarts?.[7])
+    expect(Date.parse(guide?.coverageEnd ?? '')).toBeGreaterThanOrEqual(
+      Date.parse(guide?.requestedEnd ?? '')
+    )
+  })
+
+  test('builds all channel now/next snapshots from one repository read', async () => {
+    const repository = mock<IMediaRepository>()
+    repository.getAll.mockResolvedValue([video(1, 'Bluey (2018)')])
+    const baseChannel = policy.channels?.[0]
+    if (!baseChannel) throw new Error('Expected the shared test channel')
+    const lineupPolicy: LibraryPolicyDocument = {
+      ...policy,
+      channels: [
+        { ...baseChannel, id: 'one', name: 'One' },
+        { ...baseChannel, id: 'two', name: 'Two' },
+      ],
+    }
+    const snapshot = await new ChannelService(repository, lineupPolicy, {
+      now: () => new Date('2026-08-23T22:35:00.000Z'),
+    }).getLineupSchedule()
+
+    expect(repository.getAll).toHaveBeenCalledTimes(1)
+    expect(snapshot.schedules.map((item) => item.channelId)).toEqual([
+      'one',
+      'two',
+    ])
+    expect(snapshot.schedules.every((item) => item.program?.mediaId === 1)).toBe(
+      true
+    )
+  })
+
+  test('coalesces concurrent lineup, now, and guide catalog reads', async () => {
+    const repository = mock<IMediaRepository>()
+    repository.getAll.mockResolvedValue([video(1, 'Bluey (2018)')])
+    const service = new ChannelService(repository, policy, {
+      now: () => new Date('2026-08-23T22:35:00.000Z'),
+    })
+
+    const [first, second, now, guide] = await Promise.all([
+      service.getLineupSchedule(),
+      service.getLineupSchedule(),
+      service.getNow('kids-club'),
+      service.getGuide('kids-club', 24),
+    ])
+
+    expect(repository.getAll).toHaveBeenCalledTimes(1)
+    expect(first.schedules).toEqual(second.schedules)
+    expect(now?.program?.mediaId).toBe(1)
+    expect(guide?.programs.some((item) => item.mediaId === 1)).toBe(true)
+  })
+
+  test('reuses compiled lineup programs while stamping fresh response time', async () => {
+    const repository = mock<IMediaRepository>()
+    repository.getAll.mockResolvedValue([video(1, 'Bluey (2018)')])
+    let nowMs = Date.parse('2026-08-23T22:35:00.000Z')
+    const service = new ChannelService(repository, policy, {
+      now: () => new Date(nowMs),
+    })
+
+    const first = await service.getLineupSchedule()
+    nowMs += 5_000
+    const second = await service.getLineupSchedule()
+
+    expect(repository.getAll).toHaveBeenCalledTimes(1)
+    expect(second.serverTimeMs - first.serverTimeMs).toBe(5_000)
+    expect(
+      (second.schedules[0]?.program?.offsetMs ?? 0) -
+        (first.schedules[0]?.program?.offsetMs ?? 0)
+    ).toBe(5_000)
+  })
+
+  test('invalidates cached schedules after the media catalog changes', async () => {
+    const repository = mock<IMediaRepository>()
+    repository.getAll
+      .mockResolvedValueOnce([video(1, 'Bluey (2018)')])
+      .mockResolvedValueOnce([video(2, 'Bluey (2018)')])
+    const service = new ChannelService(repository, policy, {
+      now: () => new Date('2026-08-23T22:35:00.000Z'),
+    })
+
+    expect((await service.getLineupSchedule()).schedules[0]?.program?.mediaId).toBe(1)
+    expect((await service.getLineupSchedule()).schedules[0]?.program?.mediaId).toBe(1)
+    service.invalidateScheduleCatalog()
+    expect((await service.getLineupSchedule()).schedules[0]?.program?.mediaId).toBe(2)
+    expect(repository.getAll).toHaveBeenCalledTimes(2)
+  })
+
+  test('discards an in-flight source snapshot invalidated by a scan', async () => {
+    const repository = mock<IMediaRepository>()
+    let releaseFirst: ((items: MediaItem[]) => void) | undefined
+    repository.getAll
+      .mockImplementationOnce(
+        () =>
+          new Promise<MediaItem[]>((resolve) => {
+            releaseFirst = resolve
+          })
+      )
+      .mockResolvedValueOnce([video(2, 'Bluey (2018)')])
+    const service = new ChannelService(repository, policy, {
+      now: () => new Date('2026-08-23T22:35:00.000Z'),
+    })
+
+    const pending = service.getLineupSchedule()
+    await Promise.resolve()
+    service.invalidateScheduleCatalog()
+    releaseFirst?.([video(1, 'Bluey (2018)')])
+    const result = await pending
+
+    expect(result.schedules[0]?.program?.mediaId).toBe(2)
+    expect(repository.getAll).toHaveBeenCalledTimes(2)
+  })
+
   test('schedules measured interludes as ordinary deterministic all-day timeline items', async () => {
     const repository = mock<IMediaRepository>()
     repository.getAll.mockResolvedValue([

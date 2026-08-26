@@ -143,6 +143,43 @@ export interface ChannelNowResult {
   readonly next: ScheduledProgram | null
 }
 
+export interface ChannelScheduleSnapshot {
+  readonly serverTime: string
+  readonly serverTimeMs: number
+  readonly schedules: readonly ChannelNowResult[]
+}
+
+interface ScheduleSourceSnapshot {
+  readonly epoch: number
+  readonly expiresAt: number
+  readonly media: MediaItem[]
+  readonly catalog: unknown[]
+}
+
+interface PreparedLineupChannel {
+  readonly channel: LibraryChannelPolicy
+  readonly offAir: boolean
+  readonly programs: ScheduledProgram[]
+  readonly timelineRevision: string
+}
+
+interface PreparedLineup {
+  readonly epoch: number
+  readonly expiresAt: number
+  readonly channels: readonly PreparedLineupChannel[]
+}
+
+interface PreparedGuide {
+  readonly epoch: number
+  readonly expiresAt: number
+  readonly requestedEnd: string
+  readonly coverageEnd: string | null
+  readonly truncated: boolean
+  readonly programs: ScheduledProgram[]
+  readonly timelineRevision: string
+  readonly dayStarts: readonly string[]
+}
+
 interface LocalParts {
   year: number
   month: number
@@ -155,6 +192,10 @@ interface LocalParts {
 
 const SYSTEM_CLOCK: ChannelClock = { now: () => new Date() }
 const MAX_PROGRAMS_PER_SLOT = 20_000
+const SCHEDULE_SOURCE_TTL_MS = 20_000
+const LINEUP_CACHE_TTL_MS = 20_000
+const GUIDE_CACHE_TTL_MS = 60_000
+const GUIDE_CACHE_MAX_ENTRIES = 24
 const DISABLED_INTERLUDES: ChannelInterludePolicy = {
   enabled: false,
   frequency: 1,
@@ -179,6 +220,22 @@ export class ChannelService {
   private manuallyOffAir = new Set<string>()
   private configurationError: string | null = null
   private automatedReconciliation: Promise<readonly string[]> | null = null
+  private scheduleEpoch = 0
+  private scheduleSource: ScheduleSourceSnapshot | null = null
+  private scheduleSourceInFlight: {
+    readonly epoch: number
+    readonly promise: Promise<ScheduleSourceSnapshot>
+  } | null = null
+  private preparedLineup: PreparedLineup | null = null
+  private preparedLineupInFlight: {
+    readonly epoch: number
+    readonly promise: Promise<PreparedLineup>
+  } | null = null
+  private readonly preparedGuides = new Map<string, PreparedGuide>()
+  private readonly preparedGuidesInFlight = new Map<
+    string,
+    Promise<PreparedGuide>
+  >()
 
   constructor(
     private readonly repository: IMediaRepository,
@@ -223,6 +280,15 @@ export class ChannelService {
       enabled: policy.enabled,
       frequency: Math.max(1, Math.floor(policy.frequency)),
     }
+    this.invalidateScheduleCatalog()
+  }
+
+  /** Invalidate derived schedules after a scan, approval, or metadata change. */
+  invalidateScheduleCatalog(): void {
+    this.scheduleEpoch += 1
+    this.scheduleSource = null
+    this.preparedLineup = null
+    this.preparedGuides.clear()
   }
 
   list(): { serverTime: string; serverTimeMs: number; channels: ChannelSummary[] } {
@@ -539,28 +605,51 @@ export class ChannelService {
   async getNow(channelId: string): Promise<ChannelNowResult | null> {
     const channel = this.getChannel(channelId)
     if (!channel) return null
-
     if (this.manuallyOffAir.has(channelId)) {
-      const now = this.clock.now()
-      return {
-        channelId,
-        serverTime: now.toISOString(),
-        serverTimeMs: now.getTime(),
-        timezone: channel.timezone,
-        timelineRevision: this.timelineRevision(channel, []),
-        program: null,
-        next: null,
-      }
+      return this.channelNowResult(channel, [], this.clock.now(), [])
     }
-
-    const media = await this.repository.getAll()
+    const source = await this.getScheduleSource()
     const around = this.clock.now()
-    // A sparse channel (for example Friday movie night) may need several days
-    // of look-ahead to produce a useful `next` value.
-    const programs = this.buildWindow(channel, media, around, 7, 1)
+    const programs = this.buildWindow(channel, source.media, around, 7, 1)
     // Sample the authoritative response time after schedule generation so the
     // client does not inherit time spent reading/building the timeline.
     const now = this.clock.now()
+    return this.channelNowResult(
+      channel,
+      programs,
+      now,
+      this.timelineRevisionForCatalog(channel, source.catalog)
+    )
+  }
+
+  /**
+   * Builds the channel browser's complete now/next catalog from one media
+   * snapshot. It is deliberately independent of FFmpeg worker readiness.
+   */
+  async getLineupSchedule(): Promise<ChannelScheduleSnapshot> {
+    const prepared = await this.getPreparedLineup()
+    const now = this.clock.now()
+    return {
+      serverTime: now.toISOString(),
+      serverTimeMs: now.getTime(),
+      schedules: prepared.channels.map(
+        ({ channel, programs, timelineRevision }) =>
+        this.channelNowResult(
+          channel,
+          programs,
+          now,
+          timelineRevision
+        )
+      ),
+    }
+  }
+
+  private channelNowResult(
+    channel: LibraryChannelPolicy,
+    programs: ScheduledProgram[],
+    now: Date,
+    catalogOrRevision: unknown[] | string
+  ): ChannelNowResult {
     const nowMs = now.getTime()
     const current = programs.find(
       (program) =>
@@ -572,11 +661,14 @@ export class ChannelService {
     )
 
     return {
-      channelId,
+      channelId: channel.id,
       serverTime: now.toISOString(),
       serverTimeMs: nowMs,
       timezone: channel.timezone,
-      timelineRevision: this.timelineRevision(channel, media),
+      timelineRevision:
+        typeof catalogOrRevision === 'string'
+          ? catalogOrRevision
+          : this.timelineRevisionForCatalog(channel, catalogOrRevision),
       program: current
         ? {
             ...current,
@@ -598,7 +690,7 @@ export class ChannelService {
   async getGuide(
     channelId: string,
     hours = 8,
-    options?: { from?: Date }
+    options?: { from?: Date; calendarDays?: boolean }
   ): Promise<
     | {
         channelId: string
@@ -609,6 +701,7 @@ export class ChannelService {
         requestedEnd: string
         coverageEnd: string | null
         truncated: boolean
+        dayStarts?: readonly string[]
         programs: ScheduledProgram[]
       }
     | null
@@ -616,14 +709,29 @@ export class ChannelService {
     const channel = this.getChannel(channelId)
     if (!channel) return null
 
-    // A weekly catalog requests windows that start in the future, so the
-    // anchor is caller-controlled while `serverTime` stays authoritative.
+    // A weekly TV guide can use the station's own calendar-day boundaries;
+    // ordinary callers retain their explicit anchor while serverTime stays live.
     const boundedHours = Math.min(168, Math.max(1, Math.floor(hours)))
     const from = options?.from
-    const anchor =
+    const requestedAnchor =
       from instanceof Date && Number.isFinite(from.getTime())
         ? from
         : this.clock.now()
+    const calendarParts = options?.calendarDays
+      ? this.localParts(this.clock.now(), channel.timezone)
+      : null
+    const anchor = calendarParts
+      ? this.zonedDateTime(calendarParts, 0, channel.timezone)
+      : requestedAnchor
+    const dayStarts = calendarParts
+      ? Array.from({ length: 8 }, (_, offset) =>
+          this.zonedDateTime(
+            this.addCalendarDays(calendarParts, offset),
+            0,
+            channel.timezone
+          ).toISOString()
+        )
+      : []
     if (this.manuallyOffAir.has(channelId)) {
       const now = this.clock.now()
       return {
@@ -632,49 +740,226 @@ export class ChannelService {
         serverTimeMs: now.getTime(),
         timezone: channel.timezone,
         timelineRevision: this.timelineRevision(channel, []),
-        requestedEnd: new Date(
-          anchor.getTime() + boundedHours * 60 * 60 * 1000
-        ).toISOString(),
+        requestedEnd:
+          dayStarts[dayStarts.length - 1] ??
+          new Date(
+            anchor.getTime() + boundedHours * 60 * 60 * 1000
+          ).toISOString(),
         coverageEnd: null,
         truncated: false,
+        dayStarts,
         programs: [],
       }
     }
 
-    const media = await this.repository.getAll()
-    const programs = this.buildWindow(
+    const source = await this.getScheduleSource()
+    const prepared = await this.getPreparedGuide(
       channel,
-      media,
+      source,
       anchor,
-      1,
-      boundedHours
+      boundedHours,
+      dayStarts
     )
     const now = this.clock.now()
-    const nowMs = now.getTime()
-    const anchorMs = anchor.getTime()
-    const horizonMs = anchorMs + boundedHours * 60 * 60 * 1000
-    const visiblePrograms = programs.filter(
-      (program) =>
-        Date.parse(program.scheduledEnd) > Math.max(nowMs, anchorMs) &&
-        Date.parse(program.scheduledStart) < horizonMs
-    )
-    const coverageEnd =
-      visiblePrograms[visiblePrograms.length - 1]?.scheduledEnd ?? null
-    const truncated =
-      visiblePrograms.length >= MAX_PROGRAMS_PER_SLOT &&
-      coverageEnd !== null &&
-      Date.parse(coverageEnd) < horizonMs
 
     return {
       channelId,
       serverTime: now.toISOString(),
-      serverTimeMs: nowMs,
+      serverTimeMs: now.getTime(),
       timezone: channel.timezone,
-      timelineRevision: this.timelineRevision(channel, media),
-      requestedEnd: new Date(horizonMs).toISOString(),
-      coverageEnd,
-      truncated,
-      programs: visiblePrograms,
+      timelineRevision: prepared.timelineRevision,
+      requestedEnd: prepared.requestedEnd,
+      coverageEnd: prepared.coverageEnd,
+      truncated: prepared.truncated,
+      dayStarts: prepared.dayStarts,
+      programs: prepared.programs,
+    }
+  }
+
+  private async getScheduleSource(): Promise<ScheduleSourceSnapshot> {
+    const epoch = this.scheduleEpoch
+    const now = Date.now()
+    if (
+      this.scheduleSource?.epoch === epoch &&
+      this.scheduleSource.expiresAt > now
+    ) {
+      return this.scheduleSource
+    }
+    if (this.scheduleSourceInFlight?.epoch === epoch) {
+      return this.scheduleSourceInFlight.promise
+    }
+
+    const promise = this.repository.getAll().then((media) => ({
+      epoch,
+      expiresAt: Date.now() + SCHEDULE_SOURCE_TTL_MS,
+      media,
+      catalog: this.timelineCatalog(media),
+    }))
+    const inFlight = { epoch, promise }
+    this.scheduleSourceInFlight = inFlight
+    try {
+      const snapshot = await promise
+      if (epoch !== this.scheduleEpoch) return this.getScheduleSource()
+      this.scheduleSource = snapshot
+      return snapshot
+    } finally {
+      if (this.scheduleSourceInFlight === inFlight) {
+        this.scheduleSourceInFlight = null
+      }
+    }
+  }
+
+  private async getPreparedLineup(): Promise<PreparedLineup> {
+    const epoch = this.scheduleEpoch
+    const now = Date.now()
+    if (
+      this.preparedLineup?.epoch === epoch &&
+      this.preparedLineup.expiresAt > now
+    ) {
+      return this.preparedLineup
+    }
+    if (this.preparedLineupInFlight?.epoch === epoch) {
+      return this.preparedLineupInFlight.promise
+    }
+
+    const promise = (async (): Promise<PreparedLineup> => {
+      const source = await this.getScheduleSource()
+      if (source.epoch !== this.scheduleEpoch) return this.getPreparedLineup()
+      const around = this.clock.now()
+      const channels = this.channels
+        .filter((channel) => channel.enabled)
+        .map((channel): PreparedLineupChannel => {
+          const offAir = this.manuallyOffAir.has(channel.id)
+          return {
+            channel,
+            offAir,
+            programs: offAir
+              ? []
+              : this.buildWindow(channel, source.media, around, 7, 1),
+            timelineRevision: this.timelineRevisionForCatalog(
+              channel,
+              offAir ? [] : source.catalog
+            ),
+          }
+        })
+      return {
+        epoch,
+        expiresAt: Date.now() + LINEUP_CACHE_TTL_MS,
+        channels,
+      }
+    })()
+    const inFlight = { epoch, promise }
+    this.preparedLineupInFlight = inFlight
+    try {
+      const prepared = await promise
+      if (epoch !== this.scheduleEpoch) return this.getPreparedLineup()
+      this.preparedLineup = prepared
+      return prepared
+    } finally {
+      if (this.preparedLineupInFlight === inFlight) {
+        this.preparedLineupInFlight = null
+      }
+    }
+  }
+
+  private async getPreparedGuide(
+    channel: LibraryChannelPolicy,
+    source: ScheduleSourceSnapshot,
+    anchor: Date,
+    boundedHours: number,
+    dayStarts: readonly string[]
+  ): Promise<PreparedGuide> {
+    if (source.epoch !== this.scheduleEpoch) {
+      return this.getPreparedGuide(
+        channel,
+        await this.getScheduleSource(),
+        anchor,
+        boundedHours,
+        dayStarts
+      )
+    }
+    const cacheKey = [
+      source.epoch,
+      channel.id,
+      anchor.getTime(),
+      boundedHours,
+      dayStarts[dayStarts.length - 1] ?? '',
+    ].join(':')
+    const cached = this.preparedGuides.get(cacheKey)
+    if (cached && cached.expiresAt > Date.now()) {
+      this.preparedGuides.delete(cacheKey)
+      this.preparedGuides.set(cacheKey, cached)
+      return cached
+    }
+    if (cached) this.preparedGuides.delete(cacheKey)
+    const existing = this.preparedGuidesInFlight.get(cacheKey)
+    if (existing) return existing
+
+    const promise = Promise.resolve().then((): PreparedGuide => {
+      const requestedEndMs = dayStarts.length > 1
+        ? Date.parse(dayStarts[dayStarts.length - 1] as string)
+        : anchor.getTime() + boundedHours * 60 * 60 * 1000
+      const horizonHours = Math.max(
+        boundedHours,
+        Math.ceil((requestedEndMs - anchor.getTime()) / (60 * 60 * 1000))
+      )
+      const futureDays = Math.min(8, Math.ceil(horizonHours / 24) + 1)
+      const programs = this.buildWindow(
+        channel,
+        source.media,
+        anchor,
+        futureDays,
+        horizonHours
+      )
+      const anchorMs = anchor.getTime()
+      const horizonMs = requestedEndMs
+      const visiblePrograms = programs.filter(
+        (program) =>
+          Date.parse(program.scheduledEnd) > anchorMs &&
+          Date.parse(program.scheduledStart) < horizonMs
+      )
+      const coverageEnd =
+        visiblePrograms[visiblePrograms.length - 1]?.scheduledEnd ?? null
+      return {
+        epoch: source.epoch,
+        expiresAt: Date.now() + GUIDE_CACHE_TTL_MS,
+        requestedEnd: new Date(horizonMs).toISOString(),
+        coverageEnd,
+        truncated:
+          visiblePrograms.length >= MAX_PROGRAMS_PER_SLOT &&
+          coverageEnd !== null &&
+          Date.parse(coverageEnd) < horizonMs,
+        programs: visiblePrograms,
+        timelineRevision: this.timelineRevisionForCatalog(
+          channel,
+          source.catalog
+        ),
+        dayStarts,
+      }
+    })
+    this.preparedGuidesInFlight.set(cacheKey, promise)
+    try {
+      const prepared = await promise
+      if (source.epoch !== this.scheduleEpoch) {
+        return this.getPreparedGuide(
+          channel,
+          await this.getScheduleSource(),
+          anchor,
+          boundedHours,
+          dayStarts
+        )
+      }
+      this.preparedGuides.set(cacheKey, prepared)
+      while (this.preparedGuides.size > GUIDE_CACHE_MAX_ENTRIES) {
+        const oldest = this.preparedGuides.keys().next().value
+        if (typeof oldest !== 'string') break
+        this.preparedGuides.delete(oldest)
+      }
+      return prepared
+    } finally {
+      if (this.preparedGuidesInFlight.get(cacheKey) === promise) {
+        this.preparedGuidesInFlight.delete(cacheKey)
+      }
     }
   }
 
@@ -1118,6 +1403,7 @@ export class ChannelService {
     this.manuallyOffAir = new Set(snapshot.manuallyOffAir)
     this.applyConfiguredGroups(snapshot.collectionGroups ?? [])
     this.configurationError = null
+    this.invalidateScheduleCatalog()
   }
 
   private buildWindow(
@@ -1210,8 +1496,11 @@ export class ChannelService {
       orderIndex++
     }
     let cursorMs = aroundMs - (cycleOffset - elapsed)
+    // Seven station-calendar days can span 169 elapsed hours when daylight
+    // saving time falls back. Public requests remain capped at 168 nominal
+    // hours, but the calendar guide may ask for that exact extra hour.
     const horizonMs =
-      aroundMs + Math.max(1, Math.min(24, horizonHours)) * 60 * 60 * 1000
+      aroundMs + Math.max(1, Math.min(169, horizonHours)) * 60 * 60 * 1000
     const programs: ScheduledProgram[] = []
 
     while (
@@ -1594,7 +1883,14 @@ export class ChannelService {
     channel: LibraryChannelPolicy,
     media: MediaItem[]
   ): string {
-    const catalog = media
+    return this.timelineRevisionForCatalog(
+      channel,
+      this.timelineCatalog(media)
+    )
+  }
+
+  private timelineCatalog(media: MediaItem[]): unknown[] {
+    return media
       .filter(
         (item) => item.rootAvailable === true && item.playbackEnabled === true
       )
@@ -1603,11 +1899,23 @@ export class ChannelService {
         item.relativePath,
         item.durationSeconds,
         item.playbackOverride,
+        item.collectionTitle,
+        item.collectionMetadataTitle,
+        item.seasonNumber,
+        item.episodeNumber,
+        item.episodeTitle,
+        item.episodeMetadataTitle,
         [...this.groupsFor(item)].sort((left, right) =>
           this.compareText(left, right)
         ),
       ])
       .sort((a, b) => this.compareText(JSON.stringify(a), JSON.stringify(b)))
+  }
+
+  private timelineRevisionForCatalog(
+    channel: LibraryChannelPolicy,
+    catalog: unknown[]
+  ): string {
     const interlude = this.interludePolicy.enabled
       ? { enabled: true, frequency: this.interludeFrequency() }
       : undefined

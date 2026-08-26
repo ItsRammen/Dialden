@@ -61,11 +61,12 @@ export interface ChannelWorkerFiles {
   sourceExists(path: string): Promise<boolean> | boolean
   /** Remove orphaned/expired output while preserving the active rolling window. */
   cleanupOutput(directory: string): Promise<void> | void
-  /** Wait until this FFmpeg generation has emitted at least one new segment. */
+  /** Wait until this FFmpeg generation has emitted enough fresh live-edge buffer. */
   waitForFreshSegment?(
     directory: string,
     minimumModifiedAt: number,
-    isCurrent?: () => boolean
+    isCurrent?: () => boolean,
+    minimumSegmentCount?: number
   ): Promise<void> | void
 }
 
@@ -236,7 +237,9 @@ export class ContinuousChannelWorkerManager {
       record.idleTimer = undefined
     }
     if (record.stopping) await record.stopping
-    if (!record.pipeline && record.restartTimer === undefined) {
+    if (record.startup) {
+      await record.startup
+    } else if (!record.pipeline && record.restartTimer === undefined) {
       await this.ensureStarted(record)
     }
     return this.snapshot(record)
@@ -273,7 +276,9 @@ export class ContinuousChannelWorkerManager {
       record.idleTimer = undefined
     }
     if (record.stopping) await record.stopping
-    if (!record.pipeline && record.restartTimer === undefined) {
+    if (record.startup) {
+      await record.startup
+    } else if (!record.pipeline && record.restartTimer === undefined) {
       await this.ensureStarted(record)
     }
     return this.snapshot(record)
@@ -324,7 +329,9 @@ export class ContinuousChannelWorkerManager {
   async whenReady(channelId: string): Promise<ContinuousChannelWorkerState> {
     const record = this.record(channelId)
     if (record.stopping) await record.stopping
-    if (!record.pipeline && record.restartTimer === undefined) {
+    if (record.startup) {
+      await record.startup
+    } else if (!record.pipeline && record.restartTimer === undefined) {
       await this.ensureStarted(record)
     }
     return this.snapshot(record)
@@ -554,8 +561,8 @@ export class ContinuousChannelWorkerManager {
 
   private async ensureStarted(record: WorkerRecord): Promise<void> {
     if (record.stopping) await record.stopping
-    if (record.pipeline) return
     if (record.startup) return record.startup
+    if (record.pipeline) return
     record.startup = this.startRecord(record).finally(() => {
       record.startup = undefined
     })
@@ -640,7 +647,8 @@ export class ContinuousChannelWorkerManager {
         this.files.waitForFreshSegment?.(
           outputDirectory,
           outputReadyAfter,
-          () => waitingForFreshOutput && generation === record.generation
+          () => waitingForFreshOutput && generation === record.generation,
+          2
         )
       ).then(() => ({ kind: 'ready' as const }))
       const earlyExit = pipeline.completed.then((exit) => ({

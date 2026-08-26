@@ -134,6 +134,29 @@ describe('ContinuousChannelWorkerManager', () => {
     expect((await acquiring).status).toBe('live')
   })
 
+  test('keeps blocking viewers behind a speculative startup until fresh output exists', async () => {
+    const ready = deferred<void>()
+    const f = fixture({ readiness: ready.promise })
+
+    const speculative = await f.manager.holdSession('kids', 'lineup-tv')
+    expect(speculative.status).toBe('starting')
+    await settle()
+    expect(f.requests).toHaveLength(1)
+
+    let readyReturned = false
+    const waiting = f.manager.whenReady('kids').then((state) => {
+      readyReturned = true
+      return state
+    })
+    const touching = f.manager.touch('kids', 'watching-tv')
+    await settle()
+    expect(readyReturned).toBe(false)
+
+    ready.resolve()
+    expect((await waiting).status).toBe('live')
+    expect((await touching).status).toBe('live')
+  })
+
   test('surfaces an encoder exit immediately instead of waiting for readiness timeout', async () => {
     const manager = new ContinuousChannelWorkerManager(
       { resolve: async () => position() },

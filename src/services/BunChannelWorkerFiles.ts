@@ -44,25 +44,30 @@ export class BunChannelWorkerFiles implements ChannelWorkerFiles {
   async waitForFreshSegment(
     directory: string,
     minimumModifiedAt: number,
-    isCurrent?: () => boolean
+    isCurrent?: () => boolean,
+    minimumSegmentCount = 2
   ): Promise<void> {
     for (let attempt = 0; attempt < 240; attempt += 1) {
       if (isCurrent && !isCurrent()) return
       try {
         const entries = await readdir(directory, { withFileTypes: true })
-        let newestSegment: string | undefined
+        let freshSegmentCount = 0
         for (const entry of entries) {
           if (!entry.isFile() || !/^segment-\d{13}\.ts$/i.test(entry.name)) {
             continue
           }
-          if (!newestSegment || entry.name > newestSegment) {
-            newestSegment = entry.name
+          try {
+            if (
+              (await stat(join(directory, entry.name))).mtimeMs >=
+              minimumModifiedAt
+            ) {
+              freshSegmentCount += 1
+            }
+          } catch {
+            // FFmpeg may rotate the segment between readdir and stat.
           }
         }
-        if (
-          newestSegment &&
-          (await stat(join(directory, newestSegment))).mtimeMs >= minimumModifiedAt
-        ) {
+        if (freshSegmentCount >= Math.max(1, minimumSegmentCount)) {
           return
         }
       } catch {
@@ -70,6 +75,6 @@ export class BunChannelWorkerFiles implements ChannelWorkerFiles {
       }
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
-    throw new Error('Channel encoder did not produce a fresh segment in time')
+    throw new Error('Channel encoder did not produce enough fresh segments in time')
   }
 }

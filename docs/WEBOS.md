@@ -25,6 +25,45 @@ Media mounts are read-only inside the container. Do not replace or rewrite a
 mounted video from the Unraid host while it is actively streaming; finish the
 copy first, then let ToastTV discover the completed file.
 
+## Using the TV remote
+
+ToastTV resumes the last watched channel at launch. If tuning takes more than a
+couple of seconds, **Browse channels** and **Server settings** appear without
+cancelling the background preparation.
+
+- **OK** shows or hides the single now-playing information bar.
+- **Left / Right** and **Channel - / +** tune the previous or next on-air channel.
+- **Up** opens the seven-day guide.
+- **Down** or **Back** opens the channel browser.
+- **Play** rejoins live playback; **Pause** pauses locally.
+
+The channel browser uses a vertical channel rail and a detailed now/next panel.
+Moving focus previews a channel without tuning it; press **OK** to watch. Channel
+logos are application artwork shown in the browser and player information only.
+They are never burned into the video stream.
+
+The guide is a translucent overlay over the playing channel. **Left / Right**
+move directly between station-calendar days, **Channel - / +** preview the
+previous or next channel, and **OK** on either a channel or programme tunes that
+channel live. **Back** closes the guide without touching the current decoder. A
+different channel is prepared while the old picture keeps playing; its global
+switching card reports progress until the short decoder handoff begins. Weekly
+schedules come from the server independently of encoder readiness, so merely
+browsing the guide never starts or tunes another channel.
+
+## Local preview and LG Simulator
+
+The `/tv/` browser preview is the quickest way to inspect the 1280×720 layout,
+focus order, remote-key behavior, server requests, and recovery states locally.
+LG's webOS TV Simulator can additionally exercise application launch and
+webOS-style remote input after importing `clients/webos`, but its media support
+does not exactly match a physical TV. Final HLS decoder, buffering, CORS, and
+channel-change verification therefore still belongs on the target LG set.
+
+LG documents the simulator in its
+[Simulator introduction](https://webostv.developer.lge.com/develop/tools/simulator-introduction)
+and [installation guide](https://webostv.developer.lge.com/develop/tools/simulator-installation).
+
 ## Build the IPK
 
 Use the repository script, which downloads LG's official CLI at the pinned
@@ -37,7 +76,7 @@ npm run webos:package
 The package is written to:
 
 ```text
-dist/webos/com.itsrammen.app.toasttv_0.2.4_all.ipk
+dist/webos/com.itsrammen.app.toasttv_0.3.2_all.ipk
 ```
 
 LG documents the CLI installation and packaging commands in its
@@ -82,7 +121,7 @@ npm install --global @webos-tools/cli@3.2.5
 7. Install and launch ToastTV:
 
    ```powershell
-   ares-install --device toasttv-lg dist/webos/com.itsrammen.app.toasttv_0.2.4_all.ipk
+   ares-install --device toasttv-lg dist/webos/com.itsrammen.app.toasttv_0.3.2_all.ipk
    ares-launch --device toasttv-lg com.itsrammen.app.toasttv
    ```
 
@@ -99,6 +138,15 @@ and interludes. ToastTV normalizes the channel output to 1080p H.264 video and
 stereo AAC audio, so mixed source containers and codecs do not force the TV to
 reload at each boundary. One FFmpeg worker is shared by all viewers of a channel
 and starts only when a viewer tunes in.
+
+During a channel change ToastTV keeps the outgoing decoder playing while the
+server warms the destination, resolves its now-playing source, and verifies a
+complete HLS manifest with at least two segments. It then releases the outgoing
+decoder, attaches the prepared stream, and reveals it only after playback time
+advances with a usable buffer. This deliberately avoids overlapping two media
+pipelines, which LG does not officially support on webOS TV. The tuning backdrop
+covers only the short single-decoder handoff; a failed preflight never disturbs
+the old channel, and **Back** cancels a pending switch.
 
 If HLS cannot start, the client falls back to the current program's original
 direct-file URL. Direct fallback compatibility still varies by LG generation;

@@ -6,7 +6,10 @@ import {
   type ChannelScheduleSlot,
   type LibraryChannelPolicy,
 } from '../config/library'
-import type { ChannelService } from '../services/ChannelService'
+import type {
+  ChannelNowResult,
+  ChannelService,
+} from '../services/ChannelService'
 import type { ChannelLogoStore } from '../services/ChannelLogoStore'
 import type { ChannelTimelineResolverService } from '../services/ChannelTimelineResolverService'
 import type { StationBuildRequest } from '../services/ChannelService'
@@ -57,27 +60,55 @@ export function createChannelController({
     }
   }
 
-  controller.get('/api/v1/channels', (c) => c.json(channels.list()))
+  const decorateSchedule = async (result: ChannelNowResult) => {
+    let presentation
+    try {
+      presentation = await branding?.presentation(
+        result.channelId,
+        new Date(result.serverTimeMs)
+      )
+    } catch (error) {
+      console.warn(
+        `Channel ${result.channelId} branding could not be resolved: ${safeMessage(error)}`
+      )
+    }
+    return {
+      ...result,
+      ...(presentation ? { branding: presentation } : {}),
+      liveStream: {
+        mode: 'hls' as const,
+        url: `/api/v1/channels/${encodeURIComponent(result.channelId)}/live/index.m3u8`,
+      },
+    }
+  }
+
+  controller.get('/api/v1/channels', (c) => {
+    c.header('Cache-Control', 'no-store')
+    return c.json(channels.list())
+  })
+
+  controller.get('/api/v1/channels/schedule', async (c) => {
+    c.header('Cache-Control', 'no-store')
+    const snapshot = await channels.getLineupSchedule()
+    return c.json({
+      ...snapshot,
+      schedules: await Promise.all(
+        snapshot.schedules.map((result) => decorateSchedule(result))
+      ),
+    })
+  })
 
   controller.get('/api/v1/channels/:id/now', async (c) => {
+    c.header('Cache-Control', 'no-store')
     const channelId = c.req.param('id')
     const result = await channels.getNow(channelId)
-    const presentation = result
-      ? await branding?.presentation(channelId, new Date(result.serverTimeMs))
-      : undefined
     return result
-      ? c.json({
-          ...result,
-          ...(presentation ? { branding: presentation } : {}),
-          liveStream: {
-            mode: 'hls' as const,
-            url: `/api/v1/channels/${encodeURIComponent(channelId)}/live/index.m3u8`,
-          },
-        })
+      ? c.json(await decorateSchedule(result))
       : c.json({ error: 'Channel not found' }, 404)
   })
 
   controller.get('/api/v1/channels/:id/guide', async (c) => {
+    c.header('Cache-Control', 'no-store')
     const value = c.req.query('hours')
     if (value !== undefined && !/^\d+$/.test(value)) {
       return c.json({ error: 'hours must be a whole number from 1 to 168' }, 400)
@@ -100,7 +131,15 @@ export function createChannelController({
       from = parsed
     }
 
-    const result = await channels.getGuide(c.req.param('id'), hours, { from })
+    const rawCalendar = c.req.query('calendar')
+    if (rawCalendar !== undefined && rawCalendar !== '0' && rawCalendar !== '1') {
+      return c.json({ error: 'calendar must be 0 or 1' }, 400)
+    }
+
+    const result = await channels.getGuide(c.req.param('id'), hours, {
+      from,
+      ...(rawCalendar === '1' ? { calendarDays: true } : {}),
+    })
     return result
       ? c.json(result)
       : c.json({ error: 'Channel not found' }, 404)

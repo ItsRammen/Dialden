@@ -196,6 +196,7 @@ export async function createServer(
     }
   )
   const reconcileGeneratedStations = async (): Promise<void> => {
+    channelService.invalidateScheduleCatalog()
     try {
       const changedChannelIds =
         await channelService.reconcileAutomatedStations()
@@ -226,7 +227,15 @@ export async function createServer(
   )
 
   indexer.onScanEvent((event) => dashboardEventService.broadcast(event))
-  metadataService.onEvent((event) => dashboardEventService.broadcast(event))
+  metadataService.onEvent((event) => {
+    if (
+      event.type === 'library.metadata.completed' ||
+      event.type === 'library.metadata.failed'
+    ) {
+      channelService.invalidateScheduleCatalog()
+    }
+    dashboardEventService.broadcast(event)
+  })
 
   // Packaged webOS apps run from a different origin. This versioned client API
   // is read-only and the server is already restricted to a trusted LAN.
@@ -337,6 +346,7 @@ export async function createServer(
     indexer,
     metadata: metadataService,
     refreshSchedules: async () => {
+      channelService.invalidateScheduleCatalog()
       await daemon.getEngine().refreshCache(true)
       await playbackService.reconcilePrequeue()
     },
@@ -345,6 +355,7 @@ export async function createServer(
     library: collectionLibraryService,
     metadata: metadataService,
     refreshSchedules: async () => {
+      channelService.invalidateScheduleCatalog()
       await daemon.getEngine().refreshCache(true)
       await playbackService.reconcilePrequeue()
     },
@@ -354,6 +365,7 @@ export async function createServer(
   const metadataSettingsController = createMetadataSettingsController(
     metadataService,
     async () => {
+      channelService.invalidateScheduleCatalog()
       await reconcileGeneratedStations()
       await daemon.getEngine().refreshCache(true)
       await playbackService.reconcilePrequeue()

@@ -409,10 +409,10 @@ export function isWellFormedPlaylist(text: string): boolean {
   return text.startsWith('#EXTM3U')
 }
 
-const LIVE_START_TAG = '#EXT-X-START:TIME-OFFSET=-1.0,PRECISE=YES'
+const LIVE_START_TAG = '#EXT-X-START:TIME-OFFSET=-2.0,PRECISE=YES'
 
 /**
- * Joins native players one second before the published live edge. FFmpeg's
+ * Joins native players two seconds before the published live edge. FFmpeg's
  * HLS muxer cannot emit this tag itself, so it is injected at serve time and
  * stays idempotent for playlists that already carry one.
  */

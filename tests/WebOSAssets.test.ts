@@ -15,7 +15,7 @@ describe('LG webOS package assets', () => {
     const manifest = JSON.parse(readFileSync(join(root, 'appinfo.json'), 'utf8'))
     expect(manifest).toMatchObject({
       id: 'com.itsrammen.app.toasttv',
-      version: '0.2.4',
+      version: '0.3.2',
       type: 'web',
       main: 'index.html',
       title: 'ToastTV',
