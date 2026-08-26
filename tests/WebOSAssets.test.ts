@@ -15,7 +15,7 @@ describe('LG webOS package assets', () => {
     const manifest = JSON.parse(readFileSync(join(root, 'appinfo.json'), 'utf8'))
     expect(manifest).toMatchObject({
       id: 'com.itsrammen.app.toasttv',
-      version: '0.3.6',
+      version: '0.3.7',
       type: 'web',
       main: 'index.html',
       title: 'ToastTV',
@@ -26,10 +26,12 @@ describe('LG webOS package assets', () => {
     })
 
     const html = readFileSync(join(root, manifest.main), 'utf8')
+    const app = readFileSync(join(root, 'app.js'), 'utf8')
     expect(html).toContain('href="styles.css"')
     expect(html).toContain('src="app.js"')
     expect(html).toContain('src="playback-policy.js"')
     expect(html).not.toMatch(/<(?:script|link|img)[^>]+(?:src|href)="https?:\/\//i)
+    expect(app).toContain(`var CLIENT_VERSION = '${manifest.version}'`)
   })
 
   test('uses LG-sized PNG launcher icons', () => {

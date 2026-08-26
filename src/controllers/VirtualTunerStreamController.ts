@@ -45,10 +45,16 @@ export function createVirtualTunerStreamController(
       c.req.param('sessionId'),
       c.req.param('segment')
     )
-    if (!path) return c.json({ error: 'Tuner segment not found' }, 404)
+    if (!path) {
+      return c.json({ error: 'Tuner segment not found' }, 404, {
+        'Cache-Control': 'no-store',
+      })
+    }
     const file = Bun.file(path)
     if (!(await file.exists())) {
-      return c.json({ error: 'Tuner segment not found' }, 404)
+      return c.json({ error: 'Tuner segment not found' }, 404, {
+        'Cache-Control': 'no-store',
+      })
     }
     return new Response(c.req.method === 'HEAD' ? null : file, {
       headers: hlsHeaders('video/mp2t', 'public, max-age=120, immutable'),

@@ -280,6 +280,12 @@ export async function createServer(
   app.use('/*', serveStatic({ root: './public' }))
   app.use('/thumbnails/*', serveStatic({ root: getDataDirectory() }))
   app.get('/tv', (c) => c.redirect('/tv/'))
+  app.use('/tv/*', async (c, next) => {
+    await next()
+    // The hosted TV preview uses unversioned asset names. Never let a browser
+    // retain an older switching state machine after the server is upgraded.
+    c.header('Cache-Control', 'no-store')
+  })
   app.use(
     '/tv/*',
     serveStatic({

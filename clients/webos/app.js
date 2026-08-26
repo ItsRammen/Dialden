@@ -7,6 +7,7 @@
   var STORAGE_CLIENT_NAME = 'toasttv.clientName.v1';
   var STORAGE_SESSION_OWNER = 'toasttv.sessionOwner.v1';
   var STORAGE_SESSION_OWNER_EPOCH = 'toasttv.sessionOwnerEpoch.v1';
+  var CLIENT_VERSION = '0.3.7';
   var DEFAULT_SERVER = 'http://TOWER:1993';
   var POLL_INTERVAL_MS = 30000;
   var CHANNEL_REFRESH_INTERVAL_MS = 15000;
@@ -29,6 +30,9 @@
   var BUFFERING_RECOVERY_MS = 6000;
   var BUFFERING_REPROVE_MS = 1200;
   var RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 15000, 30000];
+  var TUNER_RETRY_DELAYS = [2000, 5000, 15000, 30000];
+  var TUNER_DECODER_RECOVERY_LIMIT = 2;
+  var TUNER_REQUEST_TIMEOUT_MS = 30000;
 
   var state = {
     view: 'boot',
@@ -88,6 +92,8 @@
     tunerRollbackChannelId: null,
     tunerRecoveryInFlight: false,
     tunerNeedsRecovery: false,
+    tunerRetryAttempt: 0,
+    tunerDecoderRecoveryAttempts: 0,
     tuneMetrics: null,
     guideCache: {},
     guideRequests: {},
@@ -119,12 +125,14 @@
   var guidePrefetchTimer = null;
   var guideScrollFrame = null;
   var catalogRailScrollFrame = null;
+  var tunerRetryTimer = null;
 
   document.addEventListener('DOMContentLoaded', boot, false);
 
   function boot() {
     cacheElements();
     bindEvents();
+    logTunerStatus('log', 'webOS client ' + CLIENT_VERSION + ' starting');
     state.clientId = getOrCreateClientId();
     state.sessionOwnerEpoch = nextSessionOwnerEpoch();
     state.sessionOwnerId = createSessionOwnerId();
@@ -413,6 +421,9 @@
         state.tunerRollbackChannelId = null;
         state.tunerRecoveryInFlight = false;
         state.tunerNeedsRecovery = false;
+        state.tunerRetryAttempt = 0;
+        state.tunerDecoderRecoveryAttempts = 0;
+        clearStableTunerRetry();
       }
       state.serverUrl = normalized;
       state.scheduleRefreshSerial += 1;
@@ -458,7 +469,7 @@
     postJson(
       state.serverUrl + '/api/client/v1/session',
       { clientId: state.clientId, ownerId: state.sessionOwnerId, ownerEpoch: state.sessionOwnerEpoch, lastChannelId: savedChannelId, lineup: true, tuner: true },
-      18000,
+      TUNER_REQUEST_TIMEOUT_MS,
       function (error, data) {
         state.lineupOpening = false;
         if (generation !== state.tuneGeneration || state.launchCancelled || state.view === 'setup') return;
@@ -476,7 +487,11 @@
           return;
         }
         setStableTuner(stableTunerFromResponse(data, data.channel.id));
-        state.tunerCapability = state.tuner ? 'available' : 'unavailable';
+        if (state.tuner) {
+          state.tunerCapability = 'available';
+        } else {
+          markStableTunerUnavailable(data, 'startup');
+        }
         state.lineupPreferredChannelId = data.channel.id;
         state.lineupDesiredChannelId = data.channel.id;
         state.reconnectAttempt = 0;
@@ -498,6 +513,7 @@
 
   function closeLineupSession() {
     if (!state.serverUrl || !state.clientId) return;
+    clearStableTunerRetry();
     var closePayload = { clientId: state.clientId, ownerId: state.sessionOwnerId, ownerEpoch: state.sessionOwnerEpoch };
     if (state.tuner) closePayload.sessionId = state.tuner.sessionId;
     var payload = JSON.stringify(closePayload);
@@ -525,11 +541,12 @@
     postJson(
       state.serverUrl + '/api/client/v1/session',
       { clientId: state.clientId, ownerId: state.sessionOwnerId, ownerEpoch: state.sessionOwnerEpoch, lastChannelId: sessionChannelId, lineup: true, tuner: requestTuner },
-      18000,
+      TUNER_REQUEST_TIMEOUT_MS,
       function (error, data) {
         state.lineupOpening = false;
-        if (generation !== state.tuneGeneration || error || state.view !== 'player' || !currentChannel() || currentChannel().id !== channel.id) return;
-        if (!data || data.status !== 'ready') {
+        if (generation !== state.tuneGeneration || state.view !== 'player' || !currentChannel() || currentChannel().id !== channel.id) return;
+        if (error || !data || data.status !== 'ready') {
+          if (requestTuner && !state.tuner) markStableTunerUnavailable(data, 'lineup reopen', error);
           setPlayerStatus('Playing live — background lineup warm-up delayed');
           return;
         }
@@ -538,16 +555,28 @@
         if (reopenedTuner) {
           setStableTuner(reopenedTuner);
           state.tunerCapability = 'available';
-        } else {
+        } else if (!priorTuner) {
           state.tuner = null;
           state.tunerRollbackChannelId = null;
-          if (requestTuner) state.tunerCapability = 'unavailable';
+          if (requestTuner) markStableTunerUnavailable(data, 'lineup reopen', error);
+        } else {
+          logTunerStatus('warn', 'lineup reopen did not replace the active tuner; keeping the current session');
         }
         state.lineupPreferredChannelId = sessionChannelId;
         state.lineupDesiredChannelId = sessionChannelId;
-        var tunerEpochChanged = !!priorTuner && (!reopenedTuner ||
+        var tunerEpochChanged = !!priorTuner && !!reopenedTuner && (
           priorTuner.sessionId !== reopenedTuner.sessionId ||
           priorTuner.manifestUrl !== reopenedTuner.manifestUrl);
+        var shouldAttachReplacement = tunerEpochChanged && state.activeSource &&
+          state.activeSource.tunerSessionId === priorTuner.sessionId;
+        if (shouldAttachReplacement) {
+          state.candidateChannelId = channel.id;
+          state.hasCommittedVideo = false;
+          activeVideo().muted = true;
+          beginTuning('Restoring the live tuner…');
+          syncNow(true);
+          return;
+        }
         if (!tunerEpochChanged && state.activeSource && state.activeSource.mode === 'channel-hls' &&
             !activeVideo().paused && activeVideo().readyState >= 2) {
           syncNow(false);
@@ -584,7 +613,88 @@
 
   function setStableTuner(tuner) {
     state.tuner = tuner;
-    if (tuner) state.tunerRequestSerial = Math.max(state.tunerRequestSerial, tuner.requestIdFloor);
+    if (tuner) {
+      state.tunerRequestSerial = Math.max(state.tunerRequestSerial, tuner.requestIdFloor);
+      state.tunerRetryAttempt = 0;
+      clearStableTunerRetry();
+    }
+  }
+
+  function tunerFailureMessage(data, error) {
+    if (data && data.tunerError && data.tunerError.message) return String(data.tunerError.message);
+    if (data && data.error) return String(data.error);
+    if (error && error.message) return String(error.message);
+    return 'Stable tuner staging did not complete';
+  }
+
+  function logTunerStatus(level, message) {
+    try {
+      var target = console && console[level];
+      if (typeof target === 'function') target.call(console, '[ToastTV Tuner] ' + message);
+    } catch (ignore) {}
+  }
+
+  function markStableTunerUnavailable(data, context, error) {
+    if (state.tunerCapability === 'incompatible') return;
+    state.tunerCapability = 'unavailable';
+    logTunerStatus('warn', context + ' unavailable: ' + tunerFailureMessage(data, error));
+    scheduleStableTunerRetry();
+  }
+
+  function clearStableTunerRetry() {
+    if (tunerRetryTimer) window.clearTimeout(tunerRetryTimer);
+    tunerRetryTimer = null;
+  }
+
+  function scheduleStableTunerRetry() {
+    if (tunerRetryTimer || state.tuner || state.tunerCapability === 'incompatible' ||
+        !state.serverUrl || state.launchCancelled) return;
+    var index = Math.min(state.tunerRetryAttempt, TUNER_RETRY_DELAYS.length - 1);
+    var delay = TUNER_RETRY_DELAYS[index];
+    state.tunerRetryAttempt += 1;
+    tunerRetryTimer = window.setTimeout(retryStableTunerInBackground, delay);
+  }
+
+  function retryStableTunerInBackground() {
+    tunerRetryTimer = null;
+    if (state.tuner || state.tunerCapability === 'incompatible' || !state.serverUrl ||
+        state.launchCancelled) return;
+    var channel = currentChannel();
+    if (!channel || state.view !== 'player' || state.tuning || state.requestedChannelId ||
+        state.lineupOpening || !state.hasCommittedVideo ||
+        state.committedChannelId !== channel.id || !state.currentNow || !state.currentNow.program) {
+      scheduleStableTunerRetry();
+      return;
+    }
+    var generation = state.tuneGeneration;
+    var channelId = channel.id;
+    state.lineupOpening = true;
+    postJson(
+      state.serverUrl + '/api/client/v1/session',
+      { clientId: state.clientId, ownerId: state.sessionOwnerId, ownerEpoch: state.sessionOwnerEpoch, lastChannelId: channelId, lineup: true, tuner: true },
+      TUNER_REQUEST_TIMEOUT_MS,
+      function (error, data) {
+        state.lineupOpening = false;
+        if (generation !== state.tuneGeneration || state.view !== 'player' ||
+            !currentChannel() || currentChannel().id !== channelId ||
+            state.committedChannelId !== channelId) {
+          scheduleStableTunerRetry();
+          return;
+        }
+        var recovered = !error && data && data.status === 'ready' && data.channel &&
+          data.channel.id === channelId ? stableTunerFromResponse(data, channelId) : null;
+        if (!recovered) {
+          markStableTunerUnavailable(data, 'background retry', error);
+          return;
+        }
+        setStableTuner(recovered);
+        state.tunerCapability = 'available';
+        state.lineupPreferredChannelId = channelId;
+        state.lineupDesiredChannelId = channelId;
+        logTunerStatus('log', 'background retry acquired the stable tuner for ' + channelId);
+        queuePresenceHeartbeat();
+      }
+    );
   }
 
   function stableTunerResponseMatches(data, channelId) {
@@ -605,7 +715,16 @@
   }
 
   function playbackSourceForNow(data, failedLiveUrl) {
-    if (data && data.program && state.tuner) return stableTunerPlaybackSource();
+    var tunerCanBeAdopted = data && data.program && state.tuner &&
+      window.ToastTVPlaybackPolicy.canAdoptTuner(
+        state.tuner.channelId,
+        data.channelId,
+        hasAttachedStableTunerSource(),
+        state.hasCommittedVideo,
+        state.candidateChannelId,
+        state.requestedChannelId
+      );
+    if (tunerCanBeAdopted) return stableTunerPlaybackSource();
     return window.ToastTVPlaybackPolicy.choose(data, state.serverUrl, failedLiveUrl, state.clientId);
   }
 
@@ -672,7 +791,7 @@
         channelId: channelId,
         requestId: requestId
       },
-      15000,
+      TUNER_REQUEST_TIMEOUT_MS,
       callback
     );
   }
@@ -777,6 +896,7 @@
   function cancelStartupWork() {
     state.launchCancelled = true;
     state.lineupOpening = false;
+    clearStableTunerRetry();
     state.connectSerial += 1;
     state.tuneGeneration += 1;
     if (startupReconnectTimer) window.clearTimeout(startupReconnectTimer);
@@ -1376,7 +1496,13 @@
     zapTimer = window.setTimeout(function () {
       zapTimer = null;
       var rememberedNow = state.channelNow[channel.id];
-      if (state.tuner && (hasAttachedStableTunerSource() || !state.hasCommittedVideo)) {
+      if (state.tuner) {
+        logTunerStatus(
+          'log',
+          'zap ' + (state.committedChannelId || '?') + ' -> ' + channel.id +
+            ' branch=stable attached=' + (hasAttachedStableTunerSource() ? 'yes' : 'no') +
+            ' revision=' + state.tuner.revision
+        );
         if ((rememberedNow && isNowResult(rememberedNow) && rememberedNow.program === null) ||
             channel.onAir === false) {
           if (state.tuneMetrics) state.tuneMetrics.src = 'session-tuner-off-air';
@@ -1387,11 +1513,13 @@
         tuneStableTunerChannel(channel.id, generation, pushHistory);
         return;
       }
-      if (!state.tuner && state.tunerCapability === 'unknown' && !state.hasCommittedVideo &&
+      if (!state.tuner && state.tunerCapability !== 'incompatible' &&
           channel.onAir !== false && !(rememberedNow && isNowResult(rememberedNow) && rememberedNow.program === null)) {
+        logTunerStatus('log', 'zap ' + (state.committedChannelId || '?') + ' -> ' + channel.id + ' branch=acquire');
         openStableTunerForChannel(channel.id, generation, pushHistory);
         return;
       }
+      logTunerStatus('warn', 'zap ' + (state.committedChannelId || '?') + ' -> ' + channel.id + ' branch=compatibility');
       if (rememberedNow && isNowResult(rememberedNow) && rememberedNow.program === null) {
         commitPreparedChannel(channel.id, generation, pushHistory, { data: rememberedNow, timing: null });
         return;
@@ -1401,10 +1529,11 @@
   }
 
   function openStableTunerForChannel(channelId, generation, pushHistory) {
+    var previousChannelId = state.committedChannelId;
     postJson(
       state.serverUrl + '/api/client/v1/session',
       { clientId: state.clientId, ownerId: state.sessionOwnerId, ownerEpoch: state.sessionOwnerEpoch, lastChannelId: channelId, lineup: true, tuner: true },
-      18000,
+      TUNER_REQUEST_TIMEOUT_MS,
       function (error, data) {
         if (generation !== state.tuneGeneration || state.requestedChannelId !== channelId) return;
         var tuner = !error && data && data.status === 'ready' && data.channel && data.channel.id === channelId
@@ -1413,6 +1542,7 @@
         setStableTuner(tuner);
         state.tunerCapability = tuner ? 'available' : 'unavailable';
         if (!tuner) {
+          markStableTunerUnavailable(data, 'channel tune', error);
           prepareChannel(channelId, generation, pushHistory);
           return;
         }
@@ -1421,6 +1551,18 @@
         if (state.tuneMetrics) {
           state.tuneMetrics.preparedAt = Date.now();
           state.tuneMetrics.src = 'startup-tuner';
+        }
+        if (previousChannelId && previousChannelId !== channelId && state.hasCommittedVideo) {
+          state.tunerRollbackChannelId = previousChannelId;
+          if (state.tuneMetrics) state.tuneMetrics.src = 'session-tuner-recovered';
+          resolveStableTunerNow(
+            channelId,
+            previousChannelId,
+            generation,
+            pushHistory,
+            0
+          );
+          return;
         }
         resolvePreparedChannel(channelId, generation, pushHistory, false);
       }
@@ -1468,8 +1610,19 @@
     postStableTunerSwitch(channelId, function (error, data) {
       if (generation !== state.tuneGeneration || state.requestedChannelId !== channelId) return;
       if (error || !data) {
+        logTunerStatus('warn', 'switch to ' + channelId + ' failed: ' + tunerFailureMessage(data, error));
         if (data && data.code === 'TUNER_SESSION_NOT_FOUND') {
           recoverStableTunerPlayback();
+          return;
+        }
+        if (data && data.code === 'TUNER_UNAVAILABLE') {
+          /* The server rejected this candidate before the atomic manifest
+             commit. The outgoing stable feed is still authoritative, so do
+             not risk a second same-channel readiness wait just to roll back. */
+          state.tunerRollbackChannelId = null;
+          recoverRejectedStableTunerTune(
+            data.error || 'That channel is still preparing. The previous channel was kept playing.'
+          );
           return;
         }
         rollbackAcceptedStableTunerTune(previousChannelId,
@@ -1491,6 +1644,7 @@
         return;
       }
       setStableTuner(acceptedTuner);
+      logTunerStatus('log', 'switch to ' + channelId + ' accepted at revision ' + acceptedTuner.revision);
       if (state.tuneMetrics) state.tuneMetrics.preparedAt = Date.now();
       updateChannelOsdProgram('Loading channel schedule…');
       if (isNowResult(data.now) && data.now.channelId === channelId) {
@@ -1711,6 +1865,8 @@
     state.tunerCapability = incompatible ? 'incompatible' : 'unavailable';
     state.tunerRecoveryInFlight = false;
     state.tunerNeedsRecovery = false;
+    state.tunerDecoderRecoveryAttempts = 0;
+    if (incompatible) clearStableTunerRetry();
     state.requestedChannelId = null;
     state.requestedChannelIndex = null;
     state.tuneMetrics = null;
@@ -1740,6 +1896,7 @@
       beginTuning('Rejoining the channel…');
       syncNow(true);
     }
+    if (!incompatible) scheduleStableTunerRetry();
   }
 
   function recoverStableTunerPlayback() {
@@ -1760,10 +1917,32 @@
         return;
       }
       if (!manifestError) {
-        /* The session still serves a valid HLS window, so this TV rejected the
-           relay presentation itself. Keep this launch on proven channel HLS. */
+        /* A healthy playlist does not prove that a one-off decoder or segment
+           fetch error is a permanent TV incompatibility. Reattach the same
+           target-only manifest with a fresh revision query before abandoning
+           fast switching for the rest of this app launch. */
+        state.tunerRecoveryInFlight = false;
+        if (state.tunerDecoderRecoveryAttempts < TUNER_DECODER_RECOVERY_LIMIT) {
+          state.tunerDecoderRecoveryAttempts += 1;
+          state.tunerNeedsRecovery = false;
+          state.activeSource = null;
+          state.failedLiveUrl = null;
+          state.programId = null;
+          state.previousTune = null;
+          state.hasCommittedVideo = false;
+          resetAllVideos();
+          elements.playerScreen.classList.remove('has-video');
+          beginTuning('Reattaching the live tuner…');
+          logTunerStatus(
+            'warn',
+            'decoder recovery ' + state.tunerDecoderRecoveryAttempts + '/' +
+              TUNER_DECODER_RECOVERY_LIMIT + ' for ' + channelId
+          );
+          syncNow(true);
+          return;
+        }
         disableStableTunerAndReload(
-          'This TV rejected fast-tuner playback. Using compatible channel playback instead.',
+          'This TV repeatedly rejected fast-tuner playback. Using compatible channel playback instead.',
           true
         );
         return;
@@ -1778,7 +1957,7 @@
           lineup: true,
           tuner: true
         },
-        18000,
+        TUNER_REQUEST_TIMEOUT_MS,
         function (error, data) {
           if (generation !== state.tuneGeneration || state.view !== 'player' ||
               !currentChannel() || currentChannel().id !== channelId) {
@@ -2491,6 +2670,7 @@
       else window.ToastTVPlaybackPolicy.resetMediaElement(standbyVideo());
       state.hasCommittedVideo = true;
       state.tunerNeedsRecovery = false;
+      state.tunerDecoderRecoveryAttempts = 0;
       state.committedChannelId = currentChannel().id;
       state.tunerRollbackChannelId = null;
       state.candidateChannelId = null;
@@ -4168,6 +4348,7 @@
     state.committedChannelId = null;
     state.tunerRollbackChannelId = null;
     state.previousTune = null;
+    clearStableTunerRetry();
     clearBufferingTimers();
     clearTuningTimer();
     clearSourceRefreshTimer();

@@ -97,8 +97,15 @@
     return Math.floor(Math.max(currentValue, floorValue)) + 1;
   }
 
+  function canAdoptTuner(tunerChannelId, nowChannelId, attached, hasCommittedVideo, candidateChannelId, requestedChannelId) {
+    if (typeof tunerChannelId !== 'string' || tunerChannelId !== nowChannelId) return false;
+    return attached === true || hasCommittedVideo !== true ||
+      candidateChannelId === nowChannelId || requestedChannelId === nowChannelId;
+  }
+
   return {
     appendClientId: appendClientId,
+    canAdoptTuner: canAdoptTuner,
     choose: choose,
     expectedDirectPosition: expectedDirectPosition,
     isPlaybackStable: isPlaybackStable,

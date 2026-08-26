@@ -2,6 +2,14 @@ import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
 
 const policy = require(join(import.meta.dir, '..', 'clients', 'webos', 'playback-policy.js')) as {
+  canAdoptTuner: (
+    tunerChannelId: string | null,
+    nowChannelId: string,
+    attached: boolean,
+    hasCommittedVideo: boolean,
+    candidateChannelId: string | null,
+    requestedChannelId: string | null
+  ) => boolean
   choose: (now: unknown, serverUrl: string, failedLiveUrl: string | null, clientId?: string) => {
     mode: string
     url: string
@@ -160,5 +168,14 @@ describe('LG webOS channel playback policy', () => {
       '/live/index.m3u8?clientId=tv&tunerRevision=13&tunerAttach=5'
     )
     expect(policy.withTunerRevision('/live/index.m3u8', 0, 1)).toBe('/live/index.m3u8')
+  })
+
+  test('never pairs one channel metadata with another channel tuner feed', () => {
+    expect(policy.canAdoptTuner('kids', 'movies', true, false, 'movies', 'movies')).toBe(false)
+    expect(policy.canAdoptTuner('kids', 'kids', false, true, null, null)).toBe(false)
+    expect(policy.canAdoptTuner('kids', 'kids', false, true, 'kids', null)).toBe(true)
+    expect(policy.canAdoptTuner('kids', 'kids', false, true, null, 'kids')).toBe(true)
+    expect(policy.canAdoptTuner('kids', 'kids', true, true, null, null)).toBe(true)
+    expect(policy.canAdoptTuner('kids', 'kids', false, false, null, null)).toBe(true)
   })
 })

@@ -2,6 +2,15 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
+function functionSource(script: string, name: string, nextName: string): string {
+  const start = script.indexOf(`function ${name}(`)
+  const end = script.indexOf(`function ${nextName}(`, start + 1)
+  if (start < 0 || end <= start) {
+    throw new Error(`Could not isolate ${name}() before ${nextName}()`)
+  }
+  return script.slice(start, end)
+}
+
 describe('LG webOS presence telemetry', () => {
   test('uses a stable local identity and sends only the public heartbeat fields', () => {
     const script = readFileSync(
@@ -675,6 +684,114 @@ describe('LG webOS presence telemetry', () => {
     expect(script).toContain('tuner.manifestUrl !== state.tuner.manifestUrl')
   })
 
+  test('routes every acquired tuner zap through the tuner and adopts only its matching channel', () => {
+    const script = readFileSync(
+      join(import.meta.dir, '..', 'clients', 'webos', 'app.js'),
+      'utf8'
+    )
+    const tuneSelectionBody = functionSource(
+      script,
+      'tuneChannel',
+      'openStableTunerForChannel'
+    )
+    const sourceBody = functionSource(
+      script,
+      'playbackSourceForNow',
+      'hasAttachedStableTunerSource'
+    )
+
+    expect(tuneSelectionBody).toMatch(
+      /if \(state\.tuner\) \{[\s\S]*?tuneStableTunerChannel\(channel\.id, generation, pushHistory\);[\s\S]*?return;/
+    )
+    expect(tuneSelectionBody).not.toContain(
+      'state.tuner && (hasAttachedStableTunerSource() || !state.hasCommittedVideo)'
+    )
+    expect(tuneSelectionBody).toContain(
+      "if (!state.tuner && state.tunerCapability !== 'incompatible'"
+    )
+    expect(tuneSelectionBody.indexOf('if (state.tuner)')).toBeLessThan(
+      tuneSelectionBody.indexOf('openStableTunerForChannel(channel.id')
+    )
+    expect(tuneSelectionBody.indexOf('openStableTunerForChannel(channel.id')).toBeLessThan(
+      tuneSelectionBody.indexOf('prepareChannel(channel.id')
+    )
+
+    expect(sourceBody).toMatch(
+      /window\.ToastTVPlaybackPolicy\.canAdoptTuner\(\s*state\.tuner\.channelId,\s*data\.channelId,\s*hasAttachedStableTunerSource\(\),\s*state\.hasCommittedVideo,\s*state\.candidateChannelId,\s*state\.requestedChannelId\s*\)/
+    )
+    expect(sourceBody).toContain('if (tunerCanBeAdopted) return stableTunerPlaybackSource()')
+    expect(sourceBody.indexOf('canAdoptTuner(')).toBeLessThan(
+      sourceBody.indexOf('if (tunerCanBeAdopted)')
+    )
+    expect(sourceBody).not.toContain('if (data && data.program && state.tuner)')
+  })
+
+  test('retries tunerError acquisition in the background with capped backoff', () => {
+    const script = readFileSync(
+      join(import.meta.dir, '..', 'clients', 'webos', 'app.js'),
+      'utf8'
+    )
+    const startBody = functionSource(script, 'startTelevision', 'closeLineupSession')
+    const statusBody = functionSource(
+      script,
+      'tunerFailureMessage',
+      'stableTunerResponseMatches'
+    )
+    const retryBody = functionSource(
+      script,
+      'retryStableTunerInBackground',
+      'stableTunerResponseMatches'
+    )
+    const setBody = functionSource(script, 'setStableTuner', 'tunerFailureMessage')
+
+    expect(script).toContain('var TUNER_RETRY_DELAYS = [2000, 5000, 15000, 30000]')
+    expect(startBody).toContain("markStableTunerUnavailable(data, 'startup')")
+    expect(statusBody).toContain('data.tunerError && data.tunerError.message')
+    expect(statusBody).toContain("state.tunerCapability = 'unavailable'")
+    expect(statusBody).toContain('scheduleStableTunerRetry()')
+    expect(statusBody).toContain(
+      'Math.min(state.tunerRetryAttempt, TUNER_RETRY_DELAYS.length - 1)'
+    )
+    expect(statusBody).toContain(
+      'tunerRetryTimer = window.setTimeout(retryStableTunerInBackground, delay)'
+    )
+
+    expect(retryBody).toContain("state.tunerCapability === 'incompatible'")
+    expect(retryBody).toContain('state.tuning || state.requestedChannelId')
+    expect(retryBody).toContain('!state.hasCommittedVideo')
+    expect(retryBody).toContain('state.committedChannelId !== channel.id')
+    expect(retryBody).toContain('lineup: true, tuner: true')
+    expect(retryBody).toContain("markStableTunerUnavailable(data, 'background retry', error)")
+    expect(retryBody).toContain('setStableTuner(recovered)')
+    expect(retryBody).toContain("state.tunerCapability = 'available'")
+    expect(retryBody.indexOf('state.tuning || state.requestedChannelId')).toBeLessThan(
+      retryBody.indexOf('postJson(')
+    )
+
+    expect(setBody).toContain('state.tunerRetryAttempt = 0')
+    expect(setBody).toContain('clearStableTunerRetry()')
+  })
+
+  test('uses a thirty-second budget for tuner acquisition, switching, and recovery', () => {
+    const script = readFileSync(
+      join(import.meta.dir, '..', 'clients', 'webos', 'app.js'),
+      'utf8'
+    )
+    const tunerRequestBodies = [
+      functionSource(script, 'startTelevision', 'closeLineupSession'),
+      functionSource(script, 'reopenLineupSession', 'stableTunerFromResponse'),
+      functionSource(script, 'retryStableTunerInBackground', 'stableTunerResponseMatches'),
+      functionSource(script, 'postStableTunerSwitch', 'committedStableTunerFeedChannelId'),
+      functionSource(script, 'openStableTunerForChannel', 'resolveStableTunerOffAir'),
+      functionSource(script, 'recoverStableTunerPlayback', 'prepareChannel'),
+    ]
+
+    expect(script).toContain('var TUNER_REQUEST_TIMEOUT_MS = 30000')
+    for (const body of tunerRequestBodies) {
+      expect(body).toContain('TUNER_REQUEST_TIMEOUT_MS')
+    }
+  })
+
   test('black-curtains stable tuner switches until revisioned playback proves the target', () => {
     const script = readFileSync(
       join(import.meta.dir, '..', 'clients', 'webos', 'app.js'),
@@ -733,8 +850,9 @@ describe('LG webOS presence telemetry', () => {
       script.indexOf('function invalidateRemovedCommittedPlayback(')
     )
 
-    expect(tuneSelectionBody).toContain(
-      'if (state.tuner && (hasAttachedStableTunerSource() || !state.hasCommittedVideo))'
+    expect(tuneSelectionBody).toContain('if (state.tuner) {')
+    expect(tuneSelectionBody).not.toContain(
+      'state.tuner && (hasAttachedStableTunerSource() || !state.hasCommittedVideo)'
     )
     expect(tuneSelectionBody).toContain('if (hasPendingStableTunerHandoff())')
     expect(tuneSelectionBody).toContain('clearTuningTimer();')
@@ -879,6 +997,27 @@ describe('LG webOS presence telemetry', () => {
 
     expect(recoveryBody).toContain('state.tunerRecoveryInFlight = true')
     expect(recoveryBody).toContain('if (!manifestError)')
+    expect(script).toContain('var TUNER_DECODER_RECOVERY_LIMIT = 2')
+    expect(recoveryBody).toContain(
+      'state.tunerDecoderRecoveryAttempts < TUNER_DECODER_RECOVERY_LIMIT'
+    )
+    expect(recoveryBody).toContain('state.tunerDecoderRecoveryAttempts += 1')
+    expect(recoveryBody).toContain("beginTuning('Reattaching the live tuner…')")
+    expect(recoveryBody).toContain('resetAllVideos()')
+    expect(recoveryBody).toContain('syncNow(true)')
+    const decoderRetryStart = recoveryBody.indexOf(
+      'state.tunerDecoderRecoveryAttempts < TUNER_DECODER_RECOVERY_LIMIT'
+    )
+    const incompatibleFallback = recoveryBody.indexOf(
+      "'This TV repeatedly rejected fast-tuner playback."
+    )
+    expect(recoveryBody.indexOf("beginTuning('Reattaching the live tuner…')")).toBeLessThan(
+      incompatibleFallback
+    )
+    expect(recoveryBody.indexOf('syncNow(true)')).toBeLessThan(incompatibleFallback)
+    expect(recoveryBody.indexOf('return;', decoderRetryStart)).toBeLessThan(
+      incompatibleFallback
+    )
     expect(recoveryBody).toContain('ownerId: state.sessionOwnerId')
     expect(recoveryBody).toContain('ownerEpoch: state.sessionOwnerEpoch')
     expect(recoveryBody).toContain('lastChannelId: channelId')
@@ -898,6 +1037,12 @@ describe('LG webOS presence telemetry', () => {
     expect(mediaErrorBody.indexOf('state.tunerNeedsRecovery = true')).toBeLessThan(
       mediaErrorBody.indexOf('recoverStableTunerPlayback()')
     )
+    const stabilizeBody = functionSource(
+      script,
+      'stabilizeTuning',
+      'playbackHeadroomSeconds'
+    )
+    expect(stabilizeBody).toContain('state.tunerDecoderRecoveryAttempts = 0')
     expect(script).toContain('seekHlsLiveEdge(state.hardLiveEdgePending)')
     expect(script).toContain('if (state.hardLiveEdgePending) seekHlsLiveEdge(true)')
     expect(script).toContain('must remain best-effort on models that do not')

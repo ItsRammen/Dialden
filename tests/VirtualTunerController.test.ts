@@ -733,5 +733,6 @@ describe('virtual tuner HTTP contract', () => {
       `/api/v1/tuner-sessions/${SESSION_ID}/live/not-a-segment`
     )
     expect(invalid.status).toBe(404)
+    expect(invalid.headers.get('Cache-Control')).toBe('no-store')
   })
 })

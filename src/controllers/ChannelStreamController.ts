@@ -333,14 +333,18 @@ export function createChannelStreamController({
                 409
               )
             }
+            const tunerMessage =
+              error instanceof Error
+                ? error.message
+                : 'Stable tuner session could not be opened'
+            console.warn(
+              `[Tuner] Stable session staging failed for channel ${selected.id}: ${tunerMessage}`
+            )
             // The relay is an additive capability. A TV must always retain the
             // proven per-channel HLS startup path when staging cannot complete.
             tunerError = {
               code: 'TUNER_UNAVAILABLE',
-              message:
-                error instanceof Error
-                  ? error.message
-                  : 'Stable tuner session could not be opened',
+              message: tunerMessage,
             }
           }
         }
@@ -530,8 +534,16 @@ export function createChannelStreamController({
         return c.json({ error: error.message, code: 'TUNER_SESSION_NOT_FOUND' }, 404)
       }
       if (error instanceof VirtualTunerUnavailableError) {
+        console.warn(
+          `[Tuner] Live switch failed for channel ${selected.id}: ${error.message}`
+        )
         return c.json({ error: error.message, code: 'TUNER_UNAVAILABLE' }, 503)
       }
+      console.warn(
+        `[Tuner] Live switch failed for channel ${selected.id}: ${
+          error instanceof Error ? error.message : 'Unknown tuner error'
+        }`
+      )
       return c.json(
         {
           error:
