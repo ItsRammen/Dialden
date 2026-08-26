@@ -162,7 +162,7 @@ describe('VirtualTunerService', () => {
 
     const playlist = await service.playlist(opened.sessionId)
 
-    expect(playlist.match(/#EXTINF:/g)).toHaveLength(2)
+    expect(playlist.match(/#EXTINF:/g)).toHaveLength(4)
     const firstPath = await service.segmentPath(
       opened.sessionId,
       'segment-0000000000001.ts'
@@ -171,8 +171,50 @@ describe('VirtualTunerService', () => {
       opened.sessionId,
       'segment-0000000000002.ts'
     )
-    expect(await readFile(firstPath!, 'utf8')).toBe('kids-106')
-    expect(await readFile(secondPath!, 'utf8')).toBe('kids-107')
+    expect(await readFile(firstPath!, 'utf8')).toBe('kids-104')
+    expect(await readFile(secondPath!, 'utf8')).toBe('kids-105')
+  })
+
+  test('publishes an already-complete four-segment target cushion at tune commit', async () => {
+    writeChannel(sourceRoot, 'cartoons', 100, 8)
+    const opened = await service.open('living-room', OWNER_ID, 'kids')
+
+    const tuned = await service.tune(
+      'living-room',
+      OWNER_ID,
+      opened.sessionId,
+      'cartoons',
+      1
+    )
+
+    expect(tuned).toMatchObject({
+      channelId: 'cartoons',
+      revision: 2,
+      switchBoundary: {
+        revision: 2,
+        firstMediaSequence: 3,
+        lastMediaSequence: 6,
+        segmentCount: 4,
+        targetDurationSeconds: 1,
+        durationSeconds: 4,
+      },
+    })
+    const committedNames = [3, 4, 5, 6].map(
+      (value) => `segment-${String(value).padStart(13, '0')}.ts`
+    )
+    // The tune response is the public commit boundary. Every URI that the
+    // replacement window will advertise must already be registered and
+    // nonempty before the caller receives that response.
+    for (const segment of committedNames) {
+      const path = await service.segmentPath(opened.sessionId, segment)
+      expect(path).not.toBeNull()
+      expect(await readFile(path!, 'utf8')).toStartWith('cartoons-')
+    }
+    const playlist = await service.playlist(opened.sessionId)
+    const advertised = playlist
+      .split(/\r?\n/)
+      .filter((line) => /^segment-\d{13}\.ts$/.test(line))
+    expect(advertised).toEqual(committedNames)
   })
 
   test('switches to a target-only advertised edge while retaining outgoing segments', async () => {
@@ -189,6 +231,14 @@ describe('VirtualTunerService', () => {
       channelId: 'cartoons',
       revision: 2,
       requestId: 1,
+      switchBoundary: {
+        revision: 2,
+        firstMediaSequence: 3,
+        lastMediaSequence: 4,
+        segmentCount: 2,
+        targetDurationSeconds: 1,
+        durationSeconds: 2,
+      },
     })
     const playlist = await service.playlist(opened.sessionId)
     expect(playlist).toContain('#EXT-X-DISCONTINUITY')
@@ -210,6 +260,67 @@ describe('VirtualTunerService', () => {
       'segment-0000000000003.ts'
     )
     expect(await readFile(newSegment!, 'utf8')).toBe('cartoons-11')
+  })
+
+  test('returns the original committed switch boundary for an idempotent retry after the window slides', async () => {
+    const opened = await service.open('living-room', OWNER_ID, 'kids')
+    const committed = await service.tune(
+      'living-room',
+      OWNER_ID,
+      opened.sessionId,
+      'cartoons',
+      1
+    )
+    expect(committed.switchBoundary.firstMediaSequence).toBe(3)
+    expect(committed.switchBoundary.lastMediaSequence).toBe(4)
+
+    writeChannel(sourceRoot, 'cartoons', 13)
+    await service.playlist(opened.sessionId)
+    writeChannel(sourceRoot, 'cartoons', 15)
+    const slid = await service.playlist(opened.sessionId)
+    expect(slid).toContain('#EXT-X-MEDIA-SEQUENCE:5')
+
+    const retried = await service.tune(
+      'living-room',
+      OWNER_ID,
+      opened.sessionId,
+      'cartoons',
+      1
+    )
+    expect(retried).toEqual(committed)
+    expect(retried.switchBoundary).toEqual({
+      revision: 2,
+      firstMediaSequence: 3,
+      lastMediaSequence: 4,
+      segmentCount: 2,
+      targetDurationSeconds: 1,
+      durationSeconds: 2,
+    })
+  })
+
+  test('does not replay an old committed boundary after a background retarget', async () => {
+    const opened = await service.open('living-room', OWNER_ID, 'kids')
+    await service.tune(
+      'living-room',
+      OWNER_ID,
+      opened.sessionId,
+      'cartoons',
+      1
+    )
+    const retargeted = await service.open('living-room', OWNER_ID, 'nature')
+    expect(retargeted).toMatchObject({ channelId: 'nature', revision: 3 })
+
+    await expect(
+      Promise.resolve().then(() =>
+        service.tune(
+          'living-room',
+          OWNER_ID,
+          opened.sessionId,
+          'cartoons',
+          1
+        )
+      )
+    ).rejects.toBeInstanceOf(VirtualTunerStaleRequestError)
   })
 
   test('reserves request IDs before staging so a newer zap supersedes the old one', async () => {
@@ -249,6 +360,12 @@ describe('VirtualTunerService', () => {
     const committed = await second
     expect(committed.channelId).toBe('nature')
     expect(committed.revision).toBe(2)
+    expect(committed.switchBoundary).toMatchObject({
+      revision: 2,
+      firstMediaSequence: 3,
+      lastMediaSequence: 4,
+      segmentCount: 2,
+    })
     expect(service.descriptorForClient('living-room')?.channelId).toBe('nature')
     const playlist = await service.playlist(opened.sessionId)
     expect(playlist.match(/#EXTINF:/g)).toHaveLength(2)

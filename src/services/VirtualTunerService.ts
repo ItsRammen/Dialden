@@ -11,6 +11,12 @@ const SAFE_CHANNEL_ID = /^[a-zA-Z0-9._-]{1,100}$/
 const SAFE_SESSION_ID = /^[a-f0-9-]{36}$/
 const SOURCE_SEGMENT_NAME = /^segment-(\d{13})\.ts$/
 const VIRTUAL_SEGMENT_NAME = /^segment-\d{13}\.ts$/
+// Native TV HLS implementations commonly wait for a third segment before
+// starting a live presentation. Keep a fourth complete segment as headroom so
+// a revisioned tuner attach does not have to wait for the next worker reload.
+// This is only a preferred advertised window: cold workers may still become
+// ready with minimumReadySegments and are never delayed to fill it.
+const PREFERRED_JOIN_SEGMENTS = 4
 
 const SYSTEM_CLOCK: ChannelWorkerClock = {
   now: () => new Date(),
@@ -82,6 +88,22 @@ export interface VirtualTunerDescriptor {
 
 export interface VirtualTunerTuneResult extends VirtualTunerDescriptor {
   readonly requestId: number
+  /** Immutable target-only window published by this committed request. */
+  readonly switchBoundary: VirtualTunerSwitchBoundary
+}
+
+export interface VirtualTunerSwitchBoundary {
+  /** Tuner revision that owns this window. */
+  readonly revision: number
+  /** First virtual sequence advertised at the atomic switch boundary. */
+  readonly firstMediaSequence: number
+  /** Last virtual sequence advertised at the atomic switch boundary. */
+  readonly lastMediaSequence: number
+  readonly segmentCount: number
+  /** Fixed EXT-X-TARGETDURATION used throughout this tuner session. */
+  readonly targetDurationSeconds: number
+  /** Sum of the actual EXTINF durations in the committed window. */
+  readonly durationSeconds: number
 }
 
 export class VirtualTunerSessionNotFoundError extends Error {
@@ -168,6 +190,7 @@ interface VirtualTunerRecord {
   closed: boolean
   highestRequestId: number
   lastCommittedRequestId: number
+  lastCommittedTune?: VirtualTunerTuneResult
   pendingTunes: Map<number, PendingTune>
   operation: Promise<void>
 }
@@ -384,10 +407,17 @@ export class VirtualTunerService {
       throw new VirtualTunerStaleRequestError()
     }
     if (requestId === record.lastCommittedRequestId) {
-      if (record.channelId !== channelId) {
+      if (
+        !record.lastCommittedTune ||
+        record.lastCommittedTune.channelId !== channelId ||
+        record.channelId !== channelId ||
+        record.revision !== record.lastCommittedTune.switchBoundary.revision
+      ) {
         throw new VirtualTunerStaleRequestError('Tune requestId was already committed')
       }
-      return Promise.resolve({ ...this.describe(record), requestId })
+      // A playlist poll may have slid the live window since the first response.
+      // Idempotent retries must still return the original commit boundary.
+      return Promise.resolve(record.lastCommittedTune)
     }
     if (requestId === record.highestRequestId) {
       throw new VirtualTunerStaleRequestError('Tune requestId was already used')
@@ -647,7 +677,7 @@ export class VirtualTunerService {
         record,
         channelId,
         record.revision,
-        minimumLiveEdge(parsed, this.minimumReadySegments),
+        preparedLiveEdge(parsed, this.minimumReadySegments),
         false
       )
       this.assertOpeningCurrent(clientId, opening)
@@ -742,7 +772,7 @@ export class VirtualTunerService {
           record,
           channelId,
           nextRevision,
-          minimumLiveEdge(parsed, this.minimumReadySegments),
+          preparedLiveEdge(parsed, this.minimumReadySegments),
           true
         )
         let committed = false
@@ -826,9 +856,9 @@ export class VirtualTunerService {
         )
         this.assertFreshEdge(record)
         this.assertCurrentRequest(record, requestId)
-        record.lastCommittedRequestId = requestId
+        const result = this.rememberCommittedTune(record, requestId)
         this.refreshRecord(record)
-        return { ...this.describe(record), requestId }
+        return result
       })
     }
 
@@ -852,9 +882,9 @@ export class VirtualTunerService {
         this.assertCurrentRequest(record, requestId)
         const previousChannelId = record.channelId
         if (previousChannelId === channelId) {
-          record.lastCommittedRequestId = requestId
+          const result = this.rememberCommittedTune(record, requestId)
           this.refreshRecord(record)
-          return { ...this.describe(record), requestId }
+          return result
         }
 
         const nextRevision = record.revision + 1
@@ -862,7 +892,7 @@ export class VirtualTunerService {
           record,
           channelId,
           nextRevision,
-          minimumLiveEdge(parsed, this.minimumReadySegments),
+          preparedLiveEdge(parsed, this.minimumReadySegments),
           true
         )
         let committed = false
@@ -887,12 +917,12 @@ export class VirtualTunerService {
             parsed
           )
           this.assertCurrentRequest(record, requestId)
-          record.lastCommittedRequestId = requestId
+          const result = this.rememberCommittedTune(record, requestId)
           this.refreshRecord(record)
           await this.workers
             .releaseSession(previousChannelId, record.leaseId)
             .catch(() => undefined)
-          return { ...this.describe(record), requestId }
+          return result
         } catch (error) {
           if (!committed) await this.discardStaged(record, staged)
           if (transitioned) {
@@ -1311,6 +1341,38 @@ export class VirtualTunerService {
     }
   }
 
+  private rememberCommittedTune(
+    record: VirtualTunerRecord,
+    requestId: number
+  ): VirtualTunerTuneResult {
+    const first = record.entries[0]
+    const last = record.entries.at(-1)
+    if (!first || !last) {
+      throw new VirtualTunerUnavailableError(
+        'Virtual tuner committed an empty switch window'
+      )
+    }
+    const switchBoundary: VirtualTunerSwitchBoundary = Object.freeze({
+      revision: record.revision,
+      firstMediaSequence: first.sequence,
+      lastMediaSequence: last.sequence,
+      segmentCount: record.entries.length,
+      targetDurationSeconds: record.targetDurationSeconds,
+      durationSeconds: record.entries.reduce(
+        (total, entry) => total + entry.durationSeconds,
+        0
+      ),
+    })
+    const result: VirtualTunerTuneResult = Object.freeze({
+      ...this.describe(record),
+      requestId,
+      switchBoundary,
+    })
+    record.lastCommittedRequestId = requestId
+    record.lastCommittedTune = result
+    return result
+  }
+
   private async withLock<T>(
     record: VirtualTunerRecord,
     operation: () => Promise<T>
@@ -1428,15 +1490,18 @@ export function parseSourcePlaylist(text: string): ParsedSourcePlaylist {
   return { targetDurationSeconds, segments }
 }
 
-function minimumLiveEdge(
+function preparedLiveEdge(
   playlist: ParsedSourcePlaylist,
-  count: number
+  minimumCount: number
 ): ParsedSourcePlaylist {
   return {
     targetDurationSeconds: playlist.targetDurationSeconds,
-    // Only the proven edge is needed to cross the switch boundary. Subsequent
-    // stable-manifest polls append the rest without delaying tune commit.
-    segments: playlist.segments.slice(-Math.max(2, count)),
+    // Do not wait for extra source segments: publish up to the preferred
+    // cushion from the complete entries already present in this snapshot.
+    // Subsequent stable-manifest polls append future worker segments.
+    segments: playlist.segments.slice(
+      -Math.max(2, minimumCount, PREFERRED_JOIN_SEGMENTS)
+    ),
   }
 }
 

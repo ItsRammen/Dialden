@@ -67,6 +67,25 @@ const descriptor = (channelId = 'kids', revision = 1) => ({
   requestIdFloor: revision > 1 ? 1 : -1,
 })
 
+const tunedDescriptor = (
+  channelId = 'kids',
+  revision = 2,
+  requestId = 1,
+  firstMediaSequence = 3,
+  segmentCount = 4
+) => ({
+  ...descriptor(channelId, revision),
+  requestId,
+  switchBoundary: {
+    revision,
+    firstMediaSequence,
+    lastMediaSequence: firstMediaSequence + segmentCount - 1,
+    segmentCount,
+    targetDurationSeconds: 1,
+    durationSeconds: segmentCount,
+  },
+})
+
 async function claimOwner(
   controller: ReturnType<typeof createChannelStreamController>,
   ownerId = OWNER_ID,
@@ -94,7 +113,7 @@ describe('virtual tuner HTTP contract', () => {
       lineup: lineup(),
       tuners: {
         open: async () => descriptor(),
-        tune: async () => ({ ...descriptor(), requestId: 1 }),
+        tune: async () => tunedDescriptor(),
         closeByClient: async () => 'closed' as const,
         descriptorForClient: () => descriptor(),
       },
@@ -133,7 +152,7 @@ describe('virtual tuner HTTP contract', () => {
         open: async () => {
           throw new Error('source window incomplete')
         },
-        tune: async () => ({ ...descriptor(), requestId: 1 }),
+        tune: async () => tunedDescriptor(),
         closeByClient: async () => 'closed' as const,
         descriptorForClient: () => null,
       },
@@ -175,7 +194,7 @@ describe('virtual tuner HTTP contract', () => {
         open: async () => descriptor(),
         async tune(_clientId, _ownerId, _sessionId, channelId, requestId) {
           if (stale) throw new VirtualTunerStaleRequestError()
-          return { ...descriptor(channelId, 2), requestId }
+          return tunedDescriptor(channelId, 2, requestId)
         },
         closeByClient: async () => 'closed' as const,
         descriptorForClient: () => descriptor(),
@@ -200,7 +219,18 @@ describe('virtual tuner HTTP contract', () => {
       status: 'ready',
       streamUrl: descriptor().manifestUrl,
       requestId: 9,
-      tuner: { channelId: 'cartoons', revision: 2 },
+      tuner: {
+        channelId: 'cartoons',
+        revision: 2,
+        switchBoundary: {
+          revision: 2,
+          firstMediaSequence: 3,
+          lastMediaSequence: 6,
+          segmentCount: 4,
+          targetDurationSeconds: 1,
+          durationSeconds: 4,
+        },
+      },
       now: { channelId: 'cartoons', program: { title: 'Current program' } },
     })
 
@@ -230,10 +260,8 @@ describe('virtual tuner HTTP contract', () => {
         lineup: lineup(),
         tuners: {
           open: async () => descriptor(),
-          tune: async (_client, _owner, _session, channelId, requestId) => ({
-            ...descriptor(channelId, 2),
-            requestId,
-          }),
+          tune: async (_client, _owner, _session, channelId, requestId) =>
+            tunedDescriptor(channelId, 2, requestId),
           closeByClient: async () => 'closed' as const,
           descriptorForClient: () => descriptor(),
         },
@@ -294,7 +322,7 @@ describe('virtual tuner HTTP contract', () => {
         open: async () => descriptor(),
         tune: async (_client, _owner, _session, channelId, requestId) => {
           tunes += 1
-          return { ...descriptor(channelId, 2), requestId }
+          return tunedDescriptor(channelId, 2, requestId)
         },
         closeByClient: async () => 'closed' as const,
         descriptorForClient: () => descriptor(),
@@ -345,10 +373,8 @@ describe('virtual tuner HTTP contract', () => {
       },
       tuners: {
         open: async () => descriptor(),
-        tune: async (_client, _owner, _session, channelId, requestId) => ({
-          ...descriptor(channelId, 2),
-          requestId,
-        }),
+        tune: async (_client, _owner, _session, channelId, requestId) =>
+          tunedDescriptor(channelId, 2, requestId),
         closeByClient: async () => 'closed' as const,
         descriptorForClient: () => descriptor(),
       },
@@ -393,10 +419,8 @@ describe('virtual tuner HTTP contract', () => {
       },
       tuners: {
         open: async () => descriptor(),
-        tune: async (_client, _owner, _session, channelId, requestId) => ({
-          ...descriptor(channelId, 2),
-          requestId,
-        }),
+        tune: async (_client, _owner, _session, channelId, requestId) =>
+          tunedDescriptor(channelId, 2, requestId),
         closeByClient: async (...args) => {
           tunerCloses.push(args)
           return 'closed' as const
@@ -499,10 +523,8 @@ describe('virtual tuner HTTP contract', () => {
           tunerOwners.push(ownerId)
           return descriptor(channelId)
         },
-        tune: async (_client, _owner, _session, channelId, requestId) => ({
-          ...descriptor(channelId, 2),
-          requestId,
-        }),
+        tune: async (_client, _owner, _session, channelId, requestId) =>
+          tunedDescriptor(channelId, 2, requestId),
         closeByClient: async () => 'closed' as const,
         descriptorForClient: () => descriptor(),
       },
@@ -574,10 +596,8 @@ describe('virtual tuner HTTP contract', () => {
       },
       tuners: {
         open: async (_client, _owner, channelId) => descriptor(channelId),
-        tune: async (_client, _owner, _session, channelId, requestId) => ({
-          ...descriptor(channelId, 2),
-          requestId,
-        }),
+        tune: async (_client, _owner, _session, channelId, requestId) =>
+          tunedDescriptor(channelId, 2, requestId),
         closeByClient: async (_client, ownerId) => {
           if (ownerId === 'launch-old') {
             closeStarted.resolve()
@@ -634,9 +654,8 @@ describe('virtual tuner HTTP contract', () => {
       },
       tuners: {
         open: async (_client, _owner, channelId) => descriptor(channelId),
-        tune: async (_client, _owner, _session, channelId, requestId) => ({
-          ...descriptor(channelId, 2), requestId,
-        }),
+        tune: async (_client, _owner, _session, channelId, requestId) =>
+          tunedDescriptor(channelId, 2, requestId),
         closeByClient: async () => 'closed' as const,
         descriptorForClient: () => descriptor(),
       },
@@ -692,7 +711,7 @@ describe('virtual tuner HTTP contract', () => {
         async tune(_client, _owner, _session, channelId, requestId) {
           tuneStarted.resolve()
           await tuneGate.promise
-          return { ...descriptor(channelId, 2), requestId }
+          return tunedDescriptor(channelId, 2, requestId)
         },
         closeByClient: async () => 'closed' as const,
         descriptorForClient: () => descriptor(),

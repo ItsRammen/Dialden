@@ -415,6 +415,22 @@ describe('LG webOS presence telemetry', () => {
       join(import.meta.dir, '..', 'clients', 'webos', 'app.js'),
       'utf8'
     )
+    const markup = readFileSync(
+      join(import.meta.dir, '..', 'clients', 'webos', 'index.html'),
+      'utf8'
+    )
+    const styles = readFileSync(
+      join(import.meta.dir, '..', 'clients', 'webos', 'styles.css'),
+      'utf8'
+    )
+    const captureBody = script.slice(
+      script.indexOf('function captureTuningFreezeFrame()'),
+      script.indexOf('function clearTuningFreezeFrame()')
+    )
+    const clearFreezeBody = script.slice(
+      script.indexOf('function clearTuningFreezeFrame()'),
+      script.indexOf('function connectToServer(')
+    )
     const detachStart = script.indexOf('function detachVideoForTune()')
     const rollbackStart = script.indexOf('function rollbackCandidateTune(')
     const detachBody = script.slice(detachStart, rollbackStart)
@@ -435,14 +451,72 @@ describe('LG webOS presence telemetry', () => {
     )
     const stableCheck = script.indexOf('window.ToastTVPlaybackPolicy.isPlaybackStable(video)')
     const slotCommit = script.indexOf('state.videoSlot = state.candidateSlot')
+    const stableCommitBody = script.slice(
+      script.indexOf('function commitStableTunerChannel('),
+      script.indexOf('function recoverRejectedStableTunerTune(')
+    )
+    const stabilizeBody = script.slice(
+      script.indexOf('function stabilizeTuning()'),
+      script.indexOf('function clearTuningTimer(')
+    )
+    const waitingBody = script.slice(
+      script.indexOf('function handleVideoWaiting('),
+      script.indexOf('function activeVideo(')
+    )
+    const abandonBody = script.slice(
+      script.indexOf('function abandonCandidateTune('),
+      script.indexOf('function rollbackCandidateTune(')
+    )
+    const invalidateBody = script.slice(
+      script.indexOf('function invalidateRemovedCommittedPlayback('),
+      script.indexOf('function reconcileOpenCatalog(')
+    )
 
     expect(detachBody).toContain("state.candidateSlot = state.videoSlot === 'A' ? 'B' : 'A'")
     expect(detachBody).not.toContain("state.videoSlot = state.videoSlot === 'A' ? 'B' : 'A'")
     expect(detachBody).toContain('activeVideo().muted = true')
     expect(detachBody).toContain('window.ToastTVPlaybackPolicy.resetMediaElement(activeVideo())')
     expect(detachBody).toContain('state.hasCommittedVideo = false')
+    expect(captureBody).toContain('if (!hasCrossChannelHandoff()) return;')
+    expect(captureBody).toContain("classList.add('is-zapping')")
+    expect(captureBody).toContain("canvas.getContext('2d')")
+    expect(captureBody).toContain('context.drawImage(')
+    expect(captureBody).toContain('catch (ignoreFreezeFrame)')
+    expect(clearFreezeBody).toContain("classList.remove('is-zapping')")
+    expect(clearFreezeBody).toContain("canvas.classList.remove('is-visible')")
+    expect(clearFreezeBody).toContain('canvas.width = 1')
+    expect(detachBody.indexOf('captureTuningFreezeFrame();')).toBeLessThan(
+      detachBody.indexOf('window.ToastTVPlaybackPolicy.resetMediaElement(activeVideo())')
+    )
+    expect(stableCommitBody.indexOf('captureTuningFreezeFrame();')).toBeLessThan(
+      stableCommitBody.indexOf('activeVideo().muted = true')
+    )
+    expect(stabilizeBody.indexOf("classList.add('has-video')")).toBeLessThan(
+      stabilizeBody.indexOf('clearTuningFreezeFrame();')
+    )
+    expect(waitingBody).toContain('stabilizeTuning();')
+    expect(stabilizeBody).toMatch(
+      /if \(!window\.ToastTVPlaybackPolicy\.isPlaybackStable\(video\)\)[\s\S]{0,420}state\.frameProbeAttempts >= TUNING_PROBE_LIMIT[\s\S]{0,260}setTimeout\(stabilizeTuning, TUNING_STABLE_MS\)/
+    )
+    expect(invalidateBody).toMatch(
+      /if \(preserveCandidate\) return;\s*clearTuningFreezeFrame\(\);/
+    )
+    expect(abandonBody).not.toContain('clearTuningFreezeFrame();')
+    for (const lifecycleFunction of [
+      'recoverRejectedStableTunerTune',
+      'disableStableTunerAndReload',
+      'recoverStableTunerPlayback',
+      'showOffAir',
+      'showPlaybackError',
+      'stopPlayback',
+    ]) {
+      const lifecycleStart = script.indexOf(`function ${lifecycleFunction}(`)
+      const lifecycleEnd = script.indexOf('\n  function ', lifecycleStart + 1)
+      expect(script.slice(lifecycleStart, lifecycleEnd)).toContain('clearTuningFreezeFrame();')
+    }
     expect(slotCommit).toBeGreaterThan(stableCheck)
-    expect(script).toContain('state.frameProbeAttempts >= 12')
+    expect(script).toContain('var TUNING_PROBE_LIMIT = 20')
+    expect(script).toContain('state.frameProbeAttempts >= TUNING_PROBE_LIMIT')
     expect(script).toContain('rollbackCandidateTune();')
     expect(prepareBody).toMatch(/data\.status !== 'ready'[\s\S]{0,240}resolvePreparedChannel\(/)
     expect(commitBody).toContain("recoverRejectedTune(index, 'That channel is no longer available.')")
@@ -465,6 +539,9 @@ describe('LG webOS presence telemetry', () => {
     expect(tuneBody).toMatch(/!state\.hasCommittedVideo\s*&&\s*!state\.previousTune/)
     expect(tuneBody).toContain('abandonCandidateTune();')
     expect(tuneBody).toContain("showChannelOsd(targetIndex, 'Tuning…', true)")
+    expect(tuneBody).toMatch(
+      /if \(isChannelChange\) \{[\s\S]{0,220}classList\.add\('is-zapping'\)[\s\S]{0,160}showChannelOsd/
+    )
     expect(script).toContain("if (state.view === 'player' && !restored) openChannelBrowser()")
     expect(script).toContain("updateChannelOsdProgram('Checking off-air schedule…')")
     expect(script).toContain('state.activeSource.baseUrl === baseStreamUrl')
@@ -472,6 +549,12 @@ describe('LG webOS presence telemetry', () => {
     expect(script).toContain("setPlayerStatus('Playing live — schedule update delayed')")
     expect(script).toContain("if (!state.localPaused && !state.tuning) setPlayerStatus('Playing live')")
     expect(script).toContain('scheduleChannelOsdHide();')
+    expect(markup).toContain('id="tuningFreezeFrame"')
+    expect(markup).toContain('id="channelOsd" class="channel-osd" role="status" aria-live="polite"')
+    expect(styles).toContain('.tuning-freeze-frame.is-visible { display: block; }')
+    expect(styles).toContain('.player-screen.is-zapping .player-backdrop__brand')
+    expect(styles).toContain('.player-screen.is-zapping .tuning-panel')
+    expect(styles).toContain('transform: translate(-50%, -15px)')
   })
 
   test('opens the guide over live TV or the channel browser and resolves streams before decoder handoff', () => {
@@ -538,7 +621,7 @@ describe('LG webOS presence telemetry', () => {
       'if (state.tuning && (state.previousTune || state.candidateChannelId)) return;'
     )
     expect(styles).toContain('.channel-osd { position: fixed; z-index: 70;')
-    expect(styles).toContain('top: 18px; right: 150px;')
+    expect(styles).toContain('top: 28px; right: auto; left: 50%;')
     expect(styles).toContain('.player-screen.guide-open .player-info')
   })
 
@@ -563,7 +646,6 @@ describe('LG webOS presence telemetry', () => {
       script.indexOf('function reconcileChannelList('),
       script.indexOf('function invalidateRemovedCommittedPlayback(')
     )
-
     expect(browserGuideBody).toContain("openGuideForChannel(state.previewChannelIndex, 'channels')")
     expect(browserGuideBody).not.toContain('tuneChannel(')
     expect(openGuideBody).toContain('returnView: returnView || state.view')
@@ -792,7 +874,7 @@ describe('LG webOS presence telemetry', () => {
     }
   })
 
-  test('black-curtains stable tuner switches until revisioned playback proves the target', () => {
+  test('holds a zap transition frame until revisioned playback proves the target', () => {
     const script = readFileSync(
       join(import.meta.dir, '..', 'clients', 'webos', 'app.js'),
       'utf8'
@@ -850,6 +932,32 @@ describe('LG webOS presence telemetry', () => {
       script.indexOf('function invalidateRemovedCommittedPlayback(')
     )
 
+    const inPlaceBeginBody = functionSource(
+      script,
+      'beginInPlaceStableTunerHandoff',
+      'probeInPlaceStableTunerHandoff'
+    )
+    const inPlaceProbeBody = functionSource(
+      script,
+      'probeInPlaceStableTunerHandoff',
+      'finishInPlaceStableTunerHandoff'
+    )
+    const inPlaceFinishBody = functionSource(
+      script,
+      'finishInPlaceStableTunerHandoff',
+      'fallbackInPlaceStableTunerHandoff'
+    )
+    const inPlaceFallbackBody = functionSource(
+      script,
+      'fallbackInPlaceStableTunerHandoff',
+      'ensureAttachedStableTunerPlayback'
+    )
+    const mediaErrorBody = functionSource(
+      script,
+      'handleMediaError',
+      'retryPlayback'
+    )
+
     expect(tuneSelectionBody).toContain('if (state.tuner) {')
     expect(tuneSelectionBody).not.toContain(
       'state.tuner && (hasAttachedStableTunerSource() || !state.hasCommittedVideo)'
@@ -891,6 +999,33 @@ describe('LG webOS presence telemetry', () => {
     expect(stableCommitBody).not.toContain('resetMediaElement(')
     expect(stableCommitBody).not.toContain('loadMediaElement(')
     expect(stableCommitBody).not.toContain('firstFrameAt = Date.now()')
+    expect(script).toContain('function stableTunerSwitchBoundary(')
+    expect(script).toContain('switchBoundary: stableTunerSwitchBoundary(tuner.switchBoundary, tuner.revision)')
+    expect(stableCommitBody).toContain('beginInPlaceStableTunerHandoff(')
+    expect(stableCommitBody.indexOf('beginInPlaceStableTunerHandoff(')).toBeLessThan(
+      stableCommitBody.indexOf('activeVideo().muted = true')
+    )
+    expect(inPlaceBeginBody).toContain('hasAttachedStableTunerSource()')
+    expect(inPlaceBeginBody).not.toContain('loadMediaElement(')
+    expect(inPlaceProbeBody).toContain('probe.manifestBoundaryObserved')
+    expect(script).toContain('function findProvenTargetRange(')
+    expect(script).toContain('!rangeOverlapsAny(candidate, requestRanges)')
+    expect(script).toContain('!rangeOverlapsAny(candidate, acceptanceRanges)')
+    expect(script).not.toContain('meaningfulAdvance')
+    expect(inPlaceProbeBody).toContain('probe.targetRange = targetRange')
+    expect(inPlaceProbeBody).toContain('seekToProvenTargetRange(video, probe.targetRange)')
+    expect(inPlaceProbeBody).toContain('currentTargetRange = findProvenTargetRange(')
+    expect(inPlaceProbeBody).toContain('if (nearLive && currentTargetRange)')
+    expect(inPlaceProbeBody).toContain('!state.hlsSeekPending && !video.seeking')
+    expect(inPlaceFinishBody).toContain("state.tuneMetrics.src = 'session-tuner-in-place'")
+    expect(inPlaceFinishBody).not.toContain('loadMediaElement(')
+    expect(inPlaceFallbackBody).toContain('applyNowResult(probe.now, probe.timing, true)')
+    expect(inPlaceFallbackBody).toContain("state.tuneMetrics.src = 'session-tuner-reattach-fallback'")
+    expect(mediaErrorBody).toContain('state.previousTune.tunerChannelId || state.tunerRollbackChannelId')
+    expect(mediaErrorBody).toContain('state.candidateChannelId !== stableRestoreChannelId')
+    expect(mediaErrorBody.indexOf('rollbackAcceptedStableTunerTune(')).toBeLessThan(
+      mediaErrorBody.indexOf("showPlaybackError(\n        'The switched channel could not start'")
+    )
 
     expect(applyBody).toContain('window.ToastTVPlaybackPolicy.withTunerRevision(')
     expect(applyBody).toContain('++state.attachAttempt')

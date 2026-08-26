@@ -15,7 +15,7 @@ describe('LG webOS package assets', () => {
     const manifest = JSON.parse(readFileSync(join(root, 'appinfo.json'), 'utf8'))
     expect(manifest).toMatchObject({
       id: 'com.itsrammen.app.toasttv',
-      version: '0.3.8',
+      version: '0.3.10',
       type: 'web',
       main: 'index.html',
       title: 'ToastTV',
@@ -51,7 +51,10 @@ describe('LG webOS package assets', () => {
     expect(policy).toContain('function nextTunerRequestId(')
     expect(policy).toContain('function withTunerRevision(')
     expect(html).toContain('id="playerChannelLogo"')
-    expect(app).not.toMatch(/(?:drawImage|getContext\(['"]2d['"]\)|createElement\(['"]canvas['"]\))/)
+    expect(html).toContain('id="tuningFreezeFrame"')
+    // Channel branding remains DOM-only. The one fixed canvas is reserved for
+    // a transient decoder handoff frame and must never be created dynamically.
+    expect(app).not.toMatch(/createElement\(['"]canvas['"]\)/)
     expect(html).not.toMatch(/<(?:script|link)[^>]+(?:src|href)="https?:\/\//i)
   })
 

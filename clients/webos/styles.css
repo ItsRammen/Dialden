@@ -444,9 +444,12 @@ button { cursor: pointer; }
 .player-screen { z-index: 5; overflow: hidden; background: #000; }
 .player-video { position: absolute; top: 0; right: 0; bottom: 0; left: 0; width: 100%; height: 100%; background: #000; object-fit: contain; }
 .player-video--standby { z-index: -1; visibility: hidden; opacity: 0; pointer-events: none; }
+.tuning-freeze-frame { position: absolute; z-index: 3; display: none; top: 0; right: 0; bottom: 0; left: 0; width: 100%; height: 100%; background: #000; pointer-events: none; }
+.tuning-freeze-frame.is-visible { display: block; }
 
 .player-backdrop { position: absolute; z-index: 2; display: flex; top: 0; right: 0; bottom: 0; left: 0; flex-direction: column; align-items: center; justify-content: center; background: radial-gradient(circle at 50% 42%, #152638 0%, #080d14 66%); transition: opacity 220ms ease; }
 .player-screen.has-video .player-backdrop { visibility: hidden; opacity: 0; pointer-events: none; }
+.player-screen.is-zapping .player-backdrop { background: #000; }
 .player-backdrop__brand { display: flex; align-items: center; margin-bottom: 30px; color: var(--text); font-size: 30px; font-weight: 800; }
 .player-backdrop__brand img { width: 86px; height: 86px; margin-right: 17px; object-fit: contain; }
 .tuning-panel { display: flex; min-width: 460px; align-items: center; justify-content: center; padding: 23px 28px; border: 1px solid var(--line); border-radius: 18px; background: rgba(17, 24, 39, 0.82); text-align: left; }
@@ -456,8 +459,8 @@ button { cursor: pointer; }
 
 @keyframes tuningSpin { to { transform: rotate(360deg); } }
 
-.channel-osd { position: fixed; z-index: 70; display: flex; top: 18px; right: 150px; min-width: 330px; align-items: center; padding: 10px 16px; border: 1px solid var(--line); border-radius: 14px; background: rgba(7, 11, 18, 0.96); box-shadow: 0 18px 48px rgba(0, 0, 0, 0.38); opacity: 0; transform: translateY(-15px); transition: opacity 180ms ease, transform 180ms ease; pointer-events: none; }
-.channel-osd.is-visible { opacity: 1; transform: translateY(0); }
+.channel-osd { position: fixed; z-index: 70; display: flex; top: 28px; right: auto; left: 50%; min-width: 330px; align-items: center; padding: 10px 16px; border: 1px solid var(--line); border-radius: 14px; background: rgba(7, 11, 18, 0.96); box-shadow: 0 18px 48px rgba(0, 0, 0, 0.38); opacity: 0; transform: translate(-50%, -15px); transition: opacity 180ms ease, transform 180ms ease; pointer-events: none; }
+.channel-osd.is-visible { opacity: 1; transform: translate(-50%, 0); }
 .channel-osd__number { display: flex; width: 48px; height: 48px; flex: 0 0 48px; align-items: center; justify-content: center; margin-right: 13px; border-radius: 12px; background: var(--orange); color: #111827; font-size: 17px; font-weight: 900; }
 .channel-osd__name { margin: 0; font-size: 20px; font-weight: 800; }
 .channel-osd__program { max-width: 400px; margin: 3px 0 0; overflow: hidden; color: var(--muted); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
@@ -505,6 +508,11 @@ button { cursor: pointer; }
 .player-screen.has-error .player-hints,
 .player-screen.is-off-air .player-info,
 .player-screen.is-off-air .player-hints { opacity: 0; pointer-events: none; }
+.player-screen.is-zapping .player-header,
+.player-screen.is-zapping .player-info,
+.player-screen.is-zapping .player-hints,
+.player-screen.is-zapping .player-backdrop__brand,
+.player-screen.is-zapping .tuning-panel { visibility: hidden; opacity: 0; pointer-events: none; }
 .player-screen.has-error .player-backdrop__brand,
 .player-screen.has-error .tuning-panel { visibility: hidden; }
 
@@ -656,7 +664,7 @@ button { cursor: pointer; }
   .tuning-spinner { width: 22px; height: 22px; flex-basis: 22px; margin-right: 14px; }
   .tuning-panel p { font-size: 15px; }
   .tuning-panel small { margin-top: 3px; font-size: 11px; }
-  .channel-osd { top: 76px; right: 38px; min-width: 275px; padding: 12px 15px; border-radius: 11px; }
+  .channel-osd { top: 20px; right: auto; left: 50%; min-width: 275px; padding: 12px 15px; border-radius: 11px; }
   .channel-osd__number { width: 42px; height: 42px; flex-basis: 42px; margin-right: 12px; border-radius: 9px; font-size: 15px; }
   .channel-osd__name { font-size: 17px; }
   .channel-osd__program { max-width: 300px; font-size: 11px; }

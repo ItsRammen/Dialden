@@ -7,7 +7,7 @@
   var STORAGE_CLIENT_NAME = 'toasttv.clientName.v1';
   var STORAGE_SESSION_OWNER = 'toasttv.sessionOwner.v1';
   var STORAGE_SESSION_OWNER_EPOCH = 'toasttv.sessionOwnerEpoch.v1';
-  var CLIENT_VERSION = '0.3.8';
+  var CLIENT_VERSION = '0.3.10';
   var DEFAULT_SERVER = 'http://TOWER:1993';
   var POLL_INTERVAL_MS = 30000;
   var CHANNEL_REFRESH_INTERVAL_MS = 15000;
@@ -21,6 +21,7 @@
   var GUIDE_PREFETCH_STAGGER_MS = 300;
   var LIVE_STREAM_RETRY_DELAYS = [300, 750, 1500, 3000, 5000];
   var TUNING_STABLE_MS = 300;
+  var TUNING_PROBE_LIMIT = 20;
   var MIN_READY_BUFFER_SECONDS = 0.75;
   var ZAP_DEBOUNCE_MS = 80;
   var CHANNEL_OSD_MS = 2800;
@@ -34,6 +35,10 @@
   var TUNER_RETRY_DELAYS = [2000, 5000, 15000, 30000];
   var TUNER_DECODER_RECOVERY_LIMIT = 2;
   var TUNER_REQUEST_TIMEOUT_MS = 30000;
+  var IN_PLACE_TUNER_DEADLINE_MS = 1800;
+  var IN_PLACE_TUNER_PROBE_MS = 100;
+  var IN_PLACE_TUNER_PROGRESS_MS = 160;
+  var IN_PLACE_TUNER_RANGE_EPSILON = 0.08;
 
   var state = {
     view: 'boot',
@@ -95,6 +100,7 @@
     tunerNeedsRecovery: false,
     tunerRetryAttempt: 0,
     tunerDecoderRecoveryAttempts: 0,
+    tunerInPlaceSwitch: null,
     tuneMetrics: null,
     guideCache: {},
     guideRequests: {},
@@ -127,6 +133,7 @@
   var guideScrollFrame = null;
   var catalogRailScrollFrame = null;
   var tunerRetryTimer = null;
+  var inPlaceTunerTimer = null;
 
   document.addEventListener('DOMContentLoaded', boot, false);
 
@@ -169,7 +176,7 @@
       'channelPreviewState', 'channelPreviewName', 'channelPreviewProgram', 'channelPreviewEpisode',
       'channelPreviewTimelineFill', 'channelPreviewTime', 'channelPreviewUpcoming', 'channelPreviewNext',
       'channelPreviewNext2', 'channelPreviewNext3', 'channelGuideButton',
-      'serverLabel', 'videoA', 'videoB', 'playerBackdrop', 'playerHeader', 'playerChannelName',
+      'serverLabel', 'videoA', 'videoB', 'tuningFreezeFrame', 'playerBackdrop', 'playerHeader', 'playerChannelName',
       'playerChannelLogo', 'playerChannelMonogram', 'playerChannelNumber', 'playerStatus', 'playerClock', 'playerInfo', 'playerCollection', 'playerTitle', 'playerEpisode',
       'timelineFill', 'programTimes', 'nextTitle', 'offAirPanel', 'offAirNext',
       'offAirGuideButton', 'offAirChannelsButton',
@@ -336,6 +343,10 @@
       clearBufferingTimers();
       clearTuningTimer();
       setPlayerStatus('Tuning — preparing live video…');
+      /* Waiting can be the last event Chromium 53 emits for a bad native HLS
+         attach. Keep the bounded frame proof alive instead of leaving the
+         accepted channel under a tuning screen forever. */
+      stabilizeTuning();
     } else if (!state.localPaused) {
       scheduleBufferingRecovery(event.currentTarget);
     }
@@ -361,6 +372,56 @@
   function applyVideoVisibility() {
     elements.videoA.classList.toggle('player-video--standby', state.videoSlot !== 'A');
     elements.videoB.classList.toggle('player-video--standby', state.videoSlot !== 'B');
+  }
+
+  function hasCrossChannelHandoff() {
+    var channel = currentChannel();
+    return !!(channel && state.previousTune && state.previousTune.channelId &&
+      state.previousTune.channelId !== channel.id);
+  }
+
+  function captureTuningFreezeFrame() {
+    if (!hasCrossChannelHandoff()) return;
+    elements.playerScreen.classList.add('is-zapping');
+    var canvas = elements.tuningFreezeFrame;
+    if (canvas && canvas.classList.contains('is-visible')) return;
+    var video = activeVideo();
+    if (!canvas || !video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
+    try {
+      var width = Math.max(1, elements.playerScreen.clientWidth || video.videoWidth);
+      var height = Math.max(1, elements.playerScreen.clientHeight || video.videoHeight);
+      var context = canvas.getContext('2d');
+      if (!context) return;
+      canvas.width = width;
+      canvas.height = height;
+      context.fillStyle = '#000';
+      context.fillRect(0, 0, width, height);
+      var scale = Math.min(width / video.videoWidth, height / video.videoHeight);
+      var drawWidth = Math.max(1, Math.round(video.videoWidth * scale));
+      var drawHeight = Math.max(1, Math.round(video.videoHeight * scale));
+      context.drawImage(
+        video,
+        Math.round((width - drawWidth) / 2),
+        Math.round((height - drawHeight) / 2),
+        drawWidth,
+        drawHeight
+      );
+      canvas.classList.add('is-visible');
+    } catch (ignoreFreezeFrame) {
+      /* Some LG hardware video planes cannot be sampled by canvas. The
+         is-zapping backdrop remains a clean black handoff on those models. */
+    }
+  }
+
+  function clearTuningFreezeFrame() {
+    clearInPlaceStableTunerProbe();
+    elements.playerScreen.classList.remove('is-zapping');
+    var canvas = elements.tuningFreezeFrame;
+    if (!canvas) return;
+    canvas.classList.remove('is-visible');
+    /* Release the transient 1080p canvas backing store after every zap. */
+    canvas.width = 1;
+    canvas.height = 1;
   }
 
   function connectToServer(rawValue, remember, automatic) {
@@ -588,6 +649,29 @@
     );
   }
 
+  function stableTunerSwitchBoundary(value, revision) {
+    if (!value || typeof value !== 'object' || value.revision !== revision) return null;
+    var first = Number(value.firstMediaSequence);
+    var last = Number(value.lastMediaSequence);
+    var count = Number(value.segmentCount);
+    var targetDuration = Number(value.targetDurationSeconds);
+    var duration = Number(value.durationSeconds);
+    if (!isFinite(first) || Math.floor(first) !== first || first < 0 ||
+        !isFinite(last) || Math.floor(last) !== last || last < first ||
+        !isFinite(count) || Math.floor(count) !== count || count < 2 || count > 32 ||
+        last - first + 1 !== count ||
+        !isFinite(targetDuration) || targetDuration <= 0 || targetDuration > 30 ||
+        !isFinite(duration) || duration <= 0 || duration > 300) return null;
+    return {
+      revision: revision,
+      firstMediaSequence: first,
+      lastMediaSequence: last,
+      segmentCount: count,
+      targetDurationSeconds: targetDuration,
+      durationSeconds: duration
+    };
+  }
+
   function stableTunerFromResponse(data, expectedChannelId) {
     var tuner = data && data.tuner;
     if (!tuner || tuner.mode !== 'stable-hls' || typeof tuner.sessionId !== 'string' ||
@@ -608,7 +692,8 @@
       manifestUrl: manifestUrl,
       channelId: tuner.channelId,
       revision: tuner.revision,
-      requestIdFloor: tuner.requestIdFloor
+      requestIdFloor: tuner.requestIdFloor,
+      switchBoundary: stableTunerSwitchBoundary(tuner.switchBoundary, tuner.revision)
     };
   }
 
@@ -745,6 +830,278 @@
       state.activeSource && state.activeSource.tunerSessionId && state.tuner &&
       state.activeSource.tunerSessionId === state.tuner.sessionId &&
       state.tuner.channelId === state.candidateChannelId);
+  }
+
+  function mediaRangeSnapshot(video) {
+    var snapshot = {
+      currentTime: Number(video && video.currentTime) || 0,
+      buffered: [],
+      seekable: []
+    };
+    function copyRanges(source, target) {
+      if (!source) return;
+      var index;
+      try {
+        for (index = 0; index < source.length; index += 1) {
+          var start = Number(source.start(index));
+          var end = Number(source.end(index));
+          if (isFinite(start) && isFinite(end) && end >= start) target.push([start, end]);
+        }
+      } catch (ignoreRanges) {}
+    }
+    copyRanges(video && video.buffered, snapshot.buffered);
+    copyRanges(video && video.seekable, snapshot.seekable);
+    return snapshot;
+  }
+
+  function timeIsInsideRanges(time, ranges) {
+    var index;
+    var epsilon = IN_PLACE_TUNER_RANGE_EPSILON;
+    for (index = 0; index < ranges.length; index += 1) {
+      if (time >= ranges[index][0] - epsilon && time <= ranges[index][1] + epsilon) return true;
+    }
+    return false;
+  }
+
+  function rangeOverlapsAny(candidate, ranges) {
+    var index;
+    var epsilon = IN_PLACE_TUNER_RANGE_EPSILON;
+    for (index = 0; index < ranges.length; index += 1) {
+      if (candidate[0] <= ranges[index][1] + epsilon &&
+          candidate[1] >= ranges[index][0] - epsilon) return true;
+    }
+    return false;
+  }
+
+  function findProvenTargetRange(current, requestBaseline, acceptanceBaseline, requiredTime) {
+    var candidates = current.seekable.concat(current.buffered);
+    var requestRanges = requestBaseline.seekable.concat(requestBaseline.buffered);
+    var acceptanceRanges = acceptanceBaseline.seekable.concat(acceptanceBaseline.buffered);
+    var index;
+    for (index = candidates.length - 1; index >= 0; index -= 1) {
+      var candidate = candidates[index];
+      if (requiredTime !== null && !timeIsInsideRanges(requiredTime, [candidate])) continue;
+      if (!rangeOverlapsAny(candidate, requestRanges) &&
+          !rangeOverlapsAny(candidate, acceptanceRanges)) return candidate;
+    }
+    return null;
+  }
+
+  function seekToProvenTargetRange(video, targetRange) {
+    if (!video || !targetRange || video.seeking) return false;
+    var target = Math.max(targetRange[0], targetRange[1] - TUNER_SWITCH_JOIN_BEHIND_SECONDS);
+    try {
+      if (Math.abs((Number(video.currentTime) || 0) - target) <= 0.03) {
+        state.hlsSeekPending = false;
+        return true;
+      }
+      state.hlsSeekPending = true;
+      video.currentTime = target;
+    } catch (ignoreTargetSeek) {
+      state.hlsSeekPending = false;
+    }
+    return false;
+  }
+
+  function manifestReachedSwitchBoundary(text, boundary) {
+    if (!boundary || !/^#EXTM3U(?:\r?\n|$)/.test(String(text || ''))) return false;
+    var sequenceMatch = /^#EXT-X-MEDIA-SEQUENCE:(\d+)\s*$/mi.exec(String(text));
+    if (!sequenceMatch) return false;
+    var first = Number(sequenceMatch[1]);
+    var segments = String(text).match(/^#EXTINF:/gmi);
+    var count = segments ? segments.length : 0;
+    if (!isFinite(first) || count < 1) return false;
+    return first + count - 1 >= boundary.lastMediaSequence;
+  }
+
+  function clearInPlaceStableTunerProbe() {
+    if (inPlaceTunerTimer) window.clearTimeout(inPlaceTunerTimer);
+    inPlaceTunerTimer = null;
+    state.tunerInPlaceSwitch = null;
+  }
+
+  function scheduleInPlaceStableTunerProbe(probe) {
+    if (state.tunerInPlaceSwitch !== probe || inPlaceTunerTimer) return;
+    inPlaceTunerTimer = window.setTimeout(function () {
+      inPlaceTunerTimer = null;
+      probeInPlaceStableTunerHandoff(probe);
+    }, IN_PLACE_TUNER_PROBE_MS);
+  }
+
+  function observeInPlaceTunerManifest(probe, attempt) {
+    var boundary = probe.boundary;
+    var separator = state.tuner.manifestUrl.indexOf('?') === -1 ? '?' : '&';
+    var url = state.tuner.manifestUrl + separator +
+      'observeRevision=' + encodeURIComponent(String(boundary.revision)) +
+      '&observeAttempt=' + encodeURIComponent(String(attempt));
+    requestText(url, 900, function (error, text) {
+      if (state.tunerInPlaceSwitch !== probe || probe.generation !== state.tuneGeneration ||
+          !state.tuner || state.tuner.revision !== boundary.revision) return;
+      if (!error && manifestReachedSwitchBoundary(text, boundary)) {
+        probe.manifestBoundaryObserved = true;
+        probeInPlaceStableTunerHandoff(probe);
+        return;
+      }
+      if (attempt < 1 && Date.now() + 180 < probe.deadlineAt) {
+        window.setTimeout(function () {
+          if (state.tunerInPlaceSwitch === probe) observeInPlaceTunerManifest(probe, attempt + 1);
+        }, 180);
+      }
+    });
+  }
+
+  function beginInPlaceStableTunerHandoff(channelId, generation, now, timing, requestBaseline) {
+    var boundary = state.tuner && state.tuner.switchBoundary;
+    var video = activeVideo();
+    var acceptanceBaseline = mediaRangeSnapshot(video);
+    var oldBaseline = requestBaseline || acceptanceBaseline;
+    if (!boundary || boundary.revision !== state.tuner.revision ||
+        !hasAttachedStableTunerSource() || !state.hasCommittedVideo ||
+        state.candidateSlot || video.readyState < 2 ||
+        (!oldBaseline.buffered.length && !oldBaseline.seekable.length) ||
+        (!acceptanceBaseline.buffered.length && !acceptanceBaseline.seekable.length)) return false;
+    var probe = {
+      generation: generation,
+      channelId: channelId,
+      revision: boundary.revision,
+      boundary: boundary,
+      now: now,
+      timing: timing,
+      requestBaseline: oldBaseline,
+      acceptanceBaseline: acceptanceBaseline,
+      manifestBoundaryObserved: false,
+      rangeBoundaryObserved: false,
+      liveEdgeSeekIssued: false,
+      progressStartedAt: 0,
+      progressTime: 0,
+      deadlineAt: Date.now() + IN_PLACE_TUNER_DEADLINE_MS
+    };
+    state.tunerInPlaceSwitch = probe;
+    state.hardLiveEdgePending = false;
+    setPlayerStatus('Switching live picture…');
+    observeInPlaceTunerManifest(probe, 0);
+    scheduleInPlaceStableTunerProbe(probe);
+    return true;
+  }
+
+  function probeInPlaceStableTunerHandoff(probe) {
+    if (state.tunerInPlaceSwitch !== probe || probe.generation !== state.tuneGeneration ||
+        state.view !== 'player' || !state.tuner || state.tuner.revision !== probe.revision ||
+        state.tuner.channelId !== probe.channelId || !state.tuning) return;
+    if (Date.now() >= probe.deadlineAt) {
+      fallbackInPlaceStableTunerHandoff(probe, 'native range boundary was not observable');
+      return;
+    }
+    var video = activeVideo();
+    var ranges = mediaRangeSnapshot(video);
+    var targetRange = probe.manifestBoundaryObserved
+      ? findProvenTargetRange(
+        ranges,
+        probe.requestBaseline,
+        probe.acceptanceBaseline,
+        null
+      )
+      : null;
+    if (targetRange) {
+      probe.rangeBoundaryObserved = true;
+      probe.targetRange = targetRange;
+    }
+    if (probe.manifestBoundaryObserved && probe.rangeBoundaryObserved &&
+        !probe.liveEdgeSeekIssued) {
+      probe.liveEdgeSeekIssued = true;
+      probe.progressStartedAt = 0;
+      state.hlsSeekPending = false;
+      seekToProvenTargetRange(video, probe.targetRange);
+      scheduleInPlaceStableTunerProbe(probe);
+      return;
+    }
+    if (probe.manifestBoundaryObserved && probe.rangeBoundaryObserved &&
+        !state.hlsSeekPending && !video.seeking &&
+        window.ToastTVPlaybackPolicy.isPlaybackStable(video)) {
+      var currentTime = Number(video.currentTime) || 0;
+      var currentTargetRange = findProvenTargetRange(
+        ranges,
+        probe.requestBaseline,
+        probe.acceptanceBaseline,
+        currentTime
+      );
+      var edge = currentTargetRange && currentTargetRange[1];
+      var nearLive = edge !== null && edge !== undefined && edge - currentTime <=
+        Math.max(2.5, probe.boundary.targetDurationSeconds * 2);
+      if (nearLive && currentTargetRange) {
+        if (!probe.progressStartedAt) {
+          probe.progressStartedAt = Date.now();
+          probe.progressTime = currentTime;
+        } else if (Date.now() - probe.progressStartedAt >= IN_PLACE_TUNER_PROGRESS_MS &&
+                   currentTime > probe.progressTime + 0.03) {
+          finishInPlaceStableTunerHandoff(probe);
+          return;
+        }
+      } else {
+        probe.progressStartedAt = 0;
+      }
+    }
+    scheduleInPlaceStableTunerProbe(probe);
+  }
+
+  function finishInPlaceStableTunerHandoff(probe) {
+    if (state.tunerInPlaceSwitch !== probe) return;
+    clearInPlaceStableTunerProbe();
+    state.tuning = false;
+    state.pendingJoin = false;
+    state.liveRetryAttempt = 0;
+    state.failedLiveUrl = null;
+    state.hlsSeekPending = false;
+    state.hardLiveEdgePending = false;
+    state.frameProbeAttempts = 0;
+    state.hasCommittedVideo = true;
+    state.tunerNeedsRecovery = false;
+    state.tunerDecoderRecoveryAttempts = 0;
+    state.committedChannelId = probe.channelId;
+    state.tunerRollbackChannelId = null;
+    state.candidateChannelId = null;
+    state.previousTune = null;
+    activeVideo().muted = false;
+    elements.playerScreen.classList.remove('is-tuning');
+    elements.playerScreen.classList.add('has-video');
+    clearTuningFreezeFrame();
+    renderProgramInfo();
+    updateChannelOsdProgram(state.currentNow && state.currentNow.program
+      ? state.currentNow.program.title : 'Live');
+    scheduleChannelOsdHide();
+    writeStorage(STORAGE_CHANNEL, probe.channelId);
+    retargetLineupSession(probe.channelId, probe.generation);
+    if (state.tuneMetrics && state.tuneMetrics.channelId === probe.channelId) {
+      state.tuneMetrics.firstFrameAt = Date.now();
+      state.tuneMetrics.src = 'session-tuner-in-place';
+      logTuneMetrics(state.tuneMetrics);
+      state.tuneMetrics = null;
+    }
+    setPlayerStatus('Playing live');
+    scheduleGuidePrefetch(100);
+    scheduleChromeHide();
+    queuePresenceHeartbeat();
+    window.setTimeout(function () {
+      if (probe.generation === state.tuneGeneration && state.view === 'player' &&
+          state.committedChannelId === probe.channelId && !state.tuning) syncNow(false);
+    }, 300);
+  }
+
+  function fallbackInPlaceStableTunerHandoff(probe, reason) {
+    if (state.tunerInPlaceSwitch !== probe) return;
+    clearInPlaceStableTunerProbe();
+    logTunerStatus('warn', 'in-place switch to ' + probe.channelId +
+      ' fell back to decoder reattach: ' + reason);
+    captureTuningFreezeFrame();
+    activeVideo().muted = true;
+    state.hasCommittedVideo = false;
+    state.frameProbeAttempts = 0;
+    state.hlsSeekPending = false;
+    state.hardLiveEdgePending = true;
+    if (state.tuneMetrics) state.tuneMetrics.src = 'session-tuner-reattach-fallback';
+    beginTuning('Switching the live picture…');
+    applyNowResult(probe.now, probe.timing, true);
+    queuePresenceHeartbeat();
   }
 
   function ensureAttachedStableTunerPlayback(message) {
@@ -1498,12 +1855,20 @@
         abandonCandidateTune();
       }
     }
+    /* A newer zap supersedes the probe but keeps its accepted candidate and
+       outgoing visual snapshot available for rollback or continuation. */
+    if (state.tunerInPlaceSwitch) clearInPlaceStableTunerProbe();
     state.tuneGeneration += 1;
     var generation = state.tuneGeneration;
     state.requestedChannelIndex = targetIndex;
     state.requestedChannelId = channel.id;
     state.tuneMetrics = { requestedAt: Date.now(), preparedAt: 0, attachedAt: 0, firstFrameAt: 0, channelId: channel.id, src: 'zap' };
-    if (isChannelChange) showChannelOsd(targetIndex, 'Tuning…', true);
+    if (isChannelChange) {
+      /* Keep the outgoing picture, but remove its duplicated station chrome
+         while the compact target OSD communicates the pending zap. */
+      elements.playerScreen.classList.add('is-zapping');
+      showChannelOsd(targetIndex, 'Tuning…', true);
+    }
     if (zapTimer) window.clearTimeout(zapTimer);
     zapTimer = window.setTimeout(function () {
       zapTimer = null;
@@ -1631,6 +1996,7 @@
     if (!state.tunerRollbackChannelId) {
       state.tunerRollbackChannelId = previousChannelId;
     }
+    var requestBaseline = mediaRangeSnapshot(activeVideo());
     updateChannelOsdProgram('Switching live signal…');
     postStableTunerSwitch(channelId, function (error, data) {
       if (generation !== state.tuneGeneration || state.requestedChannelId !== channelId) return;
@@ -1644,6 +2010,21 @@
           /* The server rejected this candidate before the atomic manifest
              commit. The outgoing stable feed is still authoritative, so do
              not risk a second same-channel readiness wait just to roll back. */
+          state.requestedChannelId = null;
+          state.requestedChannelIndex = null;
+          clearInPlaceStableTunerProbe();
+          if (restartPendingStableTunerHandoff()) {
+            showToast(data.error || 'That channel is unavailable. Continuing the prepared channel.');
+            return;
+          }
+          var originalChannelId = state.tunerRollbackChannelId || state.committedChannelId;
+          if (originalChannelId && state.tuner) {
+            rollbackAcceptedStableTunerTune(
+              originalChannelId,
+              data.error || 'That channel is unavailable. The previous channel was restored.'
+            );
+            return;
+          }
           state.tunerRollbackChannelId = null;
           recoverRejectedStableTunerTune(
             data.error || 'That channel is still preparing. The previous channel was kept playing.'
@@ -1680,15 +2061,16 @@
           data.now,
           null,
           true,
-          previousChannelId
+          previousChannelId,
+          requestBaseline
         );
         return;
       }
-      resolveStableTunerNow(channelId, previousChannelId, generation, pushHistory, 0);
+      resolveStableTunerNow(channelId, previousChannelId, generation, pushHistory, 0, requestBaseline);
     });
   }
 
-  function resolveStableTunerNow(channelId, previousChannelId, generation, pushHistory, attempt) {
+  function resolveStableTunerNow(channelId, previousChannelId, generation, pushHistory, attempt, requestBaseline) {
     requestJson(
       state.serverUrl + '/api/v1/channels/' + encodeURIComponent(channelId) + '/now',
       8000,
@@ -1702,13 +2084,14 @@
             data,
             timing,
             true,
-            previousChannelId
+            previousChannelId,
+            requestBaseline
           );
           return;
         }
         if (attempt < 2) {
           window.setTimeout(function () {
-            resolveStableTunerNow(channelId, previousChannelId, generation, pushHistory, attempt + 1);
+            resolveStableTunerNow(channelId, previousChannelId, generation, pushHistory, attempt + 1, requestBaseline);
           }, 180 + attempt * 170);
           return;
         }
@@ -1725,7 +2108,8 @@
     now,
     timing,
     tunerSwitched,
-    previousTunerChannelId
+    previousTunerChannelId,
+    requestBaseline
   ) {
     if (generation !== state.tuneGeneration || state.requestedChannelId !== channelId) return;
     var index = findChannelIndex(channelId);
@@ -1790,8 +2174,24 @@
     if (pushHistory) safePushHistory({ view: 'player' });
     activateView('player');
     if (requiresStableHandoff) {
+      if (beginInPlaceStableTunerHandoff(
+        channelId,
+        generation,
+        now,
+        timing,
+        requestBaseline
+      )) {
+        applyNowResult(now, timing, false);
+        if (state.tuneMetrics && state.tuneMetrics.channelId === channelId) {
+          state.tuneMetrics.metadataAt = Date.now();
+        }
+        queuePresenceHeartbeat();
+        return;
+      }
+      captureTuningFreezeFrame();
       activeVideo().muted = true;
       state.hasCommittedVideo = false;
+      state.frameProbeAttempts = 0;
       beginTuning('Switching the live picture…');
     }
     applyNowResult(now, timing, requiresStableHandoff);
@@ -1822,6 +2222,7 @@
   }
 
   function recoverRejectedStableTunerTune(message) {
+    clearTuningFreezeFrame();
     state.requestedChannelIndex = null;
     state.requestedChannelId = null;
     state.tuneMetrics = null;
@@ -1842,6 +2243,8 @@
     state.hasCommittedVideo = false;
     state.hlsSeekPending = false;
     state.hardLiveEdgePending = true;
+    state.frameProbeAttempts = 0;
+    captureTuningFreezeFrame();
     activeVideo().muted = true;
     beginTuning('Resuming the selected channel…');
     applyNowResult(pendingNow, null, true);
@@ -1850,6 +2253,7 @@
   }
 
   function rollbackAcceptedStableTunerTune(previousChannelId, message) {
+    clearInPlaceStableTunerProbe();
     if (!previousChannelId || !state.tuner) {
       disableStableTunerAndReload(message);
       return;
@@ -1876,7 +2280,9 @@
         return;
       }
       state.tunerRollbackChannelId = null;
-      updateChannelOsdProgram('Signal unavailable');
+      rollbackCandidateTune(restoredTuner);
+      if (!state.tuning) clearTuningFreezeFrame();
+      updateChannelOsdProgram(state.tuning ? 'Restoring previous channel…' : 'Signal unavailable');
       scheduleChannelOsdHide();
       showToast(message);
       showChrome();
@@ -1884,6 +2290,7 @@
   }
 
   function disableStableTunerAndReload(message, incompatible) {
+    clearTuningFreezeFrame();
     var tuner = state.tuner;
     state.tuner = null;
     state.tunerRollbackChannelId = null;
@@ -1926,6 +2333,7 @@
 
   function recoverStableTunerPlayback() {
     if (state.tunerRecoveryInFlight || !state.tuner || !currentChannel()) return;
+    clearTuningFreezeFrame();
     var failedTuner = state.tuner;
     var channelId = currentChannel().id;
     var generation = ++state.tuneGeneration;
@@ -2313,6 +2721,7 @@
     state.committedChannelId = null;
     state.previousTune = null;
     if (preserveCandidate) return;
+    clearTuningFreezeFrame();
     state.pendingJoin = false;
     state.playToken += 1;
     state.currentNow = null;
@@ -2535,11 +2944,16 @@
     if (state.hasCommittedVideo && !state.candidateSlot) detachVideoForTune();
     beginTuning(source.mode === 'channel-hls' ? 'Joining live channel…' : 'Loading ' + program.title + '…');
     state.pendingJoin = true;
+    state.frameProbeAttempts = 0;
     state.hlsSeekPending = false;
     state.activeSource = source;
     state.playToken += 1;
     if (!window.ToastTVPlaybackPolicy.loadMediaElement(tuneVideo(), source.url)) handleMediaError();
     if (state.tuneMetrics && !state.tuneMetrics.attachedAt) state.tuneMetrics.attachedAt = Date.now();
+    /* Native HLS can fail without emitting canplay, waiting, or error. Start
+       the same bounded decoder proof from attachment rather than relying on a
+       media event to arm it. */
+    if (source.mode === 'channel-hls') stabilizeTuning();
   }
 
   function joinLive() {
@@ -2639,6 +3053,10 @@
   }
 
   function stabilizeTuning() {
+    if (state.tunerInPlaceSwitch) {
+      probeInPlaceStableTunerHandoff(state.tunerInPlaceSwitch);
+      return;
+    }
     if (tuningTimer) return;
     setPlayerStatus('Locking onto live broadcast…');
     var generation = state.tuneGeneration;
@@ -2659,7 +3077,25 @@
          identity proof. A hard live-edge seek reduces latency when LG exposes a
          seekable range, but must remain best-effort on models that do not. */
       if (state.hardLiveEdgePending) seekHlsLiveEdge(true);
-      if (!window.ToastTVPlaybackPolicy.isPlaybackStable(video)) return;
+      if (state.hlsSeekPending || video.seeking) {
+        state.frameProbeAttempts += 1;
+        if (state.frameProbeAttempts >= TUNING_PROBE_LIMIT) {
+          handleMediaError();
+          return;
+        }
+        window.setTimeout(stabilizeTuning, TUNING_STABLE_MS);
+        return;
+      }
+      if (!window.ToastTVPlaybackPolicy.isPlaybackStable(video)) {
+        state.frameProbeAttempts += 1;
+        setPlayerStatus('Tuning — waiting for the decoder…');
+        if (state.frameProbeAttempts >= TUNING_PROBE_LIMIT) {
+          handleMediaError();
+          return;
+        }
+        window.setTimeout(stabilizeTuning, TUNING_STABLE_MS);
+        return;
+      }
       var headroom = playbackHeadroomSeconds(video);
       if ((Number(video.currentTime) || 0) <= sampledTime + 0.03 ||
           (headroom !== null && headroom < MIN_READY_BUFFER_SECONDS)) {
@@ -2667,7 +3103,7 @@
         setPlayerStatus(headroom !== null && headroom < MIN_READY_BUFFER_SECONDS
           ? 'Tuning — building a stable live buffer…'
           : 'Tuning — waiting for the first frame…');
-        if (state.frameProbeAttempts >= 12) {
+        if (state.frameProbeAttempts >= TUNING_PROBE_LIMIT) {
           handleMediaError();
           return;
         }
@@ -2702,6 +3138,7 @@
       state.previousTune = null;
       elements.playerScreen.classList.remove('is-tuning');
       elements.playerScreen.classList.add('has-video');
+      clearTuningFreezeFrame();
       renderProgramInfo();
       updateChannelOsdProgram(state.currentNow && state.currentNow.program ? state.currentNow.program.title : 'Live');
       scheduleChannelOsdHide();
@@ -2836,6 +3273,30 @@
 
   function handleMediaError() {
     if (state.view !== 'player') return;
+    if (state.tunerInPlaceSwitch && state.previousTune && state.tuner) {
+      var restoreChannelId = state.tunerRollbackChannelId || state.previousTune.channelId;
+      captureTuningFreezeFrame();
+      clearInPlaceStableTunerProbe();
+      rollbackAcceptedStableTunerTune(
+        restoreChannelId,
+        'The new channel did not cross cleanly. The previous channel is being restored.'
+      );
+      return;
+    }
+    var stableRestoreChannelId = state.previousTune &&
+      (state.previousTune.tunerChannelId || state.tunerRollbackChannelId);
+    if (state.tuning && state.previousTune && state.candidateChannelId &&
+        stableRestoreChannelId && state.candidateChannelId !== stableRestoreChannelId &&
+        state.tuner && state.activeSource &&
+        state.activeSource.tunerSessionId === state.tuner.sessionId) {
+      captureTuningFreezeFrame();
+      clearInPlaceStableTunerProbe();
+      rollbackAcceptedStableTunerTune(
+        stableRestoreChannelId,
+        'The switched channel could not start. The previous channel is being restored.'
+      );
+      return;
+    }
     if (state.activeSource && state.activeSource.tunerSessionId &&
         (!state.currentNow || !state.currentNow.program)) {
       state.tunerNeedsRecovery = true;
@@ -2999,6 +3460,7 @@
   }
 
   function showOffAir(nextProgram) {
+    clearTuningFreezeFrame();
     var generation = state.tuneGeneration;
     var channel = currentChannel();
     var keepStableTuner = hasActiveStableTunerPlayback();
@@ -3058,6 +3520,7 @@
       }
       return;
     }
+    clearTuningFreezeFrame();
     state.pendingJoin = false;
     state.playToken += 1;
     elements.playbackErrorTitle.textContent = title;
@@ -3698,6 +4161,7 @@
     var stayInBrowser = state.view === 'channels';
     var restoreStableTuner = hasAttachedStableTunerSource() &&
       !!(state.requestedChannelId || (state.previousTune && state.previousTune.tunerChannelId));
+    clearInPlaceStableTunerProbe();
     state.tuneGeneration += 1;
     if (zapTimer) window.clearTimeout(zapTimer);
     zapTimer = null;
@@ -3751,7 +4215,10 @@
     var restoreStableTuner = hasAttachedStableTunerSource() &&
       !!(state.requestedChannelId || (state.previousTune && state.previousTune.tunerChannelId));
     if (state.view === 'boot') cancelStartupWork();
-    else state.tuneGeneration += 1;
+    else {
+      clearInPlaceStableTunerProbe();
+      state.tuneGeneration += 1;
+    }
     state.requestedChannelId = null;
     state.requestedChannelIndex = null;
     if (restoreStableTuner) {
@@ -4200,6 +4667,7 @@
   }
 
   function detachVideoForTune() {
+    captureTuningFreezeFrame();
     state.pendingJoin = false;
     state.playToken += 1;
     state.candidateSlot = state.videoSlot === 'A' ? 'B' : 'A';
@@ -4218,6 +4686,8 @@
   }
 
   function abandonCandidateTune() {
+    /* A rapid replacement zap reuses the last outgoing freeze frame. Clearing
+       it here would flash the branded startup backdrop between key presses. */
     clearTuningTimer();
     clearLiveRetryTimer();
     clearBufferingTimers();
@@ -4236,7 +4706,11 @@
   }
 
   function rollbackCandidateTune(restoredTuner) {
-    if (!state.candidateSlot && !state.previousTune) return state.hasCommittedVideo;
+    clearInPlaceStableTunerProbe();
+    if (!state.candidateSlot && !state.previousTune) {
+      clearTuningFreezeFrame();
+      return state.hasCommittedVideo;
+    }
     clearTuningTimer();
     clearLiveRetryTimer();
     if (state.candidateSlot) window.ToastTVPlaybackPolicy.resetMediaElement(videoForSlot(state.candidateSlot));
@@ -4261,6 +4735,7 @@
       state.hasCommittedVideo = false;
       resetAllVideos();
       elements.playerScreen.classList.remove('has-video');
+      clearTuningFreezeFrame();
       hideChannelLogo();
       queuePresenceHeartbeat();
       scheduleChannelOsdHide();
@@ -4292,6 +4767,7 @@
     state.programId = state.previousTune.programId;
     state.activeSource = state.previousTune.activeSource;
     state.previousTune = null;
+    if (state.hasCommittedVideo) clearTuningFreezeFrame();
     var channel = currentChannel();
     if (channel) {
       elements.playerChannelName.textContent = channel.name;
@@ -4353,6 +4829,7 @@
   }
 
   function stopPlayback() {
+    clearTuningFreezeFrame();
     state.requestSerial += 1;
     state.pendingJoin = false;
     state.playToken += 1;
