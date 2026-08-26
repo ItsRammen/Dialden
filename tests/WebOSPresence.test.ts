@@ -180,6 +180,53 @@ describe('LG webOS presence telemetry', () => {
     expect(script).toContain("retryLiveStream('Rebuilding the live signal…')")
   })
 
+  test('rejoins live after pause and escalates a healthy tuner with a dead decoder', () => {
+    const script = readFileSync(
+      join(import.meta.dir, '..', 'clients', 'webos', 'app.js'),
+      'utf8'
+    )
+    const resumeBody = script.slice(
+      script.indexOf('function resumeLive('),
+      script.indexOf('function renderProgramInfo(')
+    )
+    const prepareBody = script.slice(
+      script.indexOf('function prepareCurrentChannel('),
+      script.indexOf('function normalizeServerUrl(')
+    )
+    const reproveBody = script.slice(
+      script.indexOf('function reproveStableTunerAfterPrepare('),
+      script.indexOf('function scheduleBufferingRecovery(')
+    )
+    const bufferingBody = script.slice(
+      script.indexOf('function scheduleBufferingRecovery('),
+      script.indexOf('function clearBufferingTimers(')
+    )
+
+    expect(resumeBody).toContain("state.activeSource.mode === 'channel-hls'")
+    expect(resumeBody).toContain('state.hlsSeekPending = false')
+    expect(resumeBody.indexOf('seekHlsLiveEdge()')).toBeLessThan(
+      resumeBody.indexOf('attemptPlay(++state.playToken)')
+    )
+    expect(resumeBody).toContain('window.setTimeout(rejoinAfterResume, 300)')
+    expect(resumeBody).toContain('window.setTimeout(rejoinAfterResume, 900)')
+    expect(resumeBody).toContain('generation !== state.tuneGeneration')
+    expect(resumeBody).toContain('state.activeSource.url !== sourceUrl')
+
+    expect(script).toContain('var BUFFERING_REPROVE_MS = 1200')
+    expect(prepareBody).toContain('function prepareCurrentChannel(onFailure, shouldContinue, onStableReady)')
+    expect(prepareBody).toContain('if (onStableReady) onStableReady(generation)')
+    expect(bufferingBody).toContain('reproveStableTunerAfterPrepare(video, generation, recoverySerial)')
+    expect(reproveBody.indexOf('seekHlsLiveEdge()')).toBeLessThan(
+      reproveBody.indexOf('var sampledTime = Number(video.currentTime) || 0')
+    )
+    expect(reproveBody).toContain('attemptPlay(++state.playToken)')
+    expect(reproveBody).toContain('(Number(video.currentTime) || 0) > sampledTime + 0.25')
+    expect(reproveBody).toContain('state.bufferingPrepareFailures += 1')
+    expect(reproveBody).toContain('state.bufferingPrepareFailures >= 2')
+    expect(reproveBody).toContain("retryLiveStream('Rebuilding the live signal…')")
+    expect(reproveBody).toContain('scheduleBufferingRecovery(video)')
+  })
+
   test('toggles the existing player chrome with OK without opening Now Playing', () => {
     const script = readFileSync(
       join(import.meta.dir, '..', 'clients', 'webos', 'app.js'),
@@ -561,6 +608,233 @@ describe('LG webOS presence telemetry', () => {
       pauseBody.indexOf('state.localPaused = true')
     )
     expect(script).toContain('state.guideCache = {}')
+  })
+
+  test('owns each tuner session with a launch-local epoch and validates reused descriptors', () => {
+    const script = readFileSync(
+      join(import.meta.dir, '..', 'clients', 'webos', 'app.js'),
+      'utf8'
+    )
+    const bootBody = script.slice(
+      script.indexOf('function boot('),
+      script.indexOf('function cacheElements(')
+    )
+    const startBody = script.slice(
+      script.indexOf('function startTelevision('),
+      script.indexOf('function closeLineupSession(')
+    )
+    const closeBody = script.slice(
+      script.indexOf('function closeLineupSession('),
+      script.indexOf('function reopenLineupSession(')
+    )
+    const switchBody = script.slice(
+      script.indexOf('function postStableTunerSwitch('),
+      script.indexOf('function committedStableTunerFeedChannelId(')
+    )
+    const retargetBody = script.slice(
+      script.indexOf('function flushLineupRetarget('),
+      script.indexOf('function attemptPlay(')
+    )
+    const ownerBody = script.slice(
+      script.indexOf('function createSessionOwnerId('),
+      script.indexOf('function getClientName(')
+    )
+
+    expect(bootBody).toContain('state.sessionOwnerId = createSessionOwnerId()')
+    expect(bootBody).toContain('state.sessionOwnerEpoch = nextSessionOwnerEpoch()')
+    expect(bootBody).toContain('writeStorage(STORAGE_SESSION_OWNER, state.sessionOwnerId)')
+    expect(bootBody).toContain('writeStorage(STORAGE_SESSION_OWNER_EPOCH, String(state.sessionOwnerEpoch))')
+    expect(ownerBody).toContain("return 'launch-' + Date.now().toString(36) + '-' + randomPart")
+    expect(ownerBody).toContain('return Math.max(Date.now(), previous + 1)')
+    expect(startBody).toContain(
+      '{ clientId: state.clientId, ownerId: state.sessionOwnerId, ownerEpoch: state.sessionOwnerEpoch, lastChannelId: savedChannelId, lineup: true, tuner: true }'
+    )
+    expect(closeBody).toContain('var closePayload = { clientId: state.clientId, ownerId: state.sessionOwnerId, ownerEpoch: state.sessionOwnerEpoch }')
+    expect(closeBody).toContain('if (state.tuner) closePayload.sessionId = state.tuner.sessionId')
+    expect(switchBody).toContain("state.serverUrl + '/api/client/v1/session/tune'")
+    expect(switchBody).toContain('ownerId: state.sessionOwnerId')
+    expect(switchBody).toContain('ownerEpoch: state.sessionOwnerEpoch')
+    expect(switchBody).toContain('sessionId: state.tuner.sessionId')
+    expect(switchBody).toContain('requestId: requestId')
+    expect(retargetBody).toContain('ownerId: state.sessionOwnerId')
+    expect(retargetBody).toContain('ownerEpoch: state.sessionOwnerEpoch')
+
+    expect(script).toContain("tunerCapability: 'unknown'")
+    expect(script).toContain("tuner.mode !== 'stable-hls'")
+    expect(script).toContain("!/^[a-f0-9-]{36}$/i.test(tuner.sessionId)")
+    expect(script).toContain('typeof tuner.requestIdFloor')
+    expect(script).toContain('tuner.requestIdFloor > 9007199254740991')
+    expect(script).toContain('state.tunerRequestSerial = Math.max(state.tunerRequestSerial, tuner.requestIdFloor)')
+    expect(script).toMatch(/state\.tunerRequestSerial = window\.ToastTVPlaybackPolicy\.nextTunerRequestId\([\s\S]{0,180}var requestId = state\.tunerRequestSerial;/)
+    expect(script).toContain('tuner.sessionId !== state.tuner.sessionId')
+    expect(script).toContain('tuner.manifestUrl !== state.tuner.manifestUrl')
+  })
+
+  test('keeps tuner source attachment separate from proven playback during zaps and rollback', () => {
+    const script = readFileSync(
+      join(import.meta.dir, '..', 'clients', 'webos', 'app.js'),
+      'utf8'
+    )
+    const tuneSelectionBody = script.slice(
+      script.indexOf('function tuneChannel('),
+      script.indexOf('function openStableTunerForChannel(')
+    )
+    const stableTuneBody = script.slice(
+      script.indexOf('function tuneStableTunerChannel('),
+      script.indexOf('function resolveStableTunerNow(')
+    )
+    const stableCommitBody = script.slice(
+      script.indexOf('function commitStableTunerChannel('),
+      script.indexOf('function recoverRejectedStableTunerTune(')
+    )
+    const stableRestoreBody = script.slice(
+      script.indexOf('function restoreCommittedStableTuner('),
+      script.indexOf('function showChannelStartupFailure(')
+    )
+    const ensureBody = script.slice(
+      script.indexOf('function ensureAttachedStableTunerPlayback('),
+      script.indexOf('function postStableTunerSwitch(')
+    )
+    const metadataSyncBody = script.slice(
+      script.indexOf('function scheduleStableTunerMetadataSync('),
+      script.indexOf('function tuneSessionUrl(')
+    )
+    const cancelBody = script.slice(
+      script.indexOf('function cancelPendingChannelChange('),
+      script.indexOf('function openChannelBrowser(')
+    )
+    const reconcileBody = script.slice(
+      script.indexOf('function reconcileChannelList('),
+      script.indexOf('function invalidateRemovedCommittedPlayback(')
+    )
+
+    expect(tuneSelectionBody).toContain(
+      'if (state.tuner && (hasAttachedStableTunerSource() || !state.hasCommittedVideo))'
+    )
+    expect(script).toContain('if (hasAttachedStableTunerSource())')
+    expect(cancelBody).toContain('var restoreStableTuner = hasAttachedStableTunerSource()')
+    expect(reconcileBody).toContain('var restoreStableTuner = hasAttachedStableTunerSource()')
+
+    expect(stableTuneBody).toContain('var previousChannelId = committedStableTunerFeedChannelId()')
+    expect(stableTuneBody).toContain('postStableTunerSwitch(channelId, function')
+    expect(stableTuneBody).toContain("data.status !== 'ready'")
+    expect(stableTuneBody).toContain('stableTunerResponseMatches(data, channelId)')
+    expect(stableTuneBody).toContain('resolveStableTunerNow(')
+    expect(stableCommitBody).toContain('var tunerWasAttached = hasAttachedStableTunerSource()')
+    expect(stableCommitBody).toContain('var tunerWasProven = hasActiveStableTunerPlayback()')
+    expect(stableCommitBody).toContain('does not expose the loaded')
+    expect(stableCommitBody).toContain('server-authored timed marker')
+    expect(stableCommitBody).not.toContain('requestVideoFrameCallback')
+    expect(stableCommitBody).toContain('applyNowResult(now, timing, false)')
+    expect(stableCommitBody).toContain("ensureAttachedStableTunerPlayback('Locking onto the switched channel…')")
+    expect(stableCommitBody).toContain('scheduleStableTunerLiveEdgeSync(')
+    expect(stableCommitBody).toContain("tunerSwitched && typeof now.branding === 'undefined'")
+    expect(stableCommitBody).toContain('scheduleStableTunerMetadataSync(')
+    expect(stableCommitBody).not.toContain('detachVideoForTune()')
+    expect(stableCommitBody).not.toContain('resetMediaElement(')
+    expect(stableCommitBody).not.toContain('loadMediaElement(')
+    expect(stableCommitBody).not.toContain('firstFrameAt = Date.now()')
+    expect(ensureBody).toContain('state.hasCommittedVideo = false')
+    expect(ensureBody).toContain('video.muted = true')
+    expect(ensureBody.indexOf('video.muted = true')).toBeLessThan(
+      ensureBody.indexOf('state.hasCommittedVideo = false')
+    )
+    expect(ensureBody).toContain("beginTuning(message || 'Locking onto the live channel…')")
+    expect(ensureBody).toContain('stabilizeTuning()')
+    expect(ensureBody).not.toContain('loadMediaElement(')
+    expect(metadataSyncBody).toContain('generation !== state.tuneGeneration')
+    expect(metadataSyncBody).toContain('state.tuner.sessionId !== sessionId')
+    expect(metadataSyncBody).toContain('state.committedChannelId !== channelId')
+    expect(metadataSyncBody).toContain('syncNow(false)')
+    expect(metadataSyncBody).not.toContain('loadMediaElement(')
+    expect(script).toContain('function committedStableTunerFeedChannelId()')
+    expect(script).toContain('state.currentNow && state.currentNow.program && state.committedChannelId')
+    expect(stableRestoreBody).toContain('var channelId = committedStableTunerFeedChannelId()')
+    expect(stableCommitBody).toContain(
+      "rollbackAcceptedStableTunerTune(committedStableTunerFeedChannelId(), 'That channel is no longer available.')"
+    )
+    expect(script).toContain('source.url = source.tunerSessionId ? baseStreamUrl : tuneSessionUrl(baseStreamUrl)')
+    expect(script).toContain('stableSource=true sourceReloaded=false')
+  })
+
+  test('reconciles off-air programming and recovers a lost or incompatible tuner safely', () => {
+    const script = readFileSync(
+      join(import.meta.dir, '..', 'clients', 'webos', 'app.js'),
+      'utf8'
+    )
+    const syncBody = script.slice(
+      script.indexOf('function syncNow('),
+      script.indexOf('function applyNowResult(')
+    )
+    const applyBody = script.slice(
+      script.indexOf('function applyNowResult('),
+      script.indexOf('function loadProgram(')
+    )
+    const recoveryBody = script.slice(
+      script.indexOf('function recoverStableTunerPlayback('),
+      script.indexOf('function prepareChannel(')
+    )
+    const reopenBody = script.slice(
+      script.indexOf('function reopenLineupSession('),
+      script.indexOf('function stableTunerFromResponse(')
+    )
+    const disableBody = script.slice(
+      script.indexOf('function disableStableTunerAndReload('),
+      script.indexOf('function recoverStableTunerPlayback(')
+    )
+    const offAirTuneBody = script.slice(
+      script.indexOf('function resolveStableTunerOffAir('),
+      script.indexOf('function tuneStableTunerChannel(')
+    )
+    const offAirBody = script.slice(
+      script.indexOf('function showOffAir('),
+      script.indexOf('function hideOffAir(')
+    )
+    const mediaErrorBody = script.slice(
+      script.indexOf('function handleMediaError('),
+      script.indexOf('function retryPlayback(')
+    )
+
+    expect(offAirTuneBody).not.toContain('postStableTunerSwitch(')
+    expect(offAirTuneBody).toContain('createOfflineNowResult(state.channels[index])')
+    expect(offAirTuneBody).toContain('null, false')
+    expect(offAirBody).toContain('var keepStableTuner = hasActiveStableTunerPlayback()')
+    expect(offAirBody).toContain('activeVideo().muted = true')
+    expect(offAirBody).toContain('state.hasCommittedVideo = keepStableTuner')
+    expect(script).toContain('return state.tuner.channelId')
+    expect(syncBody).toContain('data.program && state.tuner && state.tuner.channelId !== channel.id')
+    expect(syncBody).toContain('data.program && state.tuner && state.tunerNeedsRecovery')
+    expect(syncBody.indexOf('state.tunerNeedsRecovery')).toBeLessThan(
+      syncBody.indexOf('applyNowResult(data, timing, forceReload)')
+    )
+    expect(syncBody).toContain('tuneStableTunerChannel(channel.id, generation, false)')
+    expect(syncBody.indexOf('tuneStableTunerChannel(channel.id, generation, false)')).toBeLessThan(
+      syncBody.indexOf('applyNowResult(data, timing, forceReload)')
+    )
+    expect(applyBody).toContain("ensureAttachedStableTunerPlayback('Programming is starting…')")
+
+    expect(recoveryBody).toContain('state.tunerRecoveryInFlight = true')
+    expect(recoveryBody).toContain('if (!manifestError)')
+    expect(recoveryBody).toContain('ownerId: state.sessionOwnerId')
+    expect(recoveryBody).toContain('ownerEpoch: state.sessionOwnerEpoch')
+    expect(recoveryBody).toContain('lastChannelId: channelId')
+    expect(recoveryBody).toContain('setStableTuner(reopened)')
+    expect(recoveryBody).toContain('syncNow(true)')
+    expect(reopenBody).toContain('var generation = state.tuneGeneration')
+    expect(reopenBody).toContain('generation !== state.tuneGeneration')
+    expect(reopenBody.indexOf('generation !== state.tuneGeneration')).toBeLessThan(
+      reopenBody.indexOf('state.tuner = null')
+    )
+    expect(disableBody).toContain("state.tunerCapability = incompatible ? 'incompatible' : 'unavailable'")
+    expect(disableBody).toContain('ownerId: state.sessionOwnerId')
+    expect(disableBody).toContain('ownerEpoch: state.sessionOwnerEpoch')
+    expect(disableBody).toContain('tunerOnly: true')
+    expect(mediaErrorBody).toContain('state.activeSource.tunerSessionId')
+    expect(mediaErrorBody).toContain('state.tunerNeedsRecovery = true')
+    expect(mediaErrorBody.indexOf('state.tunerNeedsRecovery = true')).toBeLessThan(
+      mediaErrorBody.indexOf('recoverStableTunerPlayback()')
+    )
+    expect(script).toContain('seekIfCurrent();')
   })
 
   test('lets webOS Back close the EPG before leaving live TV and animates guide movement', () => {

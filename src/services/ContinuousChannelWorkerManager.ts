@@ -61,7 +61,7 @@ export interface ChannelWorkerFiles {
   sourceExists(path: string): Promise<boolean> | boolean
   /** Remove orphaned/expired output while preserving the active rolling window. */
   cleanupOutput(directory: string): Promise<void> | void
-  /** Wait until this FFmpeg generation has emitted enough fresh live-edge buffer. */
+  /** Wait for a fresh playlist whose complete entries reference usable segments. */
   waitForFreshSegment?(
     directory: string,
     minimumModifiedAt: number,
@@ -130,6 +130,16 @@ export interface ContinuousChannelWorkerState {
   readonly lastError?: string
 }
 
+/** Only these settled states have a validated, actively published HLS output. */
+export function isStreamableChannelWorkerState(
+  state: Pick<ContinuousChannelWorkerState, 'status' | 'transcoding'>
+): boolean {
+  return (
+    state.transcoding === true &&
+    (state.status === 'live' || state.status === 'idle')
+  )
+}
+
 export interface ContinuousChannelWorkerManagerOptions {
   readonly outputRoot: string
   readonly idleTimeoutMs?: number
@@ -140,6 +150,9 @@ export interface ContinuousChannelWorkerManagerOptions {
   readonly warmLeaseTtlMs?: number
   /** How long a session lease survives without a heartbeat refresh. */
   readonly sessionLeaseTtlMs?: number
+  readonly maximumViewerLeasesPerChannel?: number
+  readonly maximumWarmLeasesPerChannel?: number
+  readonly maximumSessionLeasesPerChannel?: number
   readonly profile?: Partial<ContinuousHlsProfile>
 }
 
@@ -189,6 +202,9 @@ export class ContinuousChannelWorkerManager {
   private readonly maximumWarmChannels: number
   private readonly warmLeaseTtlMs: number
   private readonly sessionLeaseTtlMs: number
+  private readonly maximumViewerLeasesPerChannel: number
+  private readonly maximumWarmLeasesPerChannel: number
+  private readonly maximumSessionLeasesPerChannel: number
 
   constructor(
     private readonly timeline: ChannelTimelineResolver,
@@ -203,6 +219,15 @@ export class ContinuousChannelWorkerManager {
     this.maximumWarmChannels = options.maximumWarmChannels ?? 2
     this.warmLeaseTtlMs = options.warmLeaseTtlMs ?? 30_000
     this.sessionLeaseTtlMs = options.sessionLeaseTtlMs ?? 180_000
+    this.maximumViewerLeasesPerChannel =
+      options.maximumViewerLeasesPerChannel ?? 128
+    this.maximumWarmLeasesPerChannel =
+      options.maximumWarmLeasesPerChannel ?? 64
+    this.maximumSessionLeasesPerChannel =
+      // At the declared 64-TV capacity a popular channel can carry one
+      // lineup hold, one durable tuner hold and one in-flight candidate hold
+      // per TV. Keep the defensive worker cap above that worst-case 192.
+      options.maximumSessionLeasesPerChannel ?? 256
     if (this.idleTimeoutMs < 10_000 || this.idleTimeoutMs > 600_000) {
       throw new Error('Channel worker idle timeout must be between 10 seconds and 10 minutes')
     }
@@ -220,6 +245,15 @@ export class ContinuousChannelWorkerManager {
     }
     if (this.sessionLeaseTtlMs < 30_000 || this.sessionLeaseTtlMs > 600_000) {
       throw new Error('Channel session lease TTL must be between 30 seconds and 10 minutes')
+    }
+    for (const [label, value] of [
+      ['viewer', this.maximumViewerLeasesPerChannel],
+      ['warm', this.maximumWarmLeasesPerChannel],
+      ['session', this.maximumSessionLeasesPerChannel],
+    ] as const) {
+      if (!Number.isSafeInteger(value) || value < 1 || value > 10_000) {
+        throw new Error(`Channel ${label} lease capacity is invalid`)
+      }
     }
     this.profile = { ...DEFAULT_PROFILE, ...options.profile }
   }
@@ -262,6 +296,9 @@ export class ContinuousChannelWorkerManager {
     }
     const record = this.record(channelId)
     const existing = record.leases.get(clientId)
+    if (!existing && record.leases.size >= this.maximumViewerLeasesPerChannel) {
+      throw new Error('Channel viewer lease capacity is full')
+    }
     if (existing) this.clock.clearTimeout(existing.timer)
     const expiresAt = this.clock.now().getTime() + this.clientLeaseTtlMs
     const timer = this.clock.setTimeout(() => this.expireLease(record, clientId, expiresAt), this.clientLeaseTtlMs)
@@ -309,6 +346,12 @@ export class ContinuousChannelWorkerManager {
       throw new Error('Client ID is not a safe session lease identifier')
     }
     const record = this.record(channelId)
+    if (
+      !record.sessionLeases.has(clientId) &&
+      record.sessionLeases.size >= this.maximumSessionLeasesPerChannel
+    ) {
+      throw new Error('Channel session lease capacity is full')
+    }
     this.renewSessionLease(record, clientId)
     record.state = { ...record.state, idleSince: undefined }
     if (record.idleTimer !== undefined) {
@@ -436,6 +479,16 @@ export class ContinuousChannelWorkerManager {
     }
     await Promise.all(released)
     if (this.maximumWarmChannels === 0) return []
+
+    for (const channelId of desired) {
+      const record = this.record(channelId)
+      if (
+        !record.warmLeases.has(clientId) &&
+        record.warmLeases.size >= this.maximumWarmLeasesPerChannel
+      ) {
+        throw new Error('Channel warm lease capacity is full')
+      }
+    }
 
     const desiredRecords: WorkerRecord[] = []
     for (const channelId of desired) {

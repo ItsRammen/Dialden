@@ -349,6 +349,20 @@ describe('ContinuousChannelWorkerManager', () => {
     expect(f.manager.getState('kids')?.status).toBe('stopped')
   })
 
+  test('the default session cap admits the full lineup, tuner, and candidate budget', async () => {
+    const f = fixture()
+    for (let index = 0; index < 256; index += 1) {
+      await f.manager.holdSession('kids', `lease-${index}`)
+    }
+    expect(f.manager.hasSessionLease('kids', 'lease-255')).toBe(true)
+    await expect(
+      f.manager.holdSession('kids', 'lease-overflow')
+    ).rejects.toThrow('capacity is full')
+    expect((await f.manager.holdSession('kids', 'lease-0')).channelId).toBe(
+      'kids'
+    )
+  })
+
   test('an expired session lease tears the idle lineup down without viewers', async () => {
     const f = fixture({ sessionLeaseTtlMs: 60_000 })
     await f.manager.holdSession('kids', 'tv-1')

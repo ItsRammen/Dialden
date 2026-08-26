@@ -44,6 +44,10 @@ interface FixtureOptions {
   channels?: readonly string[]
   preferredGate?: ReturnType<typeof deferred<void>>
   maximumConcurrentWorkers?: number
+  maximumSessions?: number
+  statuses?: Readonly<
+    Partial<Record<string, ContinuousChannelWorkerState['status']>>
+  >
 }
 
 function fixture(options: FixtureOptions = {}) {
@@ -71,7 +75,9 @@ function fixture(options: FixtureOptions = {}) {
       releases.push({ clientId, channelId })
     },
     getState(channelId: string) {
-      return channels.includes(channelId) ? makeState(channelId, 'live') : null
+      return channels.includes(channelId)
+        ? makeState(channelId, options.statuses?.[channelId] ?? 'live')
+        : null
     },
   }
   const service = new LineupSessionService(workers, () => channels, {
@@ -80,6 +86,9 @@ function fixture(options: FixtureOptions = {}) {
     ...(options.maximumConcurrentWorkers === undefined
       ? {}
       : { maximumConcurrentWorkers: options.maximumConcurrentWorkers }),
+    ...(options.maximumSessions === undefined
+      ? {}
+      : { maximumSessions: options.maximumSessions }),
     clock,
   })
   return { clock, service, holds, releases, refreshed, setGate(value?: ReturnType<typeof deferred<void>>) { gate = value } }
@@ -94,7 +103,7 @@ function makeState(
     status,
     viewerCount: 0,
     outputUrl: `/api/v1/channels/${channelId}/live/index.m3u8`,
-    transcoding: false,
+    transcoding: status === 'live' || status === 'idle',
     usingFallback: false,
   }
 }
@@ -133,6 +142,18 @@ describe('LineupSessionService', () => {
     const entry = await opening
     expect(resolved).toBe(true)
     expect(entry.ready).toBe(4)
+  })
+
+  test('reports transitioning lineup workers as pending until output settles', async () => {
+    const f = fixture({
+      channels: ['one', 'two'],
+      statuses: { two: 'transitioning' },
+    })
+
+    const entry = await f.service.open('tv-1', 'one')
+
+    expect(entry.ready).toBe(1)
+    expect(entry.pending).toBe(1)
   })
 
   test('deduplicates overlapping opens for the same TV and preferred channel', async () => {
@@ -237,6 +258,140 @@ describe('LineupSessionService', () => {
     await settle()
     // Only the preferred channel ever received its hold before close.
     expect(f.holds).toHaveLength(1)
+  })
+
+  test('uses owner-specific leases and ignores a close from the old launch', async () => {
+    const f = fixture({ maximumConcurrentWorkers: 1 })
+    await f.service.open('tv-1', 'one', 'launch-old')
+    await f.service.open('tv-1', 'two', 'launch-new')
+
+    expect(f.holds.map((hold) => hold.clientId)).toHaveLength(2)
+    expect(f.holds[0]!.clientId).toStartWith('lineup:')
+    expect(f.holds[1]!.clientId).toStartWith('lineup:')
+    expect(f.holds[0]!.clientId).not.toBe(f.holds[1]!.clientId)
+    await f.service.close('tv-1', 'launch-old')
+    expect(f.service.snapshot().totalSessions).toBe(1)
+    expect(f.service.refresh('tv-1')).toBe(true)
+    await f.service.close('tv-1', 'launch-new')
+    expect(f.service.snapshot().totalSessions).toBe(0)
+  })
+
+  test('cancels a queued owner open instead of reviving it after close', async () => {
+    const gate = deferred<void>()
+    const f = fixture({ preferredGate: gate, maximumConcurrentWorkers: 1 })
+    const first = f.service.open('tv-1', 'one', 'launch-old')
+    await settle()
+    const queued = f.service.open('tv-1', 'two', 'launch-new')
+    const closing = f.service.close('tv-1', 'launch-new')
+    gate.resolve()
+
+    await expect(first).rejects.toThrow()
+    await expect(queued).rejects.toThrow('superseded')
+    await closing
+    expect(f.service.snapshot().totalSessions).toBe(0)
+    expect(f.service.refresh('tv-1')).toBe(false)
+  })
+
+  test('a stale-owner close cancels only its predecessor and preserves the newer open', async () => {
+    const gate = deferred<void>()
+    const f = fixture({ preferredGate: gate, maximumConcurrentWorkers: 1 })
+    const first = f.service.open('tv-1', 'one', 'launch-old')
+    await settle()
+    const newest = f.service.open('tv-1', 'two', 'launch-new')
+    const staleClose = f.service.close('tv-1', 'launch-old')
+    gate.resolve()
+
+    await expect(first).rejects.toThrow()
+    await expect(newest).resolves.toMatchObject({ clientId: 'tv-1' })
+    await staleClose
+    expect(f.service.snapshot().totalSessions).toBe(1)
+    expect(f.service.refresh('tv-1')).toBe(true)
+    await f.service.close('tv-1', 'launch-new')
+  })
+
+  test('close during replacement release cannot install the pending owner later', async () => {
+    const releaseGate = deferred<void>()
+    const releaseStarted = deferred<void>()
+    let gateReleases = false
+    const releases: string[] = []
+    const service = new LineupSessionService(
+      {
+        holdSession: async (channelId) => makeState(channelId, 'live'),
+        whenReady: async (channelId) => makeState(channelId, 'live'),
+        refreshSession: () => true,
+        async releaseSession(_channelId, leaseId) {
+          releases.push(leaseId)
+          if (gateReleases) {
+            releaseStarted.resolve()
+            await releaseGate.promise
+          }
+        },
+        getState: (channelId) => makeState(channelId, 'live'),
+      },
+      () => ['one', 'two'],
+      { ttlMs: 60_000, staggerDelayMs: 0, maximumConcurrentWorkers: 1 }
+    )
+    await service.open('tv-1', 'one', 'launch-old')
+    gateReleases = true
+    const replacing = service.open('tv-1', 'two', 'launch-new')
+    await releaseStarted.promise
+    const closing = service.close('tv-1', 'launch-new')
+    releaseGate.resolve()
+
+    await expect(replacing).rejects.toThrow('superseded')
+    await closing
+    expect(service.snapshot().totalSessions).toBe(0)
+    expect(releases.some((leaseId) => leaseId.startsWith('lineup:'))).toBe(true)
+  })
+
+  test('caps unique sessions and rejects unsafe IDs before allocating state', async () => {
+    const f = fixture({ maximumSessions: 1, maximumConcurrentWorkers: 1 })
+    await f.service.open('tv-1', 'one', 'launch-one')
+    expect(() => f.service.open('tv-2', 'two', 'launch-two')).toThrow(
+      'capacity is full'
+    )
+    expect(() => f.service.open('unsafe client!', 'one')).toThrow(
+      'not a safe lineup identifier'
+    )
+    expect(f.service.snapshot().totalSessions).toBe(1)
+  })
+
+  test('rolls back the installed record when the preferred worker hold fails', async () => {
+    const service = new LineupSessionService(
+      {
+        holdSession: async () => {
+          throw new Error('session lease capacity is full')
+        },
+        whenReady: async (channelId) => makeState(channelId, 'live'),
+        refreshSession: () => false,
+        releaseSession: async () => {},
+        getState: () => null,
+      },
+      () => ['one'],
+      { ttlMs: 60_000, staggerDelayMs: 0 }
+    )
+
+    await expect(service.open('tv-1', 'one', 'launch-one')).rejects.toThrow(
+      'capacity is full'
+    )
+    expect(service.snapshot().totalSessions).toBe(0)
+    expect(service.refresh('tv-1')).toBe(false)
+  })
+
+  test('an obsolete expiry callback cannot close a refreshed lineup', async () => {
+    const f = fixture({ maximumConcurrentWorkers: 1 })
+    await f.service.open('tv-1', 'one', 'launch-one')
+    const obsolete = f.clock.timers.at(-1)!
+    f.clock.advance(1_000)
+    expect(f.service.refresh('tv-1')).toBe(true)
+
+    obsolete.callback()
+    await settle()
+    expect(f.service.snapshot().totalSessions).toBe(1)
+
+    f.clock.advance(60_001)
+    await settle()
+    expect(f.service.snapshot().totalSessions).toBe(0)
   })
 
   test('rejects configurations without any on-air channel', async () => {

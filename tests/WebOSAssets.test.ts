@@ -15,7 +15,7 @@ describe('LG webOS package assets', () => {
     const manifest = JSON.parse(readFileSync(join(root, 'appinfo.json'), 'utf8'))
     expect(manifest).toMatchObject({
       id: 'com.itsrammen.app.toasttv',
-      version: '0.3.4',
+      version: '0.3.5',
       type: 'web',
       main: 'index.html',
       title: 'ToastTV',
@@ -35,6 +35,21 @@ describe('LG webOS package assets', () => {
   test('uses LG-sized PNG launcher icons', () => {
     expect(pngDimensions('icon.png')).toEqual({ width: 80, height: 80 })
     expect(pngDimensions('largeIcon.png')).toEqual({ width: 130, height: 130 })
+  })
+
+  test('packages the launch-owned stable tuner client without remote playback code', () => {
+    const html = readFileSync(join(root, 'index.html'), 'utf8')
+    const app = readFileSync(join(root, 'app.js'), 'utf8')
+    const policy = readFileSync(join(root, 'playback-policy.js'), 'utf8')
+
+    expect(html.indexOf('src="playback-policy.js"')).toBeLessThan(html.indexOf('src="app.js"'))
+    expect(app).toContain('state.sessionOwnerId = createSessionOwnerId()')
+    expect(app).toContain("mode: 'stable-hls'")
+    expect(app).toContain("state.serverUrl + '/api/client/v1/session/tune'")
+    expect(policy).toContain('function nextTunerRequestId(')
+    expect(html).toContain('id="playerChannelLogo"')
+    expect(app).not.toMatch(/(?:drawImage|getContext\(['"]2d['"]\)|createElement\(['"]canvas['"]\))/)
+    expect(html).not.toMatch(/<(?:script|link)[^>]+(?:src|href)="https?:\/\//i)
   })
 
   test('keeps the client compatible with the Chromium 53 baseline', () => {

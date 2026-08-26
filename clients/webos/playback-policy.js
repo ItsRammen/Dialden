@@ -78,12 +78,21 @@
     return Math.max(0, (Number(program.offsetMs || 0) + elapsedSinceResponseMs - sourceOrigin) / 1000);
   }
 
+  function nextTunerRequestId(current, requestIdFloor) {
+    var currentValue = Number(current);
+    var floorValue = Number(requestIdFloor);
+    if (!isFinite(currentValue) || currentValue < -1) currentValue = -1;
+    if (!isFinite(floorValue) || floorValue < -1) floorValue = -1;
+    return Math.floor(Math.max(currentValue, floorValue)) + 1;
+  }
+
   return {
     appendClientId: appendClientId,
     choose: choose,
     expectedDirectPosition: expectedDirectPosition,
     isPlaybackStable: isPlaybackStable,
     loadMediaElement: loadMediaElement,
+    nextTunerRequestId: nextTunerRequestId,
     resetMediaElement: resetMediaElement,
     resolveUrl: resolveUrl,
     shouldReload: shouldReload

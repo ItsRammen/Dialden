@@ -50,6 +50,9 @@ import { ChannelLogoStore } from './services/ChannelLogoStore'
 import { BunChannelWorkerFiles } from './services/BunChannelWorkerFiles'
 import { ChannelTimelineResolverService } from './services/ChannelTimelineResolverService'
 import { createChannelStreamController } from './controllers/ChannelStreamController'
+import { createVirtualTunerStreamController } from './controllers/VirtualTunerStreamController'
+import { VirtualTunerService } from './services/VirtualTunerService'
+import { BunVirtualTunerFiles } from './services/BunVirtualTunerFiles'
 import { loadRuntimeConfig, type RuntimeConfig } from './config/runtime'
 
 export interface ServerResult {
@@ -193,6 +196,28 @@ export async function createServer(
       ttlMs: 180_000,
       staggerDelayMs: 750,
       maximumConcurrentWorkers: qualityDecision.maximumConcurrentWorkers,
+    }
+  )
+  const virtualTunerFiles = new BunVirtualTunerFiles(
+    getDataPath('streams'),
+    getDataPath('tuner-sessions')
+  )
+  // Tuner sessions are intentionally process-local. A crash cannot run their
+  // normal close path, so remove only validated UUID directories before any
+  // new session can publish into this output root.
+  await virtualTunerFiles.cleanupOrphanSessions()
+  const virtualTuners = new VirtualTunerService(
+    channelWorkers,
+    virtualTunerFiles,
+    () =>
+      channelService
+        .list()
+        .channels.filter((channel) => channel.enabled && channel.onAir)
+        .map((channel) => channel.id),
+    {
+      ttlMs: 180_000,
+      playlistWindowSegments: 10,
+      retainedSegmentCount: 30,
     }
   )
   const reconcileGeneratedStations = async (): Promise<void> => {
@@ -339,7 +364,10 @@ export async function createServer(
     workers: channelWorkers,
     outputRoot: getDataPath('streams'),
     lineup: lineupSessions,
+    tuners: virtualTuners,
   })
+  const virtualTunerStreamController =
+    createVirtualTunerStreamController(virtualTuners)
 
   const collectionLibraryController = createCollectionLibraryController({
     library: collectionLibraryService,
@@ -388,6 +416,7 @@ export async function createServer(
       // A heartbeat keeps the client's entire lineup alive, not just the
       // watched channel. Unknown sessions (legacy clients) are a no-op.
       lineupSessions.refresh(current.clientId)
+      virtualTuners.refreshByClient(current.clientId)
       const changedChannel = previous?.channelId !== current.channelId
       const usesChannelWorker =
         current.playbackMode === 'transcode' ||
@@ -424,6 +453,7 @@ export async function createServer(
   app.route('/', healthController)
   app.route('/', channelController)
   app.route('/', channelStreamController)
+  app.route('/', virtualTunerStreamController)
   app.route('/', mediaController)
   app.route('/', collectionLibraryController)
   app.route('/', collectionLibraryPageController)

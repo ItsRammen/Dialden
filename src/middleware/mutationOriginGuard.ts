@@ -5,6 +5,7 @@ import {
   CLIENT_CHANNEL_WARM_ROUTE,
   CLIENT_SESSION_CLOSE_ROUTE,
   CLIENT_SESSION_ROUTE,
+  CLIENT_SESSION_TUNE_ROUTE,
 } from '../controllers/ChannelStreamController'
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
@@ -17,6 +18,7 @@ function isCredentiallessClientMutation(path: string): boolean {
     path === CLIENT_CHANNEL_WARM_ROUTE ||
     path === CLIENT_CHANNEL_STARTUP_ROUTE ||
     path === CLIENT_SESSION_ROUTE ||
+    path === CLIENT_SESSION_TUNE_ROUTE ||
     path === CLIENT_SESSION_CLOSE_ROUTE ||
     CLIENT_CHANNEL_PREPARE_PATH.test(path)
   )

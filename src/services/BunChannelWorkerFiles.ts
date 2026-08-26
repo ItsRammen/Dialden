@@ -1,6 +1,17 @@
-import { access, mkdir, readdir, stat, unlink } from 'node:fs/promises'
+import {
+  access,
+  mkdir,
+  readFile,
+  readdir,
+  stat,
+  unlink,
+} from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ChannelWorkerFiles } from './ContinuousChannelWorkerManager'
+import {
+  localChannelSegmentName,
+  parseHlsMediaPlaylist,
+} from './HlsPlaylistReadiness'
 
 /** Filesystem adapter for channel output. FFmpeg handles active-window deletes. */
 export class BunChannelWorkerFiles implements ChannelWorkerFiles {
@@ -47,34 +58,54 @@ export class BunChannelWorkerFiles implements ChannelWorkerFiles {
     isCurrent?: () => boolean,
     minimumSegmentCount = 2
   ): Promise<void> {
+    const playlistPath = join(directory, 'index.m3u8')
+    const requiredSegmentCount = Math.max(1, minimumSegmentCount)
     for (let attempt = 0; attempt < 240; attempt += 1) {
       if (isCurrent && !isCurrent()) return
       try {
-        const entries = await readdir(directory, { withFileTypes: true })
+        const playlistInfo = await stat(playlistPath)
+        if (
+          playlistInfo.size <= 0 ||
+          playlistInfo.mtimeMs < minimumModifiedAt
+        ) {
+          throw new Error('Playlist is not fresh yet')
+        }
+        const playlist = parseHlsMediaPlaylist(
+          await readFile(playlistPath, 'utf8')
+        )
+        if (!playlist.wellFormed) {
+          throw new Error('Playlist rewrite is incomplete')
+        }
         let freshSegmentCount = 0
-        for (const entry of entries) {
-          if (!entry.isFile() || !/^segment-\d{13}\.ts$/i.test(entry.name)) {
-            continue
-          }
+        const seen = new Set<string>()
+        for (const uri of playlist.segmentUris) {
+          const name = localChannelSegmentName(uri)
+          if (!name || seen.has(name)) continue
+          seen.add(name)
           try {
+            const segmentInfo = await stat(join(directory, name))
             if (
-              (await stat(join(directory, entry.name))).mtimeMs >=
-              minimumModifiedAt
+              segmentInfo.isFile() &&
+              segmentInfo.size > 0 &&
+              segmentInfo.mtimeMs >= minimumModifiedAt
             ) {
               freshSegmentCount += 1
             }
           } catch {
-            // FFmpeg may rotate the segment between readdir and stat.
+            // FFmpeg may rotate a referenced segment between read and stat.
           }
         }
-        if (freshSegmentCount >= Math.max(1, minimumSegmentCount)) {
+        if (freshSegmentCount >= requiredSegmentCount) {
           return
         }
       } catch {
-        // The output directory or first atomic segment may not exist yet.
+        // The playlist, its complete rewrite, or referenced segments may not
+        // exist yet.
       }
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
-    throw new Error('Channel encoder did not produce enough fresh segments in time')
+    throw new Error(
+      'Channel encoder did not publish a complete playlist with enough fresh segments in time'
+    )
   }
 }

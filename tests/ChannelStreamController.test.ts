@@ -17,11 +17,15 @@ describe('ChannelStreamController', () => {
     mkdirSync(join(outputRoot, 'kids', 'live'), { recursive: true })
     writeFileSync(
       join(outputRoot, 'kids', 'live', 'index.m3u8'),
-      '#EXTM3U\n#EXT-X-VERSION:6\n'
+      '#EXTM3U\n#EXT-X-VERSION:6\n#EXTINF:1.0,\nsegment-0000000000001.ts\n#EXTINF:1.0,\nsegment-0000000000002.ts\n'
     )
     writeFileSync(
       join(outputRoot, 'kids', 'live', 'segment-0000000000001.ts'),
       'segment'
+    )
+    writeFileSync(
+      join(outputRoot, 'kids', 'live', 'segment-0000000000002.ts'),
+      'segment-two'
     )
     touches = []
     warms = []
@@ -30,7 +34,24 @@ describe('ChannelStreamController', () => {
 
   afterEach(() => rmSync(outputRoot, { recursive: true, force: true }))
 
-  function app(options: { startedAt?: string; workerError?: string; lineup?: boolean } = {}) {
+  function app(options: {
+    startedAt?: string
+    workerError?: string
+    workerStatus?:
+      | 'starting'
+      | 'live'
+      | 'transitioning'
+      | 'idle'
+      | 'error'
+      | 'stopped'
+    transcoding?: boolean
+    lineup?: boolean
+  } = {}) {
+    const workerStatus =
+      options.workerStatus ?? (options.workerError ? 'error' : 'live')
+    const transcoding =
+      options.transcoding ??
+      (workerStatus === 'live' || workerStatus === 'idle')
     return createChannelStreamController({
       channels: {
         list: () => ({
@@ -69,16 +90,20 @@ describe('ChannelStreamController', () => {
           touches.push({ channelId, clientId })
           return {
             ...(options.startedAt ? { startedAt: options.startedAt } : {}),
+            status: workerStatus,
+            transcoding,
+            ...(options.workerError ? { lastError: options.workerError } : {}),
           } as never
         },
         warm: async (channelIds, clientId) => {
           warms.push({ channelIds, clientId })
           return channelIds.map((channelId) => ({ channelId })) as never
         },
-        getState: () =>
-          options.workerError
-            ? ({ status: 'error', lastError: options.workerError } as never)
-            : null,
+        getState: () => ({
+          status: workerStatus,
+          transcoding,
+          ...(options.workerError ? { lastError: options.workerError } : {}),
+        } as never),
       },
       outputRoot,
       ...(options.lineup
@@ -146,7 +171,8 @@ describe('ChannelStreamController', () => {
   })
 
   test('playlist augmentation is idempotent and rejects torn text', () => {
-    const wellFormed = '#EXTM3U\n#EXT-X-VERSION:6\n#EXTINF:1.0,\nseg.ts\n'
+    const wellFormed =
+      '#EXTM3U\n#EXT-X-VERSION:6\n#EXTINF:1.0,\nsegment-0000000000001.ts\n'
     const once = augmentLivePlaylist(wellFormed)
     expect(once).toContain('#EXT-X-START:TIME-OFFSET=-2.0,PRECISE=YES')
     expect(augmentLivePlaylist(once)).toBe(once)
@@ -157,6 +183,16 @@ describe('ChannelStreamController', () => {
     const torn = 'EXTM3U without header'
     expect(isWellFormedPlaylist(torn)).toBe(false)
     expect(augmentLivePlaylist(torn)).toBe(torn)
+    expect(
+      isWellFormedPlaylist(
+        '#EXTM3U\n#EXTINF:not-a-duration,\nsegment-0000000000001.ts\n'
+      )
+    ).toBe(false)
+    expect(
+      isWellFormedPlaylist(
+        '#EXTM3U\n#EXTINF:0,\nsegment-0000000000001.ts\n'
+      )
+    ).toBe(false)
   })
 
   test('opens a lineup session on the last channel and reports spin-up progress', async () => {
@@ -326,6 +362,38 @@ describe('ChannelStreamController', () => {
     expect(touches).toEqual([{ channelId: 'cartoons', clientId: 'tv' }])
   })
 
+  test('does not report starting or transitioning workers as prepared', async () => {
+    for (const workerStatus of ['starting', 'transitioning'] as const) {
+      const response = await app({ workerStatus }).request(
+        '/api/client/v1/channels/cartoons/prepare',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ clientId: `tv-${workerStatus}` }),
+        }
+      )
+
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({
+        channelId: 'cartoons',
+        status: 'pending',
+      })
+    }
+  })
+
+  test('requires an active publisher even when a worker status says live', async () => {
+    const response = await app({
+      workerStatus: 'live',
+      transcoding: false,
+    }).request('/api/client/v1/channels/cartoons/prepare', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'tv' }),
+    })
+
+    expect(await response.json()).toMatchObject({ status: 'pending' })
+  })
+
   test('rejects oversized adjacent-channel warm requests', async () => {
     const response = await app().request('/api/client/v1/channels/warm', {
       method: 'POST',
@@ -338,6 +406,24 @@ describe('ChannelStreamController', () => {
 
     expect(response.status).toBe(400)
     expect(warms).toEqual([])
+  })
+
+  test('stops reading an oversized client body when content length is absent', async () => {
+    const request = new Request(
+      'http://localhost/api/client/v1/channels/warm',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ padding: 'x'.repeat(8_192) }),
+      }
+    )
+    expect(request.headers.get('content-length')).toBeNull()
+
+    const response = await app().request(request)
+    expect(response.status).toBe(413)
+    expect(await response.json()).toMatchObject({
+      error: 'Request body is too large',
+    })
   })
 
   test('allows only the dedicated credentialless client channel mutations across origins', async () => {
@@ -418,6 +504,23 @@ describe('ChannelStreamController', () => {
 
     expect(response.status).toBe(503)
     expect(await response.json()).toEqual({ error: 'encoder exited early' })
+  })
+
+  test('returns 503 when a torn playlist is still incomplete after retry', async () => {
+    writeFileSync(
+      join(outputRoot, 'kids', 'live', 'index.m3u8'),
+      '#EXTM3U\n#EXT-X-VERSION:6\n#EXTINF:1.0,\nsegment-0000000000001.ts\n#EXTINF:1.0,\n'
+    )
+
+    const response = await app().request(
+      '/api/v1/channels/kids/live/index.m3u8?clientId=tv'
+    )
+
+    expect(response.status).toBe(503)
+    expect(response.headers.get('Cache-Control')).toBe('no-store')
+    expect(await response.json()).toEqual({
+      error: 'Channel playlist is incomplete; retry when the live edge is ready',
+    })
   })
 
   test('stops serving playlists and segments as soon as a channel is off air', async () => {

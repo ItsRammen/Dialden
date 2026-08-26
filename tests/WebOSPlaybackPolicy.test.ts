@@ -11,6 +11,7 @@ const policy = require(join(import.meta.dir, '..', 'clients', 'webos', 'playback
   expectedDirectPosition: (program: unknown, elapsedSinceResponseMs: number) => number
   isPlaybackStable: (video: unknown) => boolean
   loadMediaElement: (video: unknown, url: string) => boolean
+  nextTunerRequestId: (current: number, requestIdFloor: number) => number
   resetMediaElement: (video: unknown) => void
 }
 
@@ -136,5 +137,11 @@ describe('LG webOS channel playback policy', () => {
     ).toBe(true)
     expect(policy.isPlaybackStable({ paused: true, readyState: 4 })).toBe(false)
     expect(policy.isPlaybackStable({ paused: false, readyState: 2 })).toBe(false)
+  })
+
+  test('continues tuner request IDs above a reused session floor after an app restart', () => {
+    expect(policy.nextTunerRequestId(0, 87)).toBe(88)
+    expect(policy.nextTunerRequestId(88, 87)).toBe(89)
+    expect(policy.nextTunerRequestId(4, -1)).toBe(5)
   })
 })
