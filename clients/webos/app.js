@@ -12,7 +12,9 @@
   var PRESENCE_INTERVAL_MS = 15000;
   var DRIFT_LIMIT_SECONDS = 8;
   var GUIDE_RENDER_LIMIT = 250;
-  var GUIDE_CACHE_TTL_MS = 60000;
+  var GUIDE_CACHE_TTL_MS = 300000;
+  var GUIDE_PREFETCH_DELAY_MS = 750;
+  var GUIDE_PREFETCH_STAGGER_MS = 300;
   var LIVE_STREAM_RETRY_DELAYS = [300, 750, 1500, 3000, 5000];
   var TUNING_STABLE_MS = 300;
   var MIN_READY_BUFFER_SECONDS = 0.75;
@@ -76,7 +78,7 @@
     tuneMetrics: null,
     guideCache: {},
     guideRequests: {},
-    pendingGuideChannelId: null,
+    guidePrefetchQueue: [],
     bufferingPrepareFailures: 0,
     launchCancelled: false
   };
@@ -101,6 +103,9 @@
   var stallRecoveryTimer = null;
   var bufferingRecoverySerial = 0;
   var guidePreviewTimer = null;
+  var guidePrefetchTimer = null;
+  var guideScrollFrame = null;
+  var catalogRailScrollFrame = null;
 
   document.addEventListener('DOMContentLoaded', boot, false);
 
@@ -136,13 +141,14 @@
       'retryChannelsButton', 'channelGrid', 'emptyChannels', 'homeClock', 'channelCount',
       'channelPreview', 'channelPreviewLogo', 'channelPreviewMonogram', 'channelPreviewNumber',
       'channelPreviewState', 'channelPreviewName', 'channelPreviewProgram', 'channelPreviewEpisode',
-      'channelPreviewTimelineFill', 'channelPreviewTime', 'channelPreviewNext', 'channelWatchButton', 'channelGuideButton',
+      'channelPreviewTimelineFill', 'channelPreviewTime', 'channelPreviewUpcoming', 'channelPreviewNext',
+      'channelPreviewNext2', 'channelPreviewNext3', 'channelGuideButton',
       'serverLabel', 'videoA', 'videoB', 'playerBackdrop', 'playerHeader', 'playerChannelName',
       'playerChannelLogo', 'playerChannelMonogram', 'playerChannelNumber', 'playerStatus', 'playerClock', 'playerInfo', 'playerCollection', 'playerTitle', 'playerEpisode',
       'timelineFill', 'programTimes', 'nextTitle', 'offAirPanel', 'offAirNext',
       'offAirGuideButton', 'offAirChannelsButton',
       'playbackError', 'playbackErrorTitle', 'playbackErrorText',
-      'retryPlaybackButton', 'errorBackButton', 'guideOverlay', 'guideChannelName',
+      'retryPlaybackButton', 'errorBackButton', 'guideOverlay', 'guideContext', 'guideChannelName',
       'catalogRail', 'catalogDays',
       'guideList', 'guideMessage', 'closeGuideButton', 'tuningPanel', 'channelOsd', 'channelOsdNumber',
       'channelOsdName', 'channelOsdProgram', 'tuningChannelName', 'tuningMessage', 'guideClock', 'toast'
@@ -180,9 +186,6 @@
     elements.offAirGuideButton.addEventListener('click', openGuide, false);
     elements.offAirChannelsButton.addEventListener('click', openChannelBrowser, false);
     elements.closeGuideButton.addEventListener('click', goBack, false);
-    elements.channelWatchButton.addEventListener('click', function () {
-      tuneChannel(state.previewChannelIndex, true);
-    }, false);
     elements.channelGuideButton.addEventListener('click', openGuideFromChannelBrowser, false);
     elements.channelGrid.addEventListener('focusin', function (event) {
       var card = event.target && event.target.closest ? event.target.closest('[data-channel-index]') : null;
@@ -377,6 +380,7 @@
 
       if (state.serverUrl && state.serverUrl !== normalized) {
         abortGuideRequestsExcept(null);
+        cancelGuidePrefetch();
         state.clockSamples = [];
         state.clockOffsetMs = 0;
         state.guideCache = {};
@@ -400,12 +404,14 @@
       setSetupMessage('');
       startPresenceHeartbeat();
       startChannelRefresh();
+      var resumeSavedChannel = state.channels.length && !!readStorage(STORAGE_CHANNEL);
+      if (!resumeSavedChannel) scheduleGuidePrefetch(GUIDE_PREFETCH_DELAY_MS);
 
       if (state.setupFromChannels) {
         state.setupFromChannels = false;
         activateView('channels');
         goBack();
-      } else if (state.channels.length && readStorage(STORAGE_CHANNEL)) {
+      } else if (resumeSavedChannel) {
         activateView('boot');
         startTelevision();
       } else {
@@ -509,6 +515,7 @@
     safeReplaceHistory({ view: 'channels' });
     activateView('channels');
     hydrateChannelCards();
+    scheduleGuidePrefetch(100);
     showToast(message || 'The last channel could not start. Choose another channel.');
   }
 
@@ -779,7 +786,7 @@
     button.setAttribute('data-focusable', '');
     button.setAttribute('data-channel-index', String(index));
     button.setAttribute('data-channel-id', channel.id);
-    button.setAttribute('aria-label', 'Channel ' + channelNumber(index) + ', ' + channel.name + '. Watch live.');
+    button.setAttribute('aria-label', 'Channel ' + channelNumber(index) + ', ' + channel.name + '. Press OK to tune.');
     if (index === state.channelIndex) button.classList.add('is-current');
 
     var number = document.createElement('span');
@@ -857,6 +864,7 @@
           renderChannelScheduleCard(channel, state.channelNow[channel.id], true);
         }
       }
+      scheduleGuidePrefetch(100);
     });
   }
 
@@ -876,6 +884,7 @@
     for (index = 0; index < keys.length; index += 1) {
       if (keys[index].slice(0, prefix.length) === prefix) delete state.guideCache[keys[index]];
     }
+    scheduleGuidePrefetch(GUIDE_PREFETCH_DELAY_MS);
   }
 
   function renderChannelScheduleCard(channel, data, stale) {
@@ -943,9 +952,8 @@
     elements.channelPreviewProgram.textContent = 'There is nothing to watch yet';
     elements.channelPreviewEpisode.textContent = 'Add or enable a channel on the ToastTV server, then refresh this screen.';
     elements.channelPreviewTime.textContent = '—';
-    elements.channelPreviewNext.textContent = 'Waiting for a channel lineup';
+    setChannelPreviewUpcoming([], 'Waiting for a channel lineup');
     elements.channelPreviewTimelineFill.style.width = '0%';
-    elements.channelWatchButton.disabled = true;
     elements.channelGuideButton.disabled = true;
   }
 
@@ -962,14 +970,13 @@
       elements.channelPreviewLogo.alt = channel.name + ' logo';
       elements.channelPreviewLogo.src = logoUrl;
     }
-    elements.channelWatchButton.disabled = channel.enabled === false || channel.onAir === false;
     elements.channelGuideButton.disabled = channel.enabled === false;
     if (!data) {
       setChannelCardState(elements.channelPreviewState, 'CHECKING', 'checking');
       elements.channelPreviewProgram.textContent = 'Loading the live schedule…';
       elements.channelPreviewEpisode.textContent = 'Every channel joins at the point already in progress.';
       elements.channelPreviewTime.textContent = '—';
-      elements.channelPreviewNext.textContent = 'Checking the schedule…';
+      renderChannelPreviewUpcoming(channel, data, 'Checking the schedule…');
       elements.channelPreviewTimelineFill.style.width = '0%';
       return;
     }
@@ -978,7 +985,7 @@
       elements.channelPreviewProgram.textContent = 'Schedule unavailable';
       elements.channelPreviewEpisode.textContent = 'ToastTV will check this channel again automatically.';
       elements.channelPreviewTime.textContent = '—';
-      elements.channelPreviewNext.textContent = 'Try refreshing the lineup in a moment.';
+      renderChannelPreviewUpcoming(channel, data, 'Try refreshing the lineup in a moment.');
       elements.channelPreviewTimelineFill.style.width = '0%';
       return;
     }
@@ -987,7 +994,7 @@
       elements.channelPreviewProgram.textContent = 'This channel is off air';
       elements.channelPreviewEpisode.textContent = data.next ? 'Programming resumes at ' + formatTime(data.next.scheduledStart) : 'No later program is scheduled.';
       elements.channelPreviewTime.textContent = '—';
-      elements.channelPreviewNext.textContent = data.next ? data.next.title : 'No later program scheduled';
+      renderChannelPreviewUpcoming(channel, data, 'No later program scheduled');
       elements.channelPreviewTimelineFill.style.width = '0%';
       return;
     }
@@ -995,10 +1002,55 @@
     elements.channelPreviewProgram.textContent = data.program.title;
     elements.channelPreviewEpisode.textContent = programEpisodeText(data.program) || data.program.collectionTitle || 'Live now';
     elements.channelPreviewTime.textContent = formatTime(data.program.scheduledStart) + ' – ' + formatTime(data.program.scheduledEnd);
-    elements.channelPreviewNext.textContent = data.next
-      ? formatTime(data.next.scheduledStart) + '  ' + data.next.title
-      : 'Last show on the schedule';
+    renderChannelPreviewUpcoming(channel, data, 'Last show on the schedule');
     updateChannelPreviewTimeline();
+  }
+
+  function renderChannelPreviewUpcoming(channel, data, fallbackText) {
+    var programs = [];
+    var todayStart = localCatalogDayStart(0).getTime();
+    var cached = channel
+      ? getCachedGuideDay(channel.id, todayStart)
+      : null;
+    var now = Date.now() + state.clockOffsetMs;
+    appendUpcomingPrograms(cached, programs, now);
+    if (cached && programs.length < 3 && channel) {
+      var tomorrowStart = localCatalogDayStart(1).getTime();
+      var tomorrow = getCachedGuideDay(channel.id, tomorrowStart);
+      appendUpcomingPrograms(tomorrow, programs, now);
+      if (!tomorrow && state.view === 'channels') requestGuideDay(channel.id, tomorrowStart);
+    }
+    if (!programs.length && data && data.next) programs.push(data.next);
+    setChannelPreviewUpcoming(programs, fallbackText);
+  }
+
+  function appendUpcomingPrograms(cached, programs, now) {
+    if (cached && isArray(cached.programs)) {
+      var index;
+      for (index = 0; index < cached.programs.length && programs.length < 3; index += 1) {
+        var program = cached.programs[index];
+        var startsAt = Date.parse(program.scheduledStart);
+        if (isFinite(startsAt) && startsAt > now) programs.push(program);
+      }
+    }
+  }
+
+  function setChannelPreviewUpcoming(programs, fallbackText) {
+    var targets = [elements.channelPreviewNext, elements.channelPreviewNext2, elements.channelPreviewNext3];
+    var index;
+    for (index = 0; index < targets.length; index += 1) {
+      var program = programs[index];
+      if (program) {
+        targets[index].textContent = formatTime(program.scheduledStart) + '  ' + program.title;
+        targets[index].classList.remove('hidden');
+      } else if (index === 0) {
+        targets[index].textContent = fallbackText || 'No later program scheduled';
+        targets[index].classList.remove('hidden');
+      } else {
+        targets[index].textContent = '';
+        targets[index].classList.add('hidden');
+      }
+    }
   }
 
   function updateChannelPreviewTimeline() {
@@ -1052,11 +1104,7 @@
     return String(words[0] || 'TV').slice(0, 2).toUpperCase();
   }
 
-  function tuneChannel(index, pushHistory, guideChannelId) {
-    var guideAfterTune = typeof guideChannelId === 'string' ? guideChannelId : null;
-    /* Every tune is a new user intent. An ordinary zap must not inherit a
-       deferred guide request created by an earlier channel-browser action. */
-    state.pendingGuideChannelId = null;
+  function tuneChannel(index, pushHistory) {
     if (!state.channels.length) return;
     if (state.view === 'player' && state.tuning && !state.hasCommittedVideo &&
         !state.previousTune && !state.committedChannelId) {
@@ -1066,10 +1114,7 @@
     var targetIndex = normalizeChannelIndex(index);
     var channel = state.channels[targetIndex];
     if (!channel) return;
-    if (state.requestedChannelId === channel.id) {
-      state.pendingGuideChannelId = guideAfterTune;
-      return;
-    }
+    if (state.requestedChannelId === channel.id) return;
     if (state.view === 'player' && !state.tuning && state.committedChannelId === channel.id) {
       state.channelIndex = targetIndex;
       showChrome();
@@ -1085,12 +1130,16 @@
     var generation = state.tuneGeneration;
     state.requestedChannelIndex = targetIndex;
     state.requestedChannelId = channel.id;
-    state.pendingGuideChannelId = guideAfterTune;
     state.tuneMetrics = { requestedAt: Date.now(), preparedAt: 0, attachedAt: 0, firstFrameAt: 0, channelId: channel.id, src: 'zap' };
     if (isChannelChange) showChannelOsd(targetIndex, 'Tuning…', true);
     if (zapTimer) window.clearTimeout(zapTimer);
     zapTimer = window.setTimeout(function () {
       zapTimer = null;
+      var rememberedNow = state.channelNow[channel.id];
+      if (rememberedNow && isNowResult(rememberedNow) && rememberedNow.program === null) {
+        commitPreparedChannel(channel.id, generation, pushHistory, { data: rememberedNow, timing: null });
+        return;
+      }
       prepareChannel(channel.id, generation, pushHistory);
     }, ZAP_DEBOUNCE_MS);
   }
@@ -1106,7 +1155,8 @@
       function (error, data) {
         if (generation !== state.tuneGeneration || state.requestedChannelId !== channelId) return;
         if (error || !data || data.status !== 'ready') {
-          recoverRejectedTune(index, data && data.error ? data.error : 'That channel could not be tuned. Please try again.');
+          updateChannelOsdProgram('Checking off-air schedule…');
+          resolvePreparedChannel(channelId, generation, pushHistory, false);
           return;
         }
         if (state.tuneMetrics) state.tuneMetrics.preparedAt = Date.now();
@@ -1119,7 +1169,6 @@
   function resolvePreparedChannel(channelId, generation, pushHistory, startup) {
     function rejectPrepared(message) {
       if (startup) {
-        state.pendingGuideChannelId = null;
         state.requestedChannelIndex = null;
         state.requestedChannelId = null;
         showChannelStartupFailure(message);
@@ -1133,6 +1182,15 @@
       function (error, data, timing) {
         if (generation !== state.tuneGeneration || state.requestedChannelId !== channelId) return;
         if (error || !isNowResult(data) || data.channelId !== channelId) {
+          var offlineIndex = findChannelIndex(channelId);
+          if (!startup && offlineIndex >= 0 && state.channels[offlineIndex].enabled !== false &&
+              state.channels[offlineIndex].onAir === false) {
+            commitPreparedChannel(channelId, generation, pushHistory, {
+              data: createOfflineNowResult(state.channels[offlineIndex]),
+              timing: null
+            });
+            return;
+          }
           rejectPrepared('That channel schedule or live source is not ready yet. The current channel was kept playing.');
           return;
         }
@@ -1158,6 +1216,20 @@
         });
       }
     );
+  }
+
+  function createOfflineNowResult(channel) {
+    var serverTimeMs = Date.now() + state.clockOffsetMs;
+    return {
+      channelId: channel.id,
+      serverTime: new Date(serverTimeMs).toISOString(),
+      serverTimeMs: serverTimeMs,
+      timezone: channel.timezone || 'UTC',
+      timelineRevision: 'off-air:' + channel.id,
+      program: null,
+      next: null,
+      branding: null
+    };
   }
 
   function verifyPreparedManifest(url, channelId, generation, attempt, callback) {
@@ -1187,7 +1259,9 @@
   function commitPreparedChannel(channelId, generation, pushHistory, prepared) {
     if (generation !== state.tuneGeneration) return;
     var index = findChannelIndex(channelId);
-    if (index < 0 || state.channels[index].enabled === false || state.channels[index].onAir === false) {
+    var preparedOffAir = prepared && prepared.data && prepared.data.program === null;
+    if (index < 0 || state.channels[index].enabled === false ||
+        (state.channels[index].onAir === false && !preparedOffAir)) {
       recoverRejectedTune(index, 'That channel is no longer available.');
       return;
     }
@@ -1245,7 +1319,6 @@
   }
 
   function recoverRejectedTune(index, message) {
-    state.pendingGuideChannelId = null;
     state.requestedChannelIndex = null;
     state.requestedChannelId = null;
     var restored = rollbackCandidateTune();
@@ -1290,29 +1363,26 @@
     state.channels = channels;
     if (state.requestedChannelId) {
       var requestedIndex = findChannelIndex(state.requestedChannelId);
-      if (requestedIndex < 0 || channels[requestedIndex].enabled === false || channels[requestedIndex].onAir === false) {
+      if (requestedIndex < 0 || channels[requestedIndex].enabled === false) {
         state.tuneGeneration += 1;
         state.requestedChannelId = null;
         state.requestedChannelIndex = null;
-        state.pendingGuideChannelId = null;
         rollbackCandidateTune();
         showToast('The channel you selected left the lineup.');
       }
     }
     if (state.candidateChannelId) {
       var candidateIndex = findChannelIndex(state.candidateChannelId);
-      if (candidateIndex < 0 || channels[candidateIndex].enabled === false || channels[candidateIndex].onAir === false) {
+      if (candidateIndex < 0 || channels[candidateIndex].enabled === false) {
         state.tuneGeneration += 1;
         state.requestedChannelId = null;
         state.requestedChannelIndex = null;
-        state.pendingGuideChannelId = null;
         rollbackCandidateTune();
         showToast('The channel being tuned left the lineup.');
       }
     }
     var committedIndex = committedChannelId ? findChannelIndex(committedChannelId) : -1;
-    var committedAvailable = committedIndex >= 0 &&
-      channels[committedIndex].enabled !== false && channels[committedIndex].onAir !== false;
+    var committedAvailable = committedIndex >= 0 && channels[committedIndex].enabled !== false;
     restoreChannelIndexById(
       state.candidateChannelId || (committedAvailable ? committedChannelId : state.requestedChannelId),
       priorIndex
@@ -1423,7 +1493,7 @@
   function restoreChannelIndexById(channelId, fallbackIndex) {
     var index;
     for (index = 0; index < state.channels.length; index += 1) {
-      if (state.channels[index].id === channelId && state.channels[index].enabled !== false && state.channels[index].onAir !== false) {
+      if (state.channels[index].id === channelId && state.channels[index].enabled !== false) {
         state.channelIndex = index;
         return;
       }
@@ -1689,9 +1759,9 @@
         state.tuneMetrics = null;
       }
       setPlayerStatus('Playing live');
+      scheduleGuidePrefetch(100);
       scheduleChromeHide();
       queuePresenceHeartbeat();
-      openPendingGuideAfterCommit(generation, state.committedChannelId);
       window.setTimeout(function () {
         if (
           generation === state.tuneGeneration &&
@@ -1717,23 +1787,6 @@
       }
     } catch (ignore) {}
     return null;
-  }
-
-  function openPendingGuideAfterCommit(generation, committedChannelId) {
-    var pendingGuideChannelId = state.pendingGuideChannelId;
-    state.pendingGuideChannelId = null;
-    if (!pendingGuideChannelId) return;
-    window.setTimeout(function () {
-      if (
-        generation !== state.tuneGeneration ||
-        state.requestedChannelId ||
-        state.view !== 'player' ||
-        state.tuning ||
-        state.committedChannelId !== committedChannelId
-      ) return;
-      var guideIndex = findChannelIndex(pendingGuideChannelId);
-      if (guideIndex >= 0) openGuideForChannel(guideIndex, 'player');
-    }, 80);
   }
 
   function clearTuningTimer() {
@@ -1984,7 +2037,7 @@
     }
     state.tuneMetrics = null;
     queuePresenceHeartbeat();
-    openPendingGuideAfterCommit(generation, state.committedChannelId);
+    scheduleGuidePrefetch(100);
     showChrome();
     window.setTimeout(function () {
       if (state.view === 'player' && !state.overlay && !elements.offAirPanel.classList.contains('hidden')) {
@@ -1999,7 +2052,6 @@
   }
 
   function showPlaybackError(title, message) {
-    state.pendingGuideChannelId = null;
     if (state.previousTune) {
       var attemptedChannel = currentChannel();
       var previousStillPlaying = state.hasCommittedVideo;
@@ -2041,17 +2093,12 @@
     if (state.view !== 'channels' || !state.channels.length) return;
     var guideChannel = state.channels[state.previewChannelIndex];
     if (!guideChannel) return;
-    var returnIndex = findChannelIndex(readStorage(STORAGE_CHANNEL));
-    if (returnIndex < 0 || state.channels[returnIndex].enabled === false || state.channels[returnIndex].onAir === false) {
-      returnIndex = state.previewChannelIndex;
-    }
-    showToast('Returning to live TV before opening the guide…');
-    tuneChannel(returnIndex, true, guideChannel.id);
+    openGuideForChannel(state.previewChannelIndex, 'channels');
   }
 
   function openGuideForChannel(index, returnView) {
     var channel = state.channels[index];
-    if (state.view !== 'player' || !channel || !state.channels.length) return;
+    if ((state.view !== 'player' && state.view !== 'channels') || !channel || !state.channels.length) return;
     var origin = displayedChannel();
     state.guideSerial += 1;
     state.overlay = 'guide';
@@ -2065,8 +2112,11 @@
       dayStarts: null,
       focusProgramsOnLoad: true,
       focusMinute: null,
-      returnView: 'player'
+      returnView: returnView || state.view
     };
+    elements.guideContext.textContent = state.view === 'player'
+      ? 'Live TV guide · video keeps playing'
+      : 'Live TV guide · select a program to tune live';
     renderOverlayState();
     showChrome();
     renderCatalogRail();
@@ -2267,44 +2317,99 @@
     }
   }
 
-  function loadCatalogDay() {
-    var catalog = state.catalog;
-    if (!catalog) return;
-    var dayIndex = catalog.dayIndex;
-    var fromMs = catalogDayStart(dayIndex).getTime();
-    var cacheKey = catalog.channelId + ':' + fromMs;
-    abortGuideRequestsExcept(cacheKey);
-    var cached = catalog.programsByWeek[cacheKey];
-    if (cached && Date.now() - cached.fetchedAt < GUIDE_CACHE_TTL_MS) {
-      catalog.dayStarts = cached.dayStarts;
-      updateCatalogDayLabels();
-      renderCatalogWeekDay(cached);
+  function guideDayCacheKey(channelId, fromMs) {
+    return channelId + ':' + fromMs;
+  }
+
+  function getCachedGuideDay(channelId, fromMs) {
+    var cacheKey = guideDayCacheKey(channelId, fromMs);
+    var entry = state.guideCache[cacheKey];
+    if (!entry) return null;
+    if (Date.now() - entry.fetchedAt >= GUIDE_CACHE_TTL_MS) {
+      delete state.guideCache[cacheKey];
+      return null;
+    }
+    return entry;
+  }
+
+  function cancelGuidePrefetch() {
+    if (guidePrefetchTimer) window.clearTimeout(guidePrefetchTimer);
+    guidePrefetchTimer = null;
+    state.guidePrefetchQueue = [];
+  }
+
+  function scheduleGuidePrefetch(delayMs) {
+    if (!state.serverUrl || !state.channels.length) return;
+    if (guidePrefetchTimer) window.clearTimeout(guidePrefetchTimer);
+    guidePrefetchTimer = null;
+    state.guidePrefetchQueue = [];
+    var fromMs = localCatalogDayStart(0).getTime();
+    var preferred = currentChannel();
+    var preferredId = preferred ? preferred.id : readStorage(STORAGE_CHANNEL);
+    var queued = {};
+
+    function queueChannel(channel) {
+      if (!channel || channel.enabled === false || queued[channel.id]) return;
+      var cacheKey = guideDayCacheKey(channel.id, fromMs);
+      queued[channel.id] = true;
+      if (getCachedGuideDay(channel.id, fromMs) || state.guideRequests[cacheKey]) return;
+      state.guidePrefetchQueue.push({
+        channelId: channel.id,
+        fromMs: fromMs,
+        serverUrl: state.serverUrl
+      });
+    }
+
+    var preferredIndex = findChannelIndex(preferredId);
+    if (preferredIndex >= 0) queueChannel(state.channels[preferredIndex]);
+    var index;
+    for (index = 0; index < state.channels.length; index += 1) queueChannel(state.channels[index]);
+    if (!state.guidePrefetchQueue.length) return;
+    guidePrefetchTimer = window.setTimeout(runGuidePrefetch, Math.max(0, Number(delayMs) || 0));
+  }
+
+  function runGuidePrefetch() {
+    guidePrefetchTimer = null;
+    if (!state.serverUrl || !state.guidePrefetchQueue.length) return;
+    if (state.overlay === 'guide' || Object.keys(state.guideRequests).length) {
+      guidePrefetchTimer = window.setTimeout(runGuidePrefetch, GUIDE_PREFETCH_STAGGER_MS);
       return;
     }
-    if (cached) delete catalog.programsByWeek[cacheKey];
-    if (state.guideRequests[cacheKey]) {
-      clearChildren(elements.guideList);
-      elements.guideMessage.textContent = 'Loading the selected day…';
-      return;
+    var next = null;
+    while (state.guidePrefetchQueue.length && !next) {
+      var candidate = state.guidePrefetchQueue.shift();
+      var channelIndex = findChannelIndex(candidate.channelId);
+      if (candidate.serverUrl === state.serverUrl && channelIndex >= 0 &&
+          state.channels[channelIndex].enabled !== false &&
+          !getCachedGuideDay(candidate.channelId, candidate.fromMs)) {
+        next = candidate;
+      }
     }
-    clearChildren(elements.guideList);
-    elements.guideMessage.textContent = 'Loading the selected day…';
-    var channelId = catalog.channelId;
+    if (!next) return;
+    requestGuideDay(next.channelId, next.fromMs);
+    if (state.guidePrefetchQueue.length) {
+      guidePrefetchTimer = window.setTimeout(runGuidePrefetch, GUIDE_PREFETCH_STAGGER_MS);
+    }
+  }
+
+  function requestGuideDay(channelId, fromMs) {
+    var cacheKey = guideDayCacheKey(channelId, fromMs);
+    if (getCachedGuideDay(channelId, fromMs) || state.guideRequests[cacheKey]) return;
     var serverAtStart = state.serverUrl;
     var requestRecord = { xhr: null };
     state.guideRequests[cacheKey] = requestRecord;
     requestRecord.xhr = requestJson(
-      state.serverUrl + '/api/v1/channels/' + encodeURIComponent(channelId) +
+      serverAtStart + '/api/v1/channels/' + encodeURIComponent(channelId) +
         '/guide?hours=24&from=' + fromMs,
       15000,
       function (error, data) {
         if (state.guideRequests[cacheKey] !== requestRecord) return;
         delete state.guideRequests[cacheKey];
-        if (state.serverUrl !== serverAtStart) return;
         var isSelected = state.overlay === 'guide' && state.catalog &&
           state.catalog.channelId === channelId &&
           catalogDayStart(state.catalog.dayIndex).getTime() === fromMs;
-        if (error || !data || data.channelId !== channelId || !isArray(data.programs)) {
+        if (state.serverUrl !== serverAtStart || error || !data ||
+            data.channelId !== channelId || !isArray(data.programs)) {
           if (isSelected) elements.guideMessage.textContent = 'The guide is unavailable right now.';
           return;
         }
@@ -2317,6 +2422,12 @@
           fetchedAt: Date.now()
         };
         state.guideCache[cacheKey] = entry;
+        var previewChannel = state.channels[state.previewChannelIndex];
+        if (state.view === 'channels' && previewChannel && previewChannel.id === channelId &&
+            (fromMs === localCatalogDayStart(0).getTime() ||
+             fromMs === localCatalogDayStart(1).getTime())) {
+          renderChannelPreview(state.previewChannelIndex);
+        }
         if (isSelected) {
           state.catalog.dayStarts = entry.dayStarts;
           updateCatalogDayLabels();
@@ -2324,6 +2435,30 @@
         }
       }
     );
+  }
+
+  function loadCatalogDay() {
+    var catalog = state.catalog;
+    if (!catalog) return;
+    var dayIndex = catalog.dayIndex;
+    var fromMs = catalogDayStart(dayIndex).getTime();
+    var cacheKey = guideDayCacheKey(catalog.channelId, fromMs);
+    abortGuideRequestsExcept(cacheKey);
+    var cached = getCachedGuideDay(catalog.channelId, fromMs);
+    if (cached) {
+      catalog.dayStarts = cached.dayStarts;
+      updateCatalogDayLabels();
+      renderCatalogWeekDay(cached);
+      return;
+    }
+    if (state.guideRequests[cacheKey]) {
+      clearChildren(elements.guideList);
+      elements.guideMessage.textContent = 'Loading the selected day…';
+      return;
+    }
+    clearChildren(elements.guideList);
+    elements.guideMessage.textContent = 'Loading the selected day…';
+    requestGuideDay(catalog.channelId, fromMs);
   }
 
   function renderCatalogWeekDay(entry) {
@@ -2424,15 +2559,17 @@
   }
 
   function selectGuideChannelLive(channelId, selectedStart) {
-    if (!state.catalog || state.view !== 'player') return;
+    if (!state.catalog || (state.view !== 'player' && state.view !== 'channels')) return;
+    var returnView = state.catalog.returnView || state.view;
     var targetIndex = findChannelIndex(channelId);
     var active = displayedChannel();
-    var sameChannel = active && active.id === channelId && state.committedChannelId === channelId && !state.tuning;
+    var sameChannel = returnView === 'player' && active && active.id === channelId &&
+      state.committedChannelId === channelId && !state.tuning;
     closeOverlays();
     if (sameChannel) {
       showChrome();
     } else if (targetIndex >= 0) {
-      tuneChannel(targetIndex, false);
+      tuneChannel(targetIndex, returnView === 'channels');
     }
     if (isFinite(selectedStart) && selectedStart > Date.now() + state.clockOffsetMs) {
       showToast('Tuned live. This future show will begin at its scheduled time.');
@@ -2448,10 +2585,15 @@
   function closeOverlays() {
     if (guidePreviewTimer) window.clearTimeout(guidePreviewTimer);
     guidePreviewTimer = null;
+    if (guideScrollFrame && window.cancelAnimationFrame) window.cancelAnimationFrame(guideScrollFrame);
+    if (catalogRailScrollFrame && window.cancelAnimationFrame) window.cancelAnimationFrame(catalogRailScrollFrame);
+    guideScrollFrame = null;
+    catalogRailScrollFrame = null;
     abortGuideRequestsExcept(null);
     state.overlay = null;
     state.catalog = null;
     renderOverlayState();
+    scheduleGuidePrefetch(GUIDE_PREFETCH_STAGGER_MS);
   }
 
   function openSetup() {
@@ -2521,9 +2663,21 @@
 
   function goBack() {
     if (state.overlay === 'guide') {
+      var guideReturnChannelId = state.catalog && state.catalog.channelId;
+      var guideReturnView = state.catalog && state.catalog.returnView;
       closeOverlays();
       if (state.view === 'player') showChrome();
-      else window.setTimeout(focusFirst, 40);
+      else if (guideReturnView === 'channels' && guideReturnChannelId) {
+        var returnIndex = findChannelIndex(guideReturnChannelId);
+        if (returnIndex >= 0) selectChannelPreview(returnIndex);
+        window.setTimeout(function () {
+          var returnCard = elements.channelGrid.querySelector(
+            '[data-channel-id="' + escapeAttribute(guideReturnChannelId) + '"]'
+          );
+          if (returnCard) focusNode(returnCard);
+          else focusFirst();
+        }, 40);
+      } else window.setTimeout(focusFirst, 40);
       return;
     }
     if (cancelPendingChannelChange()) return;
@@ -2532,28 +2686,34 @@
       return;
     }
     if (state.view === 'setup') cancelConnectionAttempt();
-    try { window.history.back(); } catch (ignore) {}
+    exitApplication();
+  }
+
+  function exitApplication() {
+    try {
+      if (window.webOS && typeof window.webOS.platformBack === 'function') {
+        window.webOS.platformBack();
+        return;
+      }
+    } catch (ignorePlatformBack) {}
+    try { window.close(); } catch (ignoreClose) {}
   }
 
   function cancelPendingChannelChange() {
     if ((state.view !== 'player' && state.view !== 'channels') ||
-        (!state.requestedChannelId && !state.candidateChannelId && !state.previousTune && !state.pendingGuideChannelId)) return false;
+        (!state.requestedChannelId && !state.candidateChannelId && !state.previousTune)) return false;
     var stayInBrowser = state.view === 'channels';
-    var returnToBrowser = state.view === 'player' &&
-      state.playerEnteredFromChannels && !!state.pendingGuideChannelId;
     state.tuneGeneration += 1;
     if (zapTimer) window.clearTimeout(zapTimer);
     zapTimer = null;
     state.requestedChannelId = null;
     state.requestedChannelIndex = null;
-    state.pendingGuideChannelId = null;
     state.tuneMetrics = null;
     rollbackCandidateTune();
     if (stayInBrowser) {
       showToast('Guide opening cancelled.');
       return true;
     }
-    if (returnToBrowser) return false;
     updateChannelOsdProgram('Switch cancelled');
     scheduleChannelOsdHide();
     showChrome();
@@ -2569,7 +2729,6 @@
     else state.tuneGeneration += 1;
     state.requestedChannelId = null;
     state.requestedChannelIndex = null;
-    state.pendingGuideChannelId = null;
     rollbackCandidateTune();
     closeOverlays();
     if (returnThroughHistory) {
@@ -2597,8 +2756,25 @@
 
     if (code === 461 || code === 27) {
       event.preventDefault();
+      if (event.repeat) return;
       goBack();
       return;
+    }
+    if (state.view === 'channels' && !state.overlay && (code === 37 || code === 39)) {
+      var channelFocus = closestFocusable(document.activeElement);
+      if (code === 39 && channelFocus && elements.channelGrid.contains(channelFocus)) {
+        event.preventDefault();
+        focusNode(elements.channelGuideButton);
+        return;
+      }
+      if (code === 37 && channelFocus === elements.channelGuideButton) {
+        event.preventDefault();
+        var previewCard = elements.channelGrid.querySelector(
+          '[data-channel-index="' + state.previewChannelIndex + '"]'
+        );
+        if (previewCard) focusNode(previewCard);
+        return;
+      }
     }
     if (code === 415) {
       event.preventDefault();
@@ -2658,8 +2834,7 @@
     }
 
     if (state.view === 'player' && !state.overlay &&
-        elements.playbackError.classList.contains('hidden') &&
-        elements.offAirPanel.classList.contains('hidden')) {
+        elements.playbackError.classList.contains('hidden')) {
       if (code === 37) { event.preventDefault(); switchChannel(-1); return; }
       if (code === 39) { event.preventDefault(); switchChannel(1); return; }
       if (code === 38) { event.preventDefault(); openGuide(); return; }
@@ -2757,11 +2932,15 @@
 
   function focusNode(node) {
     if (!node || typeof node.focus !== 'function') return;
+    var guideStart = elements.guideList.contains(node) ? elements.guideList.scrollTop : null;
+    var railStart = elements.catalogRail.contains(node) ? elements.catalogRail.scrollTop : null;
     var focused = document.querySelectorAll('.is-focused');
     var index;
     for (index = 0; index < focused.length; index += 1) focused[index].classList.remove('is-focused');
     node.classList.add('is-focused');
     try { node.focus(); } catch (ignore) {}
+    if (guideStart !== null) elements.guideList.scrollTop = guideStart;
+    if (railStart !== null) elements.catalogRail.scrollTop = railStart;
     if (elements.channelGrid.contains(node)) {
       var channelTop = node.offsetTop;
       var channelBottom = channelTop + node.offsetHeight;
@@ -2773,17 +2952,17 @@
     if (elements.guideList.contains(node)) {
       var top = node.offsetTop;
       var bottom = top + node.offsetHeight;
-      if (top < elements.guideList.scrollTop) elements.guideList.scrollTop = top;
+      if (top < elements.guideList.scrollTop) animateGuideScroll(elements.guideList, top, false);
       else if (bottom > elements.guideList.scrollTop + elements.guideList.clientHeight) {
-        elements.guideList.scrollTop = bottom - elements.guideList.clientHeight;
+        animateGuideScroll(elements.guideList, bottom - elements.guideList.clientHeight, false);
       }
     }
     if (elements.catalogRail.contains(node)) {
       var railTop = node.offsetTop;
       var railBottom = railTop + node.offsetHeight;
-      if (railTop < elements.catalogRail.scrollTop) elements.catalogRail.scrollTop = railTop;
+      if (railTop < elements.catalogRail.scrollTop) animateGuideScroll(elements.catalogRail, railTop, true);
       else if (railBottom > elements.catalogRail.scrollTop + elements.catalogRail.clientHeight) {
-        elements.catalogRail.scrollTop = railBottom - elements.catalogRail.clientHeight;
+        animateGuideScroll(elements.catalogRail, railBottom - elements.catalogRail.clientHeight, true);
       }
     }
     if (elements.catalogDays.contains(node)) {
@@ -2794,6 +2973,36 @@
         elements.catalogDays.scrollLeft = dayRight - elements.catalogDays.clientWidth;
       }
     }
+  }
+
+  function animateGuideScroll(container, target, isRail) {
+    if (!container) return;
+    var maximum = Math.max(0, container.scrollHeight - container.clientHeight);
+    var destination = Math.max(0, Math.min(maximum, target));
+    var start = container.scrollTop;
+    var distance = destination - start;
+    var activeFrame = isRail ? catalogRailScrollFrame : guideScrollFrame;
+    if (activeFrame && window.cancelAnimationFrame) window.cancelAnimationFrame(activeFrame);
+    if (!window.requestAnimationFrame || Math.abs(distance) < 2) {
+      container.scrollTop = destination;
+      return;
+    }
+    var startedAt = null;
+    function step(timestamp) {
+      if (startedAt === null) startedAt = timestamp;
+      var progress = Math.min(1, (timestamp - startedAt) / 150);
+      var eased = 1 - Math.pow(1 - progress, 3);
+      container.scrollTop = Math.round(start + distance * eased);
+      if (progress < 1) {
+        var frame = window.requestAnimationFrame(step);
+        if (isRail) catalogRailScrollFrame = frame;
+        else guideScrollFrame = frame;
+      } else if (isRail) catalogRailScrollFrame = null;
+      else guideScrollFrame = null;
+    }
+    var frame = window.requestAnimationFrame(step);
+    if (isRail) catalogRailScrollFrame = frame;
+    else guideScrollFrame = frame;
   }
 
   function closestFocusable(node) {
@@ -3082,7 +3291,6 @@
     state.hasCommittedVideo = false;
     state.committedChannelId = null;
     state.previousTune = null;
-    state.pendingGuideChannelId = null;
     clearBufferingTimers();
     clearTuningTimer();
     clearSourceRefreshTimer();
@@ -3255,7 +3463,7 @@
     var checked;
     for (checked = 0; checked < state.channels.length; checked += 1) {
       candidate = normalizeChannelIndex(candidate + direction);
-      if (state.channels[candidate].enabled !== false && state.channels[candidate].onAir !== false) return candidate;
+      if (state.channels[candidate].enabled !== false) return candidate;
     }
     return normalizeChannelIndex(base);
   }

@@ -107,10 +107,16 @@
               <p id="channelPreviewEpisode" class="channel-preview__episode">Every channel joins at the point already in progress.</p>
               <div class="preview-timeline" role="progressbar" aria-label="Program progress" aria-valuemin="0" aria-valuemax="100"><div id="channelPreviewTimelineFill" class="preview-timeline__fill"></div></div>
               <div class="channel-preview__time-row"><span id="channelPreviewTime">—</span><span>LIVE</span></div>
-              <div class="channel-preview__next"><span>UP NEXT</span><p id="channelPreviewNext">Checking the schedule…</p></div>
+              <div class="channel-preview__next">
+                <span>COMING UP</span>
+                <div id="channelPreviewUpcoming" class="channel-preview__upcoming">
+                  <p id="channelPreviewNext">Checking the schedule…</p>
+                  <p id="channelPreviewNext2" class="hidden"></p>
+                  <p id="channelPreviewNext3" class="hidden"></p>
+                </div>
+              </div>
             </div>
             <div class="channel-preview__actions">
-              <button id="channelWatchButton" type="button" class="button button--primary" data-focusable>Watch live</button>
               <button id="channelGuideButton" type="button" class="button button--quiet" data-focusable>Weekly guide</button>
             </div>
           </section>
@@ -118,8 +124,8 @@
 
         <footer class="remote-hints">
           <span><b class="remote-key remote-key--arrow">↑ ↓</b> browse</span>
-          <span><b class="remote-key">OK</b> watch live</span>
-          <span><b class="remote-key remote-key--arrow">→</b> actions</span>
+          <span><b class="remote-key">OK</b> tune channel</span>
+          <span><b class="remote-key remote-key--arrow">→</b> weekly guide</span>
           <span><b class="remote-key">BACK</b> exit</span>
         </footer>
       </section>
@@ -186,7 +192,7 @@
     <aside id="guideOverlay" class="overlay" role="dialog" aria-modal="true" aria-labelledby="guideChannelName" aria-hidden="true">
       <div class="guide-panel guide-panel--catalog">
         <header class="guide-panel__header">
-          <div><p class="eyebrow">Live TV guide · video keeps playing</p><h2 id="guideChannelName">Channel guide</h2></div>
+          <div><p id="guideContext" class="eyebrow">Live TV guide</p><h2 id="guideChannelName">Channel guide</h2></div>
           <div class="guide-panel__header-right"><time id="guideClock" class="guide-clock">--:--</time><button id="closeGuideButton" type="button" class="round-button" aria-label="Close guide" data-focusable>×</button></div>
         </header>
         <div class="guide-shell">
