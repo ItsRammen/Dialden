@@ -184,6 +184,7 @@ export type LibraryScanEventType =
   | 'library.scan.started'
   | 'library.scan.progress'
   | 'library.scan.root.completed'
+  | 'library.scan.root.unavailable'
   | 'library.scan.completed'
   | 'library.scan.failed'
 

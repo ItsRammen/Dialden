@@ -168,10 +168,102 @@ describe('MediaIndexer', () => {
       fs,
       probe
     )
+    const events: LibraryScanEvent[] = []
+    indexer.onScanEvent((event) => {
+      events.push(event)
+    })
     await indexer.scanAll()
 
+    expect(repo.setRootAvailable).toHaveBeenCalledWith('tv', false)
     expect(repo.removeNotInRootPaths).not.toHaveBeenCalledWith('tv', [])
     expect(repo.removeNotInRootPaths).toHaveBeenCalledWith('movies', [])
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'library.scan.root.unavailable',
+        state: expect.objectContaining({ currentRoot: 'tv' }),
+      })
+    )
+  })
+
+  test('routine scan keeps a healthy root available while its files are probed', async () => {
+    const managedConfig: MediaConfig = {
+      ...mediaConfig,
+      roots: [{ id: 'tv', directory: '/media/tv', kind: 'tv' }],
+    }
+    fs.listFiles.mockImplementation((directory) =>
+      directory === '/media/tv' ? ['/media/tv/Bluey/episode.mkv'] : []
+    )
+    let markProbeStarted!: () => void
+    let releaseProbe!: () => void
+    const probeStarted = new Promise<void>((resolve) => {
+      markProbeStarted = resolve
+    })
+    const probeGate = new Promise<void>((resolve) => {
+      releaseProbe = resolve
+    })
+    probe.getMetadata.mockImplementation(async () => {
+      markProbeStarted()
+      await probeGate
+      return {
+        durationSeconds: 420,
+        codec: 'h264',
+        width: 1920,
+        height: 1080,
+        fps: 24,
+        bitrateMbps: 4,
+        hasAudio: true,
+        audioCodec: 'aac',
+      }
+    })
+    indexer = new MediaIndexer(
+      managedConfig,
+      interludeConfig,
+      repo,
+      fs,
+      probe
+    )
+
+    const scan = indexer.scanAll()
+    await probeStarted
+
+    expect(repo.setRootAvailable).not.toHaveBeenCalledWith('tv', false)
+
+    releaseProbe()
+    await scan
+    expect(repo.setRootAvailable).toHaveBeenCalledWith('tv', true)
+  })
+
+  test('scan traversal failure gates only the failed root and identifies it', async () => {
+    const managedConfig: MediaConfig = {
+      ...mediaConfig,
+      roots: [{ id: 'tv', directory: '/media/tv', kind: 'tv' }],
+    }
+    fs.listFiles.mockImplementation((directory) => {
+      if (directory === '/media/tv') throw new Error('stale NAS handle')
+      return []
+    })
+    indexer = new MediaIndexer(
+      managedConfig,
+      interludeConfig,
+      repo,
+      fs,
+      probe
+    )
+    const events: LibraryScanEvent[] = []
+    indexer.onScanEvent((event) => {
+      events.push(event)
+    })
+
+    expect(await indexer.scanAll()).toBe(0)
+
+    expect(repo.setRootAvailable).toHaveBeenCalledWith('tv', false)
+    expect(repo.removeNotInRootPaths).not.toHaveBeenCalledWith('tv', [])
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'library.scan.root.unavailable',
+        state: expect.objectContaining({ currentRoot: 'tv' }),
+      })
+    )
   })
 
   test('managed roots probe all files and use effective collection decisions', async () => {

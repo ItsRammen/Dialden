@@ -48,6 +48,11 @@ export interface ChannelTimelineResolver {
     missing: ChannelTimelinePosition | null,
     at: Date
   ): Promise<ChannelTimelinePosition | null>
+  /**
+   * Human-readable, path-safe detail for the most recent empty resolution.
+   * Implementations should not expose absolute media paths here.
+   */
+  unavailableReason?(channelId: string): string | null
 }
 
 export interface ChannelWorkerClock {
@@ -680,7 +685,12 @@ export class ContinuousChannelWorkerManager {
       }
       sequence = availableSequence
       position = sequence[0] ?? null
-      if (!position) throw new Error('No scheduled source is available')
+      if (!position) {
+        throw new Error(
+          this.timeline.unavailableReason?.(record.state.channelId) ??
+            'No scheduled source is available'
+        )
+      }
       const activePosition: ChannelTimelinePosition = position
       if (sequence.length === 0) sequence = [activePosition]
       const outputReadyAfter = this.clock.now().getTime()

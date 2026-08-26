@@ -612,4 +612,33 @@ describe('ContinuousChannelWorkerManager', () => {
     expect(state.lastError).toContain('Scheduled source is missing')
     expect(f.requests).toHaveLength(0)
   })
+
+  test('surfaces the resolver reason when no scheduled position can be built', async () => {
+    const manager = new ContinuousChannelWorkerManager(
+      {
+        resolve: async () => null,
+        unavailableReason: () =>
+          'Scheduled media 789755 is unavailable: library root tv is unavailable',
+      },
+      {
+        start: async () => {
+          throw new Error('Pipeline must not start without a source')
+        },
+      },
+      {
+        prepareOutput: () => {},
+        cleanupOutput: () => {},
+        sourceExists: () => true,
+      },
+      { outputRoot: '/data/streams', idleTimeoutMs: 60_000 },
+      new FakeClock()
+    )
+
+    const state = await manager.acquire('Nickelodeon')
+
+    expect(state.status).toBe('error')
+    expect(state.lastError).toBe(
+      'Scheduled media 789755 is unavailable: library root tv is unavailable'
+    )
+  })
 })

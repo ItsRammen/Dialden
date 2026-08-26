@@ -251,7 +251,18 @@ export async function createServer(
     channelWorkers
   )
 
-  indexer.onScanEvent((event) => dashboardEventService.broadcast(event))
+  indexer.onScanEvent((event) => {
+    // A large multi-root scan can spend minutes on later roots. Publish each
+    // root availability transition to scheduling immediately so /now and
+    // worker resolution share the same catalog throughout the pass.
+    if (
+      event.type === 'library.scan.root.completed' ||
+      event.type === 'library.scan.root.unavailable'
+    ) {
+      channelService.invalidateScheduleCatalog()
+    }
+    dashboardEventService.broadcast(event)
+  })
   metadataService.onEvent((event) => {
     if (
       event.type === 'library.metadata.completed' ||

@@ -409,6 +409,53 @@ describe('ChannelTimelineResolverService', () => {
     })
   })
 
+  test('explains an empty worker window when a scan has quarantined the scheduled root', async () => {
+    const episode = program(
+      'rocket-power',
+      789755,
+      '2026-08-26T11:35:05.000Z',
+      '2026-08-26T11:47:06.000Z'
+    )
+    const resolver = new ChannelTimelineResolverService(
+      {
+        getGuide: async () => ({
+          channelId: 'Nickelodeon',
+          serverTime: '2026-08-26T11:42:41.000Z',
+          serverTimeMs: Date.parse('2026-08-26T11:42:41.000Z'),
+          timezone: 'Asia/Taipei',
+          timelineRevision: 'revision-1',
+          requestedEnd: episode.scheduledEnd,
+          coverageEnd: episode.scheduledEnd,
+          truncated: false,
+          programs: [episode],
+        }),
+      },
+      { resolveForChannelWorker: async () => null },
+      {
+        getById: async () =>
+          ({
+            id: 789755,
+            rootId: 'tv',
+            relativePath: 'Rocket Power/Season 01/episode.mkv',
+            rootAvailable: false,
+            playbackEnabled: true,
+            durationSeconds: 721,
+          }) as MediaItem,
+      }
+    )
+
+    expect(
+      await resolver.resolveWindow(
+        'Nickelodeon',
+        new Date('2026-08-26T11:42:41.000Z'),
+        1
+      )
+    ).toEqual([])
+    expect(resolver.unavailableReason('Nickelodeon')).toBe(
+      'Scheduled media 789755 for channel Nickelodeon is unavailable: library root tv is unavailable (a library scan may be in progress)'
+    )
+  })
+
   test('resolves the configured off-air asset as an emergency fallback', async () => {
     const resolver = new ChannelTimelineResolverService(
       { getNow: async () => null, getGuide: async () => null },

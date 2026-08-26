@@ -181,14 +181,10 @@ export class MediaIndexer {
       directory: this.interludeConfig.directory,
       kind: 'other',
     }
-    // Quarantine every root before walking any one of them. A large first
-    // root cannot leave later roots temporarily eligible via stale paths.
-    await Promise.all([
-      ...roots.map((root) =>
-        this.repository.setRootAvailable(root.id, false)
-      ),
-      this.repository.setRootAvailable(interludeRoot.id, false),
-    ])
+    // Startup already quarantines persisted rows before the initial scan.
+    // Routine watcher/safety scans must keep a previously verified root live
+    // while it is walked; taking every root offline here makes an otherwise
+    // healthy schedule disagree with delivery for the duration of the scan.
     for (const listener of this.scanStartListeners) {
       try {
         await listener()
@@ -198,10 +194,17 @@ export class MediaIndexer {
     }
     for (const root of roots) {
       const relativePaths: string[] = []
+      this.scanState = {
+        ...this.scanState,
+        currentRoot: root.id,
+        currentFile: null,
+      }
       if (!this.isRootReady(root.directory)) {
+        await this.repository.setRootAvailable(root.id, false)
         console.warn(
           `Media root unavailable; preserving its index: ${root.id} (${root.directory})`
         )
+        await this.emitScanEvent('library.scan.root.unavailable')
         continue
       }
 
@@ -226,13 +229,20 @@ export class MediaIndexer {
         await this.repository.setRootAvailable(root.id, true)
         await this.emitScanEvent('library.scan.root.completed')
       } catch (error) {
+        await this.repository.setRootAvailable(root.id, false)
         console.error(
           `Media root scan failed; preserving its index: ${root.id}`,
           error
         )
+        await this.emitScanEvent('library.scan.root.unavailable')
       }
     }
 
+    this.scanState = {
+      ...this.scanState,
+      currentRoot: interludeRoot.id,
+      currentFile: null,
+    }
     if (this.isRootReady(interludeRoot.directory)) {
       const relativePaths: string[] = []
       try {
@@ -249,11 +259,16 @@ export class MediaIndexer {
         await this.repository.setRootAvailable(interludeRoot.id, true)
         await this.emitScanEvent('library.scan.root.completed')
       } catch (error) {
+        await this.repository.setRootAvailable(interludeRoot.id, false)
         console.error(
           'Interlude root scan failed; preserving its index',
           error
         )
+        await this.emitScanEvent('library.scan.root.unavailable')
       }
+    } else {
+      await this.repository.setRootAvailable(interludeRoot.id, false)
+      await this.emitScanEvent('library.scan.root.unavailable')
     }
 
     const total = videoCount + interludeCount
@@ -624,9 +639,9 @@ export class MediaIndexer {
       this.lastProgressEventAtMs = nowMs
     }
 
-    // Started, root-completed, completed, and failed events are never
+    // Started, root availability, completed, and failed events are never
     // throttled. They carry the current full state, so listeners always see
-    // the final counters even when intermediate progress was coalesced.
+    // the affected root and final counters even when progress was coalesced.
     const event: LibraryScanEvent = { type, state: this.getScanState() }
     for (const listener of this.scanEventListeners) {
       try {

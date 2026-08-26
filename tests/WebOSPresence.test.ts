@@ -939,6 +939,58 @@ describe('LG webOS presence telemetry', () => {
     expect(script).toContain('stableSource=true sourceReloaded=false')
   })
 
+  test('trusts only current cached schedule gaps when selecting the tuner path', () => {
+    const script = readFileSync(
+      join(import.meta.dir, '..', 'clients', 'webos', 'app.js'),
+      'utf8'
+    )
+    const offAirPredicateSource = functionSource(
+      script,
+      'isCurrentOffAirResult',
+      'isLineupSchedule'
+    ).trim()
+    const tuneSelectionBody = script.slice(
+      script.indexOf('function tuneChannel('),
+      script.indexOf('function openStableTunerForChannel(')
+    )
+    const isCurrentOffAirResult = Function(
+      'isNowResult',
+      'OFF_AIR_CACHE_MAX_AGE_MS',
+      `return (${offAirPredicateSource})`
+    )(
+      (data: any) => !!data && typeof data.serverTimeMs === 'number' && typeof data.channelId === 'string',
+      75_000
+    ) as (data: any, channelId: string, serverNow: number) => boolean
+    const serverNow = Date.parse('2026-08-26T12:00:00.000Z')
+    const freshGap = {
+      channelId: 'Nickelodeon',
+      serverTimeMs: serverNow - 15_000,
+      program: null,
+      next: { scheduledStart: '2026-08-26T12:30:00.000Z' },
+    }
+    const staleGap = { ...freshGap, serverTimeMs: serverNow - 75_001 }
+    const elapsedGap = {
+      ...freshGap,
+      next: { scheduledStart: '2026-08-26T11:59:59.000Z' },
+    }
+
+    expect(tuneSelectionBody).toContain('var channelIsExplicitlyOffAir = channel.onAir === false')
+    expect(tuneSelectionBody).toContain("var rememberedOffAir = rememberedNow && isNowResult(rememberedNow) && rememberedNow.program === null")
+    expect(tuneSelectionBody).toContain('var shouldResolveOffAir = channelIsExplicitlyOffAir || currentRememberedOffAir')
+    expect(tuneSelectionBody).toMatch(
+      /if \(state\.tuner\)[\s\S]*if \(shouldResolveOffAir\)[\s\S]*tuneStableTunerChannel\(channel\.id, generation, pushHistory\)/
+    )
+    expect(tuneSelectionBody).toMatch(
+      /state\.tunerCapability !== 'incompatible' &&\s*!shouldResolveOffAir[\s\S]*openStableTunerForChannel\(channel\.id, generation, pushHistory\)/
+    )
+    expect(tuneSelectionBody).toContain('if (rememberedOffAir && shouldResolveOffAir)')
+    expect(tuneSelectionBody).not.toContain('channel.onAir !== false && !(rememberedNow')
+    expect(tuneSelectionBody).toContain("' cachedOffAir=' + (currentRememberedOffAir ? 'fresh' : (rememberedOffAir ? 'stale' : 'no'))")
+    expect(isCurrentOffAirResult(freshGap, 'Nickelodeon', serverNow)).toBe(true)
+    expect(isCurrentOffAirResult(staleGap, 'Nickelodeon', serverNow)).toBe(false)
+    expect(isCurrentOffAirResult(elapsedGap, 'Nickelodeon', serverNow)).toBe(false)
+  })
+
   test('reconciles off-air programming and recovers a lost or incompatible tuner safely', () => {
     const script = readFileSync(
       join(import.meta.dir, '..', 'clients', 'webos', 'app.js'),

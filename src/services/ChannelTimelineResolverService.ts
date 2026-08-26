@@ -30,6 +30,8 @@ interface ResolvedChannelBranding {
 
 /** Adapts the deterministic public guide to safe, absolute worker inputs. */
 export class ChannelTimelineResolverService implements ChannelTimelineResolver {
+  private readonly unavailableReasons = new Map<string, string>()
+
   constructor(
     private readonly channels: Pick<ChannelService, 'getGuide'> &
       Partial<Pick<ChannelService, 'getNow' | 'administrationSnapshot'>>,
@@ -127,7 +129,13 @@ export class ChannelTimelineResolverService implements ChannelTimelineResolver {
     // Combining an independently generated /now response with a guide can
     // straddle a schedule boundary and briefly start the previous programme.
     const guide = await this.channels.getGuide(channelId, hours)
-    if (!guide) return []
+    if (!guide) {
+      this.unavailableReasons.set(
+        channelId,
+        `No schedule is available for channel ${channelId}`
+      )
+      return []
+    }
 
     const ordered = guide.programs.filter(
       (program) => Date.parse(program.scheduledEnd) > guide.serverTimeMs
@@ -137,7 +145,15 @@ export class ChannelTimelineResolverService implements ChannelTimelineResolver {
         Date.parse(program.scheduledStart) <= guide.serverTimeMs &&
         guide.serverTimeMs < Date.parse(program.scheduledEnd)
     )
-    if (currentIndex < 0) return []
+    if (currentIndex < 0) {
+      this.unavailableReasons.set(
+        channelId,
+        `No programme is scheduled for channel ${channelId} at ${new Date(
+          guide.serverTimeMs
+        ).toISOString()}`
+      )
+      return []
+    }
     const current = ordered[currentIndex]!
     const window = ordered
       .slice(currentIndex)
@@ -154,7 +170,15 @@ export class ChannelTimelineResolverService implements ChannelTimelineResolver {
       const program = window[index]
       if (!program) continue
       const entry = resolvedWindow[index]
-      if (!entry?.resolved) break
+      if (!entry?.resolved) {
+        if (index === 0) {
+          this.unavailableReasons.set(
+            channelId,
+            this.mediaUnavailableReason(channelId, program, entry?.item ?? null)
+          )
+        }
+        break
+      }
       const resolved = entry.resolved
       const mediaItem = entry.item
       const isCurrent = program.id === current.id
@@ -183,7 +207,12 @@ export class ChannelTimelineResolverService implements ChannelTimelineResolver {
       )
       if (result.length >= Math.max(1, minimumItems)) break
     }
+    if (result.length > 0) this.unavailableReasons.delete(channelId)
     return result
+  }
+
+  unavailableReason(channelId: string): string | null {
+    return this.unavailableReasons.get(channelId) ?? null
   }
 
   async fallback(
@@ -235,6 +264,28 @@ export class ChannelTimelineResolverService implements ChannelTimelineResolver {
       timelineRevision,
       type: program.type,
     }
+  }
+
+  private mediaUnavailableReason(
+    channelId: string,
+    program: ScheduledProgram,
+    item: MediaItem | null
+  ): string {
+    const prefix = `Scheduled media ${program.mediaId} for channel ${channelId} is unavailable`
+    if (!item) return `${prefix}: its library row no longer exists`
+    if (item.rootAvailable !== true) {
+      return `${prefix}: library root ${item.rootId || 'unknown'} is unavailable (a library scan may be in progress)`
+    }
+    if (item.playbackEnabled !== true) {
+      return `${prefix}: playback is no longer approved`
+    }
+    if (!(item.durationSeconds > 0)) {
+      return `${prefix}: technical indexing has no usable duration`
+    }
+    if (!item.relativePath) {
+      return `${prefix}: its root-relative locator is missing`
+    }
+    return `${prefix}: the configured source file could not be resolved`
   }
 
 

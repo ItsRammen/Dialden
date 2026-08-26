@@ -7,11 +7,12 @@
   var STORAGE_CLIENT_NAME = 'toasttv.clientName.v1';
   var STORAGE_SESSION_OWNER = 'toasttv.sessionOwner.v1';
   var STORAGE_SESSION_OWNER_EPOCH = 'toasttv.sessionOwnerEpoch.v1';
-  var CLIENT_VERSION = '0.3.7';
+  var CLIENT_VERSION = '0.3.8';
   var DEFAULT_SERVER = 'http://TOWER:1993';
   var POLL_INTERVAL_MS = 30000;
   var CHANNEL_REFRESH_INTERVAL_MS = 15000;
   var SCHEDULE_REFRESH_INTERVAL_MS = 60000;
+  var OFF_AIR_CACHE_MAX_AGE_MS = SCHEDULE_REFRESH_INTERVAL_MS + 15000;
   var PRESENCE_INTERVAL_MS = 15000;
   var DRIFT_LIMIT_SECONDS = 8;
   var GUIDE_RENDER_LIMIT = 250;
@@ -1097,6 +1098,17 @@
       (hasDirectPlayback || hasChannelPlayback);
   }
 
+  function isCurrentOffAirResult(data, channelId, serverNow) {
+    if (!isNowResult(data) || data.channelId !== channelId || data.program !== null) return false;
+    var ageMs = serverNow - data.serverTimeMs;
+    if (!isFinite(ageMs) || ageMs < -5000 || ageMs > OFF_AIR_CACHE_MAX_AGE_MS) return false;
+    if (data.next) {
+      var nextStartMs = Date.parse(data.next.scheduledStart);
+      if (!isFinite(nextStartMs) || nextStartMs <= serverNow) return false;
+    }
+    return true;
+  }
+
   function isLineupSchedule(data) {
     if (!data || typeof data.serverTimeMs !== 'number' || !isArray(data.schedules)) return false;
     var index;
@@ -1496,6 +1508,14 @@
     zapTimer = window.setTimeout(function () {
       zapTimer = null;
       var rememberedNow = state.channelNow[channel.id];
+      var rememberedOffAir = rememberedNow && isNowResult(rememberedNow) && rememberedNow.program === null;
+      var currentRememberedOffAir = isCurrentOffAirResult(
+        rememberedNow,
+        channel.id,
+        Date.now() + state.clockOffsetMs
+      );
+      var channelIsExplicitlyOffAir = channel.onAir === false;
+      var shouldResolveOffAir = channelIsExplicitlyOffAir || currentRememberedOffAir;
       if (state.tuner) {
         logTunerStatus(
           'log',
@@ -1503,8 +1523,7 @@
             ' branch=stable attached=' + (hasAttachedStableTunerSource() ? 'yes' : 'no') +
             ' revision=' + state.tuner.revision
         );
-        if ((rememberedNow && isNowResult(rememberedNow) && rememberedNow.program === null) ||
-            channel.onAir === false) {
+        if (shouldResolveOffAir) {
           if (state.tuneMetrics) state.tuneMetrics.src = 'session-tuner-off-air';
           resolveStableTunerOffAir(channel.id, generation, pushHistory, rememberedNow);
           return;
@@ -1514,13 +1533,19 @@
         return;
       }
       if (!state.tuner && state.tunerCapability !== 'incompatible' &&
-          channel.onAir !== false && !(rememberedNow && isNowResult(rememberedNow) && rememberedNow.program === null)) {
+          !shouldResolveOffAir) {
         logTunerStatus('log', 'zap ' + (state.committedChannelId || '?') + ' -> ' + channel.id + ' branch=acquire');
         openStableTunerForChannel(channel.id, generation, pushHistory);
         return;
       }
-      logTunerStatus('warn', 'zap ' + (state.committedChannelId || '?') + ' -> ' + channel.id + ' branch=compatibility');
-      if (rememberedNow && isNowResult(rememberedNow) && rememberedNow.program === null) {
+      logTunerStatus(
+        'warn',
+        'zap ' + (state.committedChannelId || '?') + ' -> ' + channel.id +
+          ' branch=compatibility capability=' + state.tunerCapability +
+          ' onAir=' + String(channel.onAir) +
+          ' cachedOffAir=' + (currentRememberedOffAir ? 'fresh' : (rememberedOffAir ? 'stale' : 'no'))
+      );
+      if (rememberedOffAir && shouldResolveOffAir) {
         commitPreparedChannel(channel.id, generation, pushHistory, { data: rememberedNow, timing: null });
         return;
       }
