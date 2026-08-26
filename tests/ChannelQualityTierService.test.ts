@@ -45,6 +45,16 @@ describe('ChannelQualityTierService', () => {
     expect(decision.reason).toContain('on demand')
   })
 
+  test('keeps enough live segments to survive a brief administration stall', () => {
+    const decision = new ChannelQualityTierService().resolve({
+      hardwareAcceleration: false,
+      enabledChannelCount: 4,
+    })
+
+    expect(decision.profile.segmentSeconds).toBe(1)
+    expect(decision.profile.playlistWindowSegments).toBe(8)
+  })
+
   test('operator override wins and is reported as such', () => {
     const service = new ChannelQualityTierService({ override: 'standard' })
     const decision: TierDecision = service.resolve({

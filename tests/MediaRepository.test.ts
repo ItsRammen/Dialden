@@ -78,6 +78,47 @@ describe('MediaRepository', () => {
     expect(updated[0]?.durationSeconds).toBe(120)
   })
 
+  test('summarizes eligible programming duration in SQLite', async () => {
+    await repo.upsertBatch([
+      createInput({
+        path: '/videos/approved.mp4',
+        filename: 'approved.mp4',
+        durationSeconds: 3_600,
+        policyEnabled: true,
+      }),
+      createInput({
+        path: '/videos/parent-approved.mp4',
+        filename: 'parent-approved.mp4',
+        durationSeconds: 1_800,
+        policyEnabled: false,
+        playbackOverride: true,
+      }),
+      createInput({
+        path: '/videos/blocked.mp4',
+        filename: 'blocked.mp4',
+        durationSeconds: 900,
+        policyEnabled: false,
+      }),
+      createInput({
+        path: '/videos/interlude.mp4',
+        filename: 'interlude.mp4',
+        durationSeconds: 300,
+        mediaType: 'interlude',
+        isInterlude: true,
+        policyEnabled: true,
+      }),
+      createInput({
+        path: '/videos/unavailable.mp4',
+        filename: 'unavailable.mp4',
+        durationSeconds: 600,
+        policyEnabled: true,
+        rootAvailable: false,
+      }),
+    ])
+
+    expect((await repo.getLibrarySummary()).eligibleDurationSeconds).toBe(5_400)
+  })
+
   test('persists network and studio metadata for station facets', async () => {
     const [collection] = await repo.upsertCollections([
       {

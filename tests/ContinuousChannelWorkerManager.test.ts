@@ -273,6 +273,57 @@ describe('ContinuousChannelWorkerManager', () => {
     expect(f.stops).toBe(2)
   })
 
+  test('does not restart a session-held worker when its warm lease expires', async () => {
+    const f = fixture()
+    await f.manager.holdSession('kids', 'lineup-tv')
+    await f.manager.warm(['kids'], 'legacy-tv')
+
+    f.clock.advance(30_000)
+    await settle()
+
+    expect(f.manager.getState('kids')).toMatchObject({
+      status: 'live',
+      sessionHeld: true,
+    })
+    expect(f.requests).toHaveLength(1)
+    expect(f.stops).toBe(0)
+  })
+
+  test('does not restart a session-held worker when a client removes its warm lease', async () => {
+    const f = fixture()
+    await f.manager.holdSession('kids', 'lineup-tv')
+    await f.manager.warm(['kids'], 'legacy-tv')
+
+    await f.manager.warm([], 'legacy-tv')
+
+    expect(f.manager.getState('kids')).toMatchObject({
+      status: 'live',
+      sessionHeld: true,
+    })
+    expect(f.requests).toHaveLength(1)
+    expect(f.stops).toBe(0)
+  })
+
+  test('does not evict a session-held worker to make speculative warm capacity', async () => {
+    const f = fixture()
+    await f.manager.holdSession('held', 'lineup-tv')
+    await f.manager.warm(['held', 'other'], 'legacy-tv')
+
+    await f.manager.warm(['third'], 'second-tv')
+    await settle()
+
+    expect(f.manager.getState('held')).toMatchObject({
+      status: 'live',
+      sessionHeld: true,
+    })
+    expect(f.requests.map((request) => request.channelId)).toEqual([
+      'held',
+      'other',
+      'third',
+    ])
+    expect(f.stops).toBe(0)
+  })
+
   test('session leases hold workers without inflating viewer counts', async () => {
     const f = fixture()
     const state = await f.manager.holdSession('kids', 'tv-1')

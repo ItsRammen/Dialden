@@ -152,8 +152,11 @@ export interface ChannelScheduleSnapshot {
 interface ScheduleSourceSnapshot {
   readonly epoch: number
   readonly expiresAt: number
-  readonly media: MediaItem[]
-  readonly catalog: unknown[]
+  readonly programMedia: MediaItem[]
+  readonly interludeMedia: MediaItem[]
+  readonly groupsByMediaId: ReadonlyMap<number, ReadonlySet<string>>
+  readonly programsByGroupKey: Map<string, MediaItem[]>
+  readonly catalogHash: string
 }
 
 interface PreparedLineupChannel {
@@ -192,10 +195,14 @@ interface LocalParts {
 
 const SYSTEM_CLOCK: ChannelClock = { now: () => new Date() }
 const MAX_PROGRAMS_PER_SLOT = 20_000
-const SCHEDULE_SOURCE_TTL_MS = 20_000
-const LINEUP_CACHE_TTL_MS = 20_000
-const GUIDE_CACHE_TTL_MS = 60_000
+// Scans, approvals, metadata edits, and channel configuration changes all
+// explicitly invalidate the schedule epoch. Keep the expensive catalog warm
+// between those events; the TTL remains as a safety net for missed callers.
+const SCHEDULE_SOURCE_TTL_MS = 5 * 60_000
+const LINEUP_CACHE_TTL_MS = 2 * 60_000
+const GUIDE_CACHE_TTL_MS = 5 * 60_000
 const GUIDE_CACHE_MAX_ENTRIES = 24
+const ROLLING_GUIDE_ANCHOR_MS = 5 * 60_000
 const DISABLED_INTERLUDES: ChannelInterludePolicy = {
   enabled: false,
   frequency: 1,
@@ -610,7 +617,7 @@ export class ChannelService {
     }
     const source = await this.getScheduleSource()
     const around = this.clock.now()
-    const programs = this.buildWindow(channel, source.media, around, 7, 1)
+    const programs = await this.buildNowWindow(channel, source, around)
     // Sample the authoritative response time after schedule generation so the
     // client does not inherit time spent reading/building the timeline.
     const now = this.clock.now()
@@ -618,7 +625,7 @@ export class ChannelService {
       channel,
       programs,
       now,
-      this.timelineRevisionForCatalog(channel, source.catalog)
+      this.timelineRevisionForSource(channel, source)
     )
   }
 
@@ -713,10 +720,14 @@ export class ChannelService {
     // ordinary callers retain their explicit anchor while serverTime stays live.
     const boundedHours = Math.min(168, Math.max(1, Math.floor(hours)))
     const from = options?.from
+    const liveAnchor = this.clock.now()
     const requestedAnchor =
       from instanceof Date && Number.isFinite(from.getTime())
         ? from
-        : this.clock.now()
+        : new Date(
+            Math.floor(liveAnchor.getTime() / ROLLING_GUIDE_ANCHOR_MS) *
+              ROLLING_GUIDE_ANCHOR_MS
+          )
     const calendarParts = options?.calendarDays
       ? this.localParts(this.clock.now(), channel.timezone)
       : null
@@ -789,12 +800,13 @@ export class ChannelService {
       return this.scheduleSourceInFlight.promise
     }
 
-    const promise = this.repository.getAll().then((media) => ({
-      epoch,
-      expiresAt: Date.now() + SCHEDULE_SOURCE_TTL_MS,
-      media,
-      catalog: this.timelineCatalog(media),
-    }))
+    const promise = (async (): Promise<ScheduleSourceSnapshot> => {
+      const media = await this.repository.getAll()
+      // Give manifests and segments a chance to run after the synchronous
+      // SQLite hydration before compiling the in-memory schedule indexes.
+      await this.yieldToEventLoop()
+      return this.compileScheduleSource(epoch, media)
+    })()
     const inFlight = { epoch, promise }
     this.scheduleSourceInFlight = inFlight
     try {
@@ -826,22 +838,22 @@ export class ChannelService {
       const source = await this.getScheduleSource()
       if (source.epoch !== this.scheduleEpoch) return this.getPreparedLineup()
       const around = this.clock.now()
-      const channels = this.channels
-        .filter((channel) => channel.enabled)
-        .map((channel): PreparedLineupChannel => {
-          const offAir = this.manuallyOffAir.has(channel.id)
-          return {
-            channel,
-            offAir,
-            programs: offAir
-              ? []
-              : this.buildWindow(channel, source.media, around, 7, 1),
-            timelineRevision: this.timelineRevisionForCatalog(
-              channel,
-              offAir ? [] : source.catalog
-            ),
-          }
+      const channels: PreparedLineupChannel[] = []
+      for (const channel of this.channels.filter((item) => item.enabled)) {
+        // Large lineups must never monopolize the event loop that serves HLS.
+        if (channels.length > 0) await this.yieldToEventLoop()
+        const offAir = this.manuallyOffAir.has(channel.id)
+        channels.push({
+          channel,
+          offAir,
+          programs: offAir
+            ? []
+            : await this.buildNowWindow(channel, source, around),
+          timelineRevision: offAir
+            ? this.timelineRevision(channel, [])
+            : this.timelineRevisionForSource(channel, source),
         })
+      }
       return {
         epoch,
         expiresAt: Date.now() + LINEUP_CACHE_TTL_MS,
@@ -895,7 +907,7 @@ export class ChannelService {
     const existing = this.preparedGuidesInFlight.get(cacheKey)
     if (existing) return existing
 
-    const promise = Promise.resolve().then((): PreparedGuide => {
+    const promise = (async (): Promise<PreparedGuide> => {
       const requestedEndMs = dayStarts.length > 1
         ? Date.parse(dayStarts[dayStarts.length - 1] as string)
         : anchor.getTime() + boundedHours * 60 * 60 * 1000
@@ -903,10 +915,12 @@ export class ChannelService {
         boundedHours,
         Math.ceil((requestedEndMs - anchor.getTime()) / (60 * 60 * 1000))
       )
-      const futureDays = Math.min(8, Math.ceil(horizonHours / 24) + 1)
-      const programs = this.buildWindow(
+      // buildWindow includes offset zero, so N elapsed days require N + 1
+      // calendar dates, not the previous N + 2 over-build.
+      const futureDays = Math.min(8, Math.ceil(horizonHours / 24))
+      const programs = await this.buildWindowCooperatively(
         channel,
-        source.media,
+        source,
         anchor,
         futureDays,
         horizonHours
@@ -930,13 +944,10 @@ export class ChannelService {
           coverageEnd !== null &&
           Date.parse(coverageEnd) < horizonMs,
         programs: visiblePrograms,
-        timelineRevision: this.timelineRevisionForCatalog(
-          channel,
-          source.catalog
-        ),
+        timelineRevision: this.timelineRevisionForSource(channel, source),
         dayStarts,
       }
-    })
+    })()
     this.preparedGuidesInFlight.set(cacheKey, promise)
     try {
       const prepared = await promise
@@ -1406,23 +1417,120 @@ export class ChannelService {
     this.invalidateScheduleCatalog()
   }
 
-  private buildWindow(
-    channel: LibraryChannelPolicy,
-    media: MediaItem[],
-    around: Date,
-    futureDays: number,
-    continuousHorizonHours = 24
-  ): ScheduledProgram[] {
-    const continuousSlot = channel.slots.find(
-      (slot) =>
-        slot.start === '00:00' &&
-        slot.end === '24:00' &&
-        DAY_NAMES.every((day) => slot.days.includes(day))
+  private async compileScheduleSource(
+    epoch: number,
+    media: MediaItem[]
+  ): Promise<ScheduleSourceSnapshot> {
+    const canonicalMedia = [...media].sort((left, right) =>
+      this.compareText(
+        this.canonicalMediaKey(left),
+        this.canonicalMediaKey(right)
+      )
     )
+    const groupsByMediaId = new Map<number, ReadonlySet<string>>()
+    const programMedia: MediaItem[] = []
+    const interludeMedia: MediaItem[] = []
+
+    for (let index = 0; index < canonicalMedia.length; index++) {
+      if (index > 0 && index % 500 === 0) await this.yieldToEventLoop()
+      const item = canonicalMedia[index] as MediaItem
+      groupsByMediaId.set(item.id, this.groupsFor(item))
+      if (
+        item.rootAvailable !== true ||
+        item.playbackEnabled !== true ||
+        item.durationSeconds <= 0
+      ) {
+        continue
+      }
+      if (item.mediaType === 'interlude' || item.isInterlude) {
+        interludeMedia.push(item)
+      } else if (item.mediaType === 'video') {
+        programMedia.push(item)
+      }
+    }
+
+    const catalog = this.timelineCatalog(canonicalMedia, groupsByMediaId)
+    return {
+      epoch,
+      expiresAt: Date.now() + SCHEDULE_SOURCE_TTL_MS,
+      programMedia,
+      interludeMedia,
+      groupsByMediaId,
+      programsByGroupKey: new Map<string, MediaItem[]>(),
+      catalogHash: this.hash(JSON.stringify(catalog))
+        .toString(16)
+        .padStart(8, '0'),
+    }
+  }
+
+  private programsForGroups(
+    source: ScheduleSourceSnapshot,
+    groups: readonly string[]
+  ): MediaItem[] {
+    const normalizedGroups = [...new Set(groups)].sort((left, right) =>
+      this.compareText(left, right)
+    )
+    const cacheKey = JSON.stringify(normalizedGroups)
+    const cached = source.programsByGroupKey.get(cacheKey)
+    if (cached) return cached
+    const allowedGroups = new Set(normalizedGroups)
+    const eligible = source.programMedia.filter((item) => {
+      const itemGroups = source.groupsByMediaId.get(item.id) ?? new Set<string>()
+      return [...itemGroups].some((group) => allowedGroups.has(group))
+    })
+    source.programsByGroupKey.set(cacheKey, eligible)
+    return eligible
+  }
+
+  private async buildNowWindow(
+    channel: LibraryChannelPolicy,
+    source: ScheduleSourceSnapshot,
+    around: Date
+  ): Promise<ScheduledProgram[]> {
+    const continuousSlot = this.continuousSlot(channel)
     if (continuousSlot) {
       return this.buildContinuousAllDayWindow(
         channel,
-        media,
+        source,
+        continuousSlot,
+        around,
+        1
+      )
+    }
+
+    const local = this.localParts(around, channel.timezone)
+    const programs: ScheduledProgram[] = []
+    const aroundMs = around.getTime()
+    for (let offset = 0; offset <= 7; offset++) {
+      if (offset > 0) await this.yieldToEventLoop()
+      const date = this.addCalendarDays(local, offset)
+      programs.push(...this.buildDay(channel, source, date))
+      if (
+        programs.some(
+          (program) => Date.parse(program.scheduledStart) > aroundMs
+        )
+      ) {
+        break
+      }
+    }
+    return programs.sort(
+      (a, b) => Date.parse(a.scheduledStart) - Date.parse(b.scheduledStart)
+    )
+  }
+
+  private async buildWindowCooperatively(
+    channel: LibraryChannelPolicy,
+    source: ScheduleSourceSnapshot,
+    around: Date,
+    futureDays: number,
+    continuousHorizonHours = 24
+  ): Promise<ScheduledProgram[]> {
+    const continuousSlot = this.continuousSlot(channel)
+    if (continuousSlot) {
+      await this.yieldToEventLoop()
+      return this.buildContinuousAllDayWindow(
+        channel,
+        source,
         continuousSlot,
         around,
         continuousHorizonHours
@@ -1431,34 +1539,34 @@ export class ChannelService {
     const local = this.localParts(around, channel.timezone)
     const programs: ScheduledProgram[] = []
     for (let offset = 0; offset <= futureDays; offset++) {
+      if (offset > 0) await this.yieldToEventLoop()
       const date = this.addCalendarDays(local, offset)
-      programs.push(...this.buildDay(channel, media, date))
+      programs.push(...this.buildDay(channel, source, date))
     }
     return programs.sort(
       (a, b) => Date.parse(a.scheduledStart) - Date.parse(b.scheduledStart)
     )
   }
 
+  private continuousSlot(
+    channel: LibraryChannelPolicy
+  ): ChannelScheduleSlot | undefined {
+    return channel.slots.find(
+      (slot) =>
+        slot.start === '00:00' &&
+        slot.end === '24:00' &&
+        DAY_NAMES.every((day) => slot.days.includes(day))
+    )
+  }
+
   private buildContinuousAllDayWindow(
     channel: LibraryChannelPolicy,
-    media: MediaItem[],
+    source: ScheduleSourceSnapshot,
     slot: ChannelScheduleSlot,
     around: Date,
     horizonHours: number
   ): ScheduledProgram[] {
-    const allowedGroups = new Set(slot.groups)
-    const eligible = media.filter((item) => {
-      if (
-        item.rootAvailable !== true ||
-        item.playbackEnabled !== true ||
-        item.mediaType !== 'video' ||
-        item.isInterlude ||
-        item.durationSeconds <= 0
-      ) {
-        return false
-      }
-      return [...this.groupsFor(item)].some((group) => allowedGroups.has(group))
-    })
+    const eligible = this.programsForGroups(source, slot.groups)
     if (eligible.length === 0) return []
 
     const orderedPrograms = this.withMarathons(
@@ -1470,7 +1578,7 @@ export class ChannelService {
     )
     const ordered = this.withInterludes(
       orderedPrograms,
-      media,
+      source,
       channel,
       slot,
       around,
@@ -1523,7 +1631,7 @@ export class ChannelService {
 
   private buildDay(
     channel: LibraryChannelPolicy,
-    media: MediaItem[],
+    source: ScheduleSourceSnapshot,
     date: LocalParts
   ): ScheduledProgram[] {
     const programs: ScheduledProgram[] = []
@@ -1542,20 +1650,7 @@ export class ChannelService {
         this.timeToMinutes(slot.end),
         channel.timezone
       )
-      const allowedGroups = new Set(slot.groups)
-      const eligible = media.filter((item) => {
-        if (
-          item.rootAvailable !== true ||
-          item.playbackEnabled !== true ||
-          item.mediaType !== 'video' ||
-          item.isInterlude ||
-          item.durationSeconds <= 0
-        ) {
-          return false
-        }
-        const groups = this.groupsFor(item)
-        return [...groups].some((group) => allowedGroups.has(group))
-      })
+      const eligible = this.programsForGroups(source, slot.groups)
       if (eligible.length === 0) continue
 
       const dateKey = `${date.year}-${this.pad(date.month)}-${this.pad(date.day)}`
@@ -1572,7 +1667,7 @@ export class ChannelService {
       let programsSinceInterlude = 0
       let interludeIndex = 0
       const interludes = this.orderedInterludes(
-        media,
+        source,
         channel,
         slot,
         start,
@@ -1767,14 +1862,14 @@ export class ChannelService {
    */
   private withInterludes(
     programs: MediaItem[],
-    media: MediaItem[],
+    source: ScheduleSourceSnapshot,
     channel: LibraryChannelPolicy,
     slot: ChannelScheduleSlot,
     at: Date,
     seed: string
   ): MediaItem[] {
     const interludes = this.orderedInterludes(
-      media,
+      source,
       channel,
       slot,
       at,
@@ -1800,7 +1895,7 @@ export class ChannelService {
   }
 
   private orderedInterludes(
-    media: MediaItem[],
+    source: ScheduleSourceSnapshot,
     channel: LibraryChannelPolicy,
     slot: ChannelScheduleSlot,
     at: Date,
@@ -1808,12 +1903,8 @@ export class ChannelService {
   ): MediaItem[] {
     if (!this.interludePolicy.enabled) return []
     return this.deterministicShuffle(
-      media.filter(
+      source.interludeMedia.filter(
         (item) =>
-          item.rootAvailable === true &&
-          item.playbackEnabled === true &&
-          (item.mediaType === 'interlude' || item.isInterlude) &&
-          item.durationSeconds > 0 &&
           this.interludeActiveOn(item, at, channel.timezone)
       ),
       `${seed}|interludes|${slot.start}|${slot.end}`
@@ -1889,8 +1980,19 @@ export class ChannelService {
     )
   }
 
-  private timelineCatalog(media: MediaItem[]): unknown[] {
-    return media
+  private timelineCatalog(
+    media: MediaItem[],
+    groupsByMediaId?: ReadonlyMap<number, ReadonlySet<string>>
+  ): unknown[] {
+    const ordered = groupsByMediaId
+      ? media
+      : [...media].sort((left, right) =>
+          this.compareText(
+            this.canonicalMediaKey(left),
+            this.canonicalMediaKey(right)
+          )
+        )
+    return ordered
       .filter(
         (item) => item.rootAvailable === true && item.playbackEnabled === true
       )
@@ -1905,11 +2007,24 @@ export class ChannelService {
         item.episodeNumber,
         item.episodeTitle,
         item.episodeMetadataTitle,
-        [...this.groupsFor(item)].sort((left, right) =>
-          this.compareText(left, right)
+        [...(groupsByMediaId?.get(item.id) ?? this.groupsFor(item))].sort(
+          (left, right) => this.compareText(left, right)
         ),
       ])
-      .sort((a, b) => this.compareText(JSON.stringify(a), JSON.stringify(b)))
+  }
+
+  private timelineRevisionForSource(
+    channel: LibraryChannelPolicy,
+    source: ScheduleSourceSnapshot
+  ): string {
+    const interlude = this.interludePolicy.enabled
+      ? { enabled: true, frequency: this.interludeFrequency() }
+      : undefined
+    return this.hash(
+      JSON.stringify({ channel, catalogHash: source.catalogHash, interlude })
+    )
+      .toString(16)
+      .padStart(8, '0')
   }
 
   private timelineRevisionForCatalog(
@@ -1925,12 +2040,9 @@ export class ChannelService {
   }
 
   private deterministicShuffle(items: MediaItem[], seed: string): MediaItem[] {
-    const output = [...items].sort((a, b) =>
-      this.compareText(
-        `${a.rootId}:${a.relativePath ?? a.path}`,
-        `${b.rootId}:${b.relativePath ?? b.path}`
-      )
-    )
+    // Schedule-source lists are canonicalized once. Re-sorting the same large
+    // group for every slot and day was the guide's dominant CPU cost.
+    const output = [...items]
     let state = this.hash(seed) || 0x9e3779b9
     const random = () => {
       state ^= state << 13
@@ -2055,6 +2167,14 @@ export class ChannelService {
 
   private compareText(left: string, right: string): number {
     return left === right ? 0 : left < right ? -1 : 1
+  }
+
+  private canonicalMediaKey(item: MediaItem): string {
+    return `${item.rootId ?? 'legacy'}:${item.relativePath ?? item.path}:${item.id}`
+  }
+
+  private yieldToEventLoop(): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, 0))
   }
 
   private localParts(date: Date, timezone: string): LocalParts {

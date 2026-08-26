@@ -707,6 +707,48 @@ describe('ChannelService', () => {
     ).toBe(5_000)
   })
 
+  test('reuses a rolling guide inside its stable anchor while stamping fresh time', async () => {
+    const repository = mock<IMediaRepository>()
+    repository.getAll.mockResolvedValue([video(1, 'Bluey (2018)')])
+    let nowMs = Date.parse('2026-08-23T22:31:00.000Z')
+    const service = new ChannelService(repository, policy, {
+      now: () => new Date(nowMs),
+    })
+
+    const first = await service.getGuide('kids-club', 8)
+    nowMs += 2 * 60_000
+    const second = await service.getGuide('kids-club', 8)
+
+    expect(repository.getAll).toHaveBeenCalledTimes(1)
+    expect(second?.programs).toBe(first?.programs)
+    expect((second?.serverTimeMs ?? 0) - (first?.serverTimeMs ?? 0)).toBe(
+      2 * 60_000
+    )
+  })
+
+  test('yields guide compilation so streaming timers can keep advancing', async () => {
+    const repository = mock<IMediaRepository>()
+    repository.getAll.mockResolvedValue([video(1, 'Bluey (2018)')])
+    const service = new ChannelService(repository, policy, {
+      now: () => new Date('2026-08-23T22:35:00.000Z'),
+    })
+    await service.getNow('kids-club')
+
+    let completed = false
+    const pending = service
+      .getGuide('kids-club', 168, {
+        from: new Date('2026-08-23T00:00:00.000Z'),
+      })
+      .then((guide) => {
+        completed = true
+        return guide
+      })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(completed).toBe(false)
+    expect((await pending)?.programs.length).toBeGreaterThan(0)
+  })
+
   test('invalidates cached schedules after the media catalog changes', async () => {
     const repository = mock<IMediaRepository>()
     repository.getAll

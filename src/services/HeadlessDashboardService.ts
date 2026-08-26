@@ -12,7 +12,18 @@ import type { MetadataEnrichmentService } from './metadata/MetadataEnrichmentSer
 import type { ClientPresenceService } from './ClientPresenceService'
 import type { ContinuousChannelWorkerManager } from './ContinuousChannelWorkerManager'
 
+const DASHBOARD_CACHE_TTL_MS = 5_000
+
 export class HeadlessDashboardService {
+  private readonly cachedBuilds = new Map<
+    string,
+    { readonly expiresAt: number; readonly value: HeadlessDashboardViewModel }
+  >()
+  private readonly buildsInFlight = new Map<
+    string,
+    Promise<HeadlessDashboardViewModel>
+  >()
+
   constructor(
     private readonly repository: IMediaRepository,
     private readonly channels: ChannelService,
@@ -22,26 +33,62 @@ export class HeadlessDashboardService {
       | PublicMetadataConfig
       | (() => PublicMetadataConfig),
     private readonly presence?: Pick<ClientPresenceService, 'getSnapshot'>,
-    private readonly workers?: Pick<ContinuousChannelWorkerManager, 'getState'>
+    private readonly workers?: Pick<ContinuousChannelWorkerManager, 'getState'>,
+    private readonly now: () => number = () => Date.now()
   ) {}
 
   async build(updateAvailable?: boolean): Promise<HeadlessDashboardViewModel> {
+    const cacheKey =
+      updateAvailable === undefined
+        ? 'unknown'
+        : updateAvailable
+          ? 'available'
+          : 'current'
+    const cached = this.cachedBuilds.get(cacheKey)
+    if (cached && cached.expiresAt > this.now()) return cached.value
+    if (cached) this.cachedBuilds.delete(cacheKey)
+
+    const existing = this.buildsInFlight.get(cacheKey)
+    if (existing) return existing
+
+    const promise = this.buildFresh(updateAvailable)
+    this.buildsInFlight.set(cacheKey, promise)
+    try {
+      const value = await promise
+      this.cachedBuilds.set(cacheKey, {
+        expiresAt: this.now() + DASHBOARD_CACHE_TTL_MS,
+        value,
+      })
+      return value
+    } finally {
+      if (this.buildsInFlight.get(cacheKey) === promise) {
+        this.buildsInFlight.delete(cacheKey)
+      }
+    }
+  }
+
+  private async buildFresh(
+    updateAvailable?: boolean
+  ): Promise<HeadlessDashboardViewModel> {
     const channelList = this.channels.list().channels
-    const [summary, media, metadataErrors, channelStates] = await Promise.all([
+    const [summary, metadataErrors, lineup] = await Promise.all([
       this.repository.getLibrarySummary(),
-      this.repository.getAll(),
       this.repository.getCollections({
         metadataStatus: 'error',
         presentOnly: false,
         limit: 1,
       }),
-      Promise.all(
-        channelList.map(async (channel) => ({
-          channel,
-          now: await this.channels.getNow(channel.id),
-        }))
-      ),
+      channelList.length > 0
+        ? this.channels.getLineupSchedule()
+        : Promise.resolve({ schedules: [] }),
     ])
+    const schedulesByChannel = new Map(
+      lineup.schedules.map((schedule) => [schedule.channelId, schedule])
+    )
+    const channelStates = channelList.map((channel) => ({
+      channel,
+      now: schedulesByChannel.get(channel.id) ?? null,
+    }))
     const scan = this.indexer.getScanState()
     const metadata = this.metadata.getState()
     const metadataConfig =
@@ -150,16 +197,7 @@ export class HeadlessDashboardService {
         actionLabel: 'Open file details',
       })
     }
-    const eligibleSeconds = media
-      .filter(
-        (item) =>
-          item.rootAvailable === true &&
-          item.playbackEnabled === true &&
-          item.mediaType === 'video' &&
-          !item.isInterlude &&
-          item.durationSeconds > 0
-      )
-      .reduce((total, item) => total + item.durationSeconds, 0)
+    const eligibleSeconds = summary.eligibleDurationSeconds
     if (eligibleSeconds < 3 * 60 * 60) {
       warnings.push({
         severity: 'info',

@@ -29,7 +29,9 @@ const BASE_PROFILE: ContinuousHlsProfile = {
   audioCodec: 'aac',
   audioChannels: 2,
   segmentSeconds: 1,
-  playlistWindowSegments: 5,
+  // Keep enough live history to absorb a brief NAS/SQLite control-plane stall.
+  // EXT-X-START still directs new viewers to the two-second live edge.
+  playlistWindowSegments: 8,
   maximumWidth: 1920,
   maximumHeight: 1080,
 }

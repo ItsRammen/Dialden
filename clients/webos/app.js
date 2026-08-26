@@ -376,6 +376,7 @@
       }
 
       if (state.serverUrl && state.serverUrl !== normalized) {
+        abortGuideRequestsExcept(null);
         state.clockSamples = [];
         state.clockOffsetMs = 0;
         state.guideCache = {};
@@ -2252,12 +2253,27 @@
     return date.getHours() * 60 + date.getMinutes();
   }
 
+  function abortGuideRequestsExcept(cacheKey) {
+    var keys = Object.keys(state.guideRequests);
+    var index;
+    for (index = 0; index < keys.length; index += 1) {
+      var key = keys[index];
+      if (cacheKey !== null && key === cacheKey) continue;
+      var request = state.guideRequests[key];
+      delete state.guideRequests[key];
+      if (request && request.xhr && request.xhr.readyState !== 4) {
+        try { request.xhr.abort(); } catch (ignore) {}
+      }
+    }
+  }
+
   function loadCatalogDay() {
     var catalog = state.catalog;
     if (!catalog) return;
     var dayIndex = catalog.dayIndex;
-    var fromMs = catalog.requestFromMs;
+    var fromMs = catalogDayStart(dayIndex).getTime();
     var cacheKey = catalog.channelId + ':' + fromMs;
+    abortGuideRequestsExcept(cacheKey);
     var cached = catalog.programsByWeek[cacheKey];
     if (cached && Date.now() - cached.fetchedAt < GUIDE_CACHE_TTL_MS) {
       catalog.dayStarts = cached.dayStarts;
@@ -2268,23 +2284,26 @@
     if (cached) delete catalog.programsByWeek[cacheKey];
     if (state.guideRequests[cacheKey]) {
       clearChildren(elements.guideList);
-      elements.guideMessage.textContent = 'Loading the seven-day schedule…';
+      elements.guideMessage.textContent = 'Loading the selected day…';
       return;
     }
     clearChildren(elements.guideList);
-    elements.guideMessage.textContent = 'Loading the seven-day schedule…';
+    elements.guideMessage.textContent = 'Loading the selected day…';
     var channelId = catalog.channelId;
     var serverAtStart = state.serverUrl;
-    var requestToken = {};
-    state.guideRequests[cacheKey] = requestToken;
-    requestJson(
+    var requestRecord = { xhr: null };
+    state.guideRequests[cacheKey] = requestRecord;
+    requestRecord.xhr = requestJson(
       state.serverUrl + '/api/v1/channels/' + encodeURIComponent(channelId) +
-        '/guide?hours=168&calendar=1&from=' + fromMs,
+        '/guide?hours=24&from=' + fromMs,
       15000,
       function (error, data) {
-        if (state.guideRequests[cacheKey] === requestToken) delete state.guideRequests[cacheKey];
+        if (state.guideRequests[cacheKey] !== requestRecord) return;
+        delete state.guideRequests[cacheKey];
         if (state.serverUrl !== serverAtStart) return;
-        var isSelected = state.overlay === 'guide' && state.catalog && state.catalog.channelId === channelId;
+        var isSelected = state.overlay === 'guide' && state.catalog &&
+          state.catalog.channelId === channelId &&
+          catalogDayStart(state.catalog.dayIndex).getTime() === fromMs;
         if (error || !data || data.channelId !== channelId || !isArray(data.programs)) {
           if (isSelected) elements.guideMessage.textContent = 'The guide is unavailable right now.';
           return;
@@ -2429,6 +2448,7 @@
   function closeOverlays() {
     if (guidePreviewTimer) window.clearTimeout(guidePreviewTimer);
     guidePreviewTimer = null;
+    abortGuideRequestsExcept(null);
     state.overlay = null;
     state.catalog = null;
     renderOverlayState();

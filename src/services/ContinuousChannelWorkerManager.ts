@@ -170,7 +170,7 @@ const DEFAULT_PROFILE: ContinuousHlsProfile = {
   audioCodec: 'aac',
   audioChannels: 2,
   segmentSeconds: 1,
-  playlistWindowSegments: 5,
+  playlistWindowSegments: 8,
   maximumWidth: 1920,
   maximumHeight: 1080,
 }
@@ -440,7 +440,11 @@ export class ContinuousChannelWorkerManager {
     const desiredRecords: WorkerRecord[] = []
     for (const channelId of desired) {
       const record = this.record(channelId)
-      if (record.state.viewerCount === 0 && record.warmLeases.size === 0) {
+      if (
+        record.state.viewerCount === 0 &&
+        record.warmLeases.size === 0 &&
+        record.sessionLeases.size === 0
+      ) {
         await this.makeWarmCapacity(record)
       }
       const existing = record.warmLeases.get(clientId)
@@ -767,7 +771,11 @@ export class ContinuousChannelWorkerManager {
     const lease = record.warmLeases.get(clientId)
     if (!lease || lease.expiresAt !== expectedExpiry) return
     record.warmLeases.delete(clientId)
-    if (record.warmLeases.size === 0 && record.state.viewerCount === 0) {
+    if (
+      record.warmLeases.size === 0 &&
+      record.state.viewerCount === 0 &&
+      record.sessionLeases.size === 0
+    ) {
       void this.stopRecord(record, 'stopped')
     }
   }
@@ -777,7 +785,11 @@ export class ContinuousChannelWorkerManager {
     if (!lease) return
     this.clock.clearTimeout(lease.timer)
     record.warmLeases.delete(clientId)
-    if (record.warmLeases.size === 0 && record.state.viewerCount === 0) {
+    if (
+      record.warmLeases.size === 0 &&
+      record.state.viewerCount === 0 &&
+      record.sessionLeases.size === 0
+    ) {
       await this.stopRecord(record, 'stopped')
     }
   }
@@ -788,7 +800,8 @@ export class ContinuousChannelWorkerManager {
         (record) =>
           record !== requested &&
           record.state.viewerCount === 0 &&
-          record.warmLeases.size > 0
+          record.warmLeases.size > 0 &&
+          record.sessionLeases.size === 0
       )
       .sort((left, right) => (left.lastWarmedAt ?? 0) - (right.lastWarmedAt ?? 0))
     if (warmOnly.length < this.maximumWarmChannels) return

@@ -1006,7 +1006,15 @@ export class MediaRepository implements IMediaRepository {
           AS interlude_files,
         COALESCE(SUM(CASE
           WHEN duration_seconds <= 0 OR warning IS NOT NULL THEN 1 ELSE 0 END
-        ), 0) AS probe_failed_files
+        ), 0) AS probe_failed_files,
+        COALESCE(SUM(CASE
+          WHEN root_available = 1
+            AND media_type = 'video'
+            AND is_interlude = 0
+            AND duration_seconds > 0
+            AND COALESCE(playback_override, policy_enabled, 0) = 1
+          THEN duration_seconds ELSE 0 END
+        ), 0) AS eligible_duration_seconds
       FROM media
     `).get() as Record<string, number>
 
@@ -1030,6 +1038,7 @@ export class MediaRepository implements IMediaRepository {
         collections.metadata_review_collections ?? 0
       ),
       probeFailedFiles: Number(media.probe_failed_files ?? 0),
+      eligibleDurationSeconds: Number(media.eligible_duration_seconds ?? 0),
     }
   }
 

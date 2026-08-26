@@ -24,6 +24,7 @@ const summary: LibrarySummary = {
   metadataMatchedCollections: 0,
   metadataReviewCollections: 0,
   probeFailedFiles: 0,
+  eligibleDurationSeconds: 0,
 }
 
 const scan: LibraryScanState = {
@@ -78,16 +79,13 @@ function dashboard(
     async getLibrarySummary() {
       return { ...summary, ...summaryOverrides }
     },
-    async getAll() {
-      return []
-    },
     async getCollections() {
       return [...persistedErrors]
     },
   } as unknown as IMediaRepository
   const channels = {
     list: () => ({ channels: [] }),
-    getNow: async () => null,
+    getLineupSchedule: async () => ({ schedules: [] }),
   } as unknown as ChannelService
 
   return new HeadlessDashboardService(
@@ -191,5 +189,127 @@ describe('headless dashboard metadata health', () => {
           warning.message.includes('TOASTTV_TV_MEDIA')
       )
     ).toBe(true)
+  })
+
+  test('uses the aggregate eligible duration without loading every media row', async () => {
+    const view = await dashboard(metadataState(), [], publicConfig, {
+      eligibleDurationSeconds: 90 * 60,
+    }).build()
+
+    expect(view.warnings).toContainEqual({
+      severity: 'info',
+      message: 'Only 1h 30m of technically valid, approved programming is eligible',
+      href: '/library/review',
+      actionLabel: 'Review library',
+    })
+  })
+})
+
+describe('headless dashboard request coalescing', () => {
+  test('reads one lineup snapshot instead of requesting every channel separately', async () => {
+    let lineupCalls = 0
+    let getNowCalls = 0
+    const repository = {
+      async getLibrarySummary() {
+        return { ...summary, eligibleDurationSeconds: 3 * 60 * 60 }
+      },
+      async getCollections() {
+        return []
+      },
+      async getAll() {
+        throw new Error('dashboard must not materialize the media library')
+      },
+    } as unknown as IMediaRepository
+    const channelList = [
+      {
+        id: 'kids',
+        name: 'Kids',
+        enabled: true,
+        timezone: 'UTC',
+        onAir: true,
+        manuallyOffAir: false,
+      },
+      {
+        id: 'nature',
+        name: 'Nature',
+        enabled: true,
+        timezone: 'UTC',
+        onAir: true,
+        manuallyOffAir: false,
+      },
+    ]
+    const channels = {
+      list: () => ({ channels: channelList }),
+      async getLineupSchedule() {
+        lineupCalls += 1
+        return { schedules: [] }
+      },
+      async getNow() {
+        getNowCalls += 1
+        return null
+      },
+    } as unknown as ChannelService
+    const service = new HeadlessDashboardService(
+      repository,
+      channels,
+      { getScanState: () => scan },
+      { getState: () => metadataState() },
+      publicConfig
+    )
+
+    const view = await service.build()
+
+    expect(view.channels.map((channel) => channel.id)).toEqual([
+      'kids',
+      'nature',
+    ])
+    expect(lineupCalls).toBe(1)
+    expect(getNowCalls).toBe(0)
+  })
+
+  test('coalesces concurrent builds and reuses the result for five seconds', async () => {
+    let currentTime = 1_000
+    let summaryCalls = 0
+    let releaseSummary!: () => void
+    const summaryGate = new Promise<void>((resolve) => {
+      releaseSummary = resolve
+    })
+    const repository = {
+      async getLibrarySummary() {
+        summaryCalls += 1
+        await summaryGate
+        return summary
+      },
+      async getCollections() {
+        return []
+      },
+    } as unknown as IMediaRepository
+    const channels = {
+      list: () => ({ channels: [] }),
+      getLineupSchedule: async () => ({ schedules: [] }),
+    } as unknown as ChannelService
+    const service = new HeadlessDashboardService(
+      repository,
+      channels,
+      { getScanState: () => scan },
+      { getState: () => metadataState() },
+      publicConfig,
+      undefined,
+      undefined,
+      () => currentTime
+    )
+
+    const first = service.build()
+    const second = service.build()
+    expect(summaryCalls).toBe(1)
+    releaseSummary()
+    expect(await first).toBe(await second)
+
+    await service.build()
+    expect(summaryCalls).toBe(1)
+
+    currentTime += 5_001
+    await service.build()
+    expect(summaryCalls).toBe(2)
   })
 })

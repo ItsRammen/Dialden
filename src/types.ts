@@ -156,6 +156,8 @@ export interface LibrarySummary {
   readonly metadataMatchedCollections: number
   readonly metadataReviewCollections: number
   readonly probeFailedFiles: number
+  /** Total duration of approved, available, non-interlude video files. */
+  readonly eligibleDurationSeconds: number
 }
 
 export type LibraryScanStatus =
