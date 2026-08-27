@@ -328,6 +328,49 @@ describe('LG webOS presence telemetry', () => {
     expect(script).not.toContain('ADJACENT_WARM_REFRESH_MS')
   })
 
+  test('warms the highlighted channel through the lineup session while browsing', () => {
+    const script = readFileSync(
+      join(import.meta.dir, '..', 'clients', 'webos', 'app.js'),
+      'utf8'
+    )
+    const warmBody = functionSource(
+      script,
+      'warmHighlightedChannel',
+      'retargetLineupSession'
+    )
+    const selectBody = functionSource(
+      script,
+      'selectChannelPreview',
+      'resetChannelPreview'
+    )
+    const flushBody = functionSource(
+      script,
+      'flushLineupRetarget',
+      'attemptPlay'
+    )
+
+    /* The encoder cold start is the bulk of a zap on an economy-tier server.
+       Starting it while the viewer is still moving the highlight hides it
+       behind their own navigation instead of after they press OK. */
+    expect(selectBody).toContain('warmHighlightedChannel(state.previewChannelIndex)')
+    expect(script).toContain('var WARM_HIGHLIGHT_DELAY_MS = 350')
+
+    // Holding an arrow key through the lineup must not queue a retarget per row.
+    expect(warmBody).toContain('clearWarmHighlight();')
+    expect(warmBody).toContain('WARM_HIGHLIGHT_DELAY_MS')
+    // Never spend a retarget on the channel the lineup already prefers.
+    expect(warmBody).toContain('channel.id === state.lineupPreferredChannelId')
+    // The viewer may have moved on, or left, during the settle delay.
+    expect(warmBody).toContain("state.view !== 'channels'")
+    expect(warmBody).toContain('highlighted.id !== channel.id')
+    expect(warmBody).toContain('flushLineupRetarget();')
+    // Warming reuses the lineup lease, never a second per-channel endpoint.
+    expect(warmBody).not.toContain("'/api/client/v1/channels/")
+
+    // A highlight that moves while a retarget is in flight still gets sent.
+    expect(flushBody).toContain("state.view !== 'channels' &&")
+  })
+
   test('auto-starts the last channel and prepares zaps before replacing video', () => {
     const script = readFileSync(
       join(import.meta.dir, '..', 'clients', 'webos', 'app.js'),
@@ -350,7 +393,10 @@ describe('LG webOS presence telemetry', () => {
     expect(script).toContain('retargetLineupSession(currentChannel().id, generation)')
     expect(script).toContain('if (!state.serverUrl || state.lineupRetargetInFlight || !state.lineupDesiredChannelId) return;')
     expect(script).toContain('if (state.lineupPreferredChannelId === state.lineupDesiredChannelId) return;')
-    expect(script).toContain("if (!applied || state.view !== 'player' || !state.hasCommittedVideo) return;")
+    /* The retarget chain now continues while browsing as well, so the guard
+       is split: bail on a failed apply, then on views that cannot chain. */
+    expect(script).toContain('if (!applied) return;')
+    expect(script).toContain("(state.view !== 'player' || !state.hasCommittedVideo)) return;")
     expect(script).toContain('state.lineupPreferredChannelId = data.channel.id')
     expect(script).toContain("data.status !== 'ready'")
     expect(script).toContain("'Looking for ToastTV — reconnecting…'")

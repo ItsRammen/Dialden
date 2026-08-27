@@ -7,7 +7,7 @@
   var STORAGE_CLIENT_NAME = 'toasttv.clientName.v1';
   var STORAGE_SESSION_OWNER = 'toasttv.sessionOwner.v1';
   var STORAGE_SESSION_OWNER_EPOCH = 'toasttv.sessionOwnerEpoch.v1';
-  var CLIENT_VERSION = '0.3.14';
+  var CLIENT_VERSION = '0.3.15';
   var DEFAULT_SERVER = 'http://TOWER:1993';
   var POLL_INTERVAL_MS = 30000;
   var CHANNEL_REFRESH_INTERVAL_MS = 15000;
@@ -43,6 +43,9 @@
      server, so a seamless cut only becomes visible once playback drains past
      it. Beyond this budget the guarded re-attach reaches the new channel
      sooner than waiting ever would. */
+  /* Settle time before warming a highlighted channel. Long enough that holding
+     an arrow key through the lineup does not queue a retarget per row. */
+  var WARM_HIGHLIGHT_DELAY_MS = 350;
   var IN_PLACE_TUNER_SEAMLESS_MAX_DRAIN_MS = 8000;
   var IN_PLACE_TUNER_SEAMLESS_SLACK_MS = 1500;
 
@@ -140,6 +143,7 @@
   var catalogRailScrollFrame = null;
   var tunerRetryTimer = null;
   var inPlaceTunerTimer = null;
+  var warmHighlightTimer = null;
 
   document.addEventListener('DOMContentLoaded', boot, false);
 
@@ -1762,6 +1766,7 @@
       cards[cardIndex].classList.toggle('is-previewed', Number(cards[cardIndex].getAttribute('data-channel-index')) === state.previewChannelIndex);
     }
     renderChannelPreview(state.previewChannelIndex);
+    warmHighlightedChannel(state.previewChannelIndex);
   }
 
   function resetChannelPreview() {
@@ -3285,6 +3290,35 @@
     tuningTimer = null;
   }
 
+  function clearWarmHighlight() {
+    if (warmHighlightTimer) window.clearTimeout(warmHighlightTimer);
+    warmHighlightTimer = null;
+  }
+
+  /**
+   * Starts the highlighted channel's encoder while the viewer is still
+   * browsing, so the cold start happens behind their own navigation instead of
+   * after they press OK. Entering this view has already stopped playback, so
+   * moving the lineup lease here cannot disturb anything on screen.
+   */
+  function warmHighlightedChannel(index) {
+    clearWarmHighlight();
+    var channel = state.channels[index];
+    if (!state.serverUrl || !channel || channel.enabled === false) return;
+    if (channel.id === state.lineupPreferredChannelId) return;
+    warmHighlightTimer = window.setTimeout(function () {
+      warmHighlightTimer = null;
+      /* Only warm what is still highlighted: the viewer may have moved on, or
+         left the lineup entirely, during the settle delay. */
+      if (state.view !== 'channels') return;
+      var highlighted = state.channels[state.previewChannelIndex];
+      if (!highlighted || highlighted.id !== channel.id ||
+          highlighted.enabled === false) return;
+      state.lineupDesiredChannelId = channel.id;
+      flushLineupRetarget();
+    }, WARM_HIGHLIGHT_DELAY_MS);
+  }
+
   function retargetLineupSession(channelId, generation) {
     if (!state.serverUrl || !channelId || generation !== state.tuneGeneration) return;
     state.lineupDesiredChannelId = channelId;
@@ -3316,7 +3350,11 @@
         if (state.view === 'player' && state.hasCommittedVideo && current) {
           state.lineupDesiredChannelId = current.id;
         }
-        if (!applied || state.view !== 'player' || !state.hasCommittedVideo) return;
+        if (!applied) return;
+        /* Browsing continues the chain too. The highlight can move on while a
+           retarget is in flight, and nothing else would resend the newer one. */
+        if (state.view !== 'channels' &&
+            (state.view !== 'player' || !state.hasCommittedVideo)) return;
         if (state.lineupDesiredChannelId !== state.lineupPreferredChannelId) {
           flushLineupRetarget();
         }
@@ -4178,6 +4216,7 @@
     if (view !== 'player') stopPlayerTimers();
     if (view === 'player') startPlayerTimers();
     if (view !== 'player') closeOverlays();
+    if (view !== 'channels') clearWarmHighlight();
     if (view === 'channels' && state.channels.length) selectChannelPreview(state.channelIndex);
     queuePresenceHeartbeat();
     window.setTimeout(focusFirst, 50);
