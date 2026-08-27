@@ -7,7 +7,7 @@
   var STORAGE_CLIENT_NAME = 'toasttv.clientName.v1';
   var STORAGE_SESSION_OWNER = 'toasttv.sessionOwner.v1';
   var STORAGE_SESSION_OWNER_EPOCH = 'toasttv.sessionOwnerEpoch.v1';
-  var CLIENT_VERSION = '0.3.11';
+  var CLIENT_VERSION = '0.3.12';
   var DEFAULT_SERVER = 'http://TOWER:1993';
   var POLL_INTERVAL_MS = 30000;
   var CHANNEL_REFRESH_INTERVAL_MS = 15000;
@@ -667,6 +667,9 @@
     var count = Number(value.segmentCount);
     var targetDuration = Number(value.targetDurationSeconds);
     var duration = Number(value.durationSeconds);
+    var transportMode = value.transportMode === 'seamless'
+      ? 'seamless'
+      : 'discontinuity';
     if (!isFinite(first) || Math.floor(first) !== first || first < 0 ||
         !isFinite(last) || Math.floor(last) !== last || last < first ||
         !isFinite(count) || Math.floor(count) !== count || count < 2 || count > 32 ||
@@ -679,7 +682,8 @@
       lastMediaSequence: last,
       segmentCount: count,
       targetDurationSeconds: targetDuration,
-      durationSeconds: duration
+      durationSeconds: duration,
+      transportMode: transportMode
     };
   }
 
@@ -975,6 +979,13 @@
         state.candidateSlot || video.readyState < 2 ||
         (!oldBaseline.buffered.length && !oldBaseline.seekable.length) ||
         (!acceptanceBaseline.buffered.length && !acceptanceBaseline.seekable.length)) return false;
+    var outgoingEnd = Math.max(
+      rangeEnd(oldBaseline.buffered) === null ? -1 : rangeEnd(oldBaseline.buffered),
+      rangeEnd(acceptanceBaseline.buffered) === null ? -1 : rangeEnd(acceptanceBaseline.buffered)
+    );
+    var bufferedWaitMs = outgoingEnd >= 0
+      ? Math.max(0, outgoingEnd - (Number(video.currentTime) || 0)) * 1000
+      : 0;
     var probe = {
       generation: generation,
       channelId: channelId,
@@ -984,12 +995,17 @@
       timing: timing,
       requestBaseline: oldBaseline,
       acceptanceBaseline: acceptanceBaseline,
+      seamlessTransport: boundary.transportMode === 'seamless',
+      outgoingBufferedEnd: outgoingEnd >= 0 ? outgoingEnd : null,
       manifestBoundaryObserved: false,
       rangeBoundaryObserved: false,
       liveEdgeSeekIssued: false,
       progressStartedAt: 0,
       progressTime: 0,
-      deadlineAt: Date.now() + IN_PLACE_TUNER_DEADLINE_MS
+      deadlineAt: Date.now() + Math.max(
+        IN_PLACE_TUNER_DEADLINE_MS,
+        Math.min(6000, bufferedWaitMs + 1500)
+      )
     };
     state.tunerInPlaceSwitch = probe;
     state.hardLiveEdgePending = false;
@@ -1009,6 +1025,31 @@
     }
     var video = activeVideo();
     var ranges = mediaRangeSnapshot(video);
+    if (probe.seamlessTransport) {
+      if (probe.manifestBoundaryObserved &&
+          !state.hlsSeekPending && !video.seeking &&
+          window.ToastTVPlaybackPolicy.isPlaybackStable(video)) {
+        var seamlessTime = Number(video.currentTime) || 0;
+        var crossedOutgoing = probe.outgoingBufferedEnd !== null &&
+          seamlessTime > probe.outgoingBufferedEnd + 0.03;
+        var seamlessHeadroom = playbackHeadroomSeconds(video);
+        if (crossedOutgoing && seamlessHeadroom !== null &&
+            seamlessHeadroom >= MIN_READY_BUFFER_SECONDS) {
+          if (!probe.progressStartedAt) {
+            probe.progressStartedAt = Date.now();
+            probe.progressTime = seamlessTime;
+          } else if (Date.now() - probe.progressStartedAt >= IN_PLACE_TUNER_PROGRESS_MS &&
+                     seamlessTime > probe.progressTime + 0.03) {
+            finishInPlaceStableTunerHandoff(probe);
+            return;
+          }
+        } else {
+          probe.progressStartedAt = 0;
+        }
+      }
+      scheduleInPlaceStableTunerProbe(probe);
+      return;
+    }
     var targetRange = probe.manifestBoundaryObserved
       ? findProvenTargetRange(
         ranges,

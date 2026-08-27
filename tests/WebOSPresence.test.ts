@@ -1005,6 +1005,7 @@ describe('LG webOS presence telemetry', () => {
     expect(stableCommitBody).not.toContain('firstFrameAt = Date.now()')
     expect(script).toContain('function stableTunerSwitchBoundary(')
     expect(script).toContain('switchBoundary: stableTunerSwitchBoundary(tuner.switchBoundary, tuner.revision)')
+    expect(script).toContain("value.transportMode === 'seamless'")
     expect(stableCommitBody).toContain('beginInPlaceStableTunerHandoff(')
     expect(stableCommitBody.indexOf('beginInPlaceStableTunerHandoff(')).toBeLessThan(
       stableCommitBody.indexOf('activeVideo().muted = true')
@@ -1012,6 +1013,9 @@ describe('LG webOS presence telemetry', () => {
     expect(inPlaceBeginBody).toContain('hasAttachedStableTunerSource()')
     expect(inPlaceBeginBody).not.toContain('loadMediaElement(')
     expect(inPlaceProbeBody).toContain('probe.manifestBoundaryObserved')
+    expect(inPlaceProbeBody).toContain('if (probe.seamlessTransport)')
+    expect(inPlaceProbeBody).toContain('seamlessTime > probe.outgoingBufferedEnd + 0.03')
+    expect(inPlaceProbeBody).toContain('seamlessHeadroom >= MIN_READY_BUFFER_SECONDS')
     expect(script).toContain('function findProvenTargetRange(')
     expect(script).toContain('!rangeOverlapsAny(candidate, requestRanges)')
     expect(script).toContain('!rangeOverlapsAny(candidate, acceptanceRanges)')

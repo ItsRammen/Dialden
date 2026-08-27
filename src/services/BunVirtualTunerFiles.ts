@@ -10,9 +10,14 @@ import {
   rm,
   stat,
   unlink,
+  writeFile,
 } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { VirtualTunerFiles } from './VirtualTunerService'
+import {
+  spliceMpegTsSegment,
+  type MpegTsTransportState,
+} from './MpegTsTransportSplicer'
 
 const SAFE_CHANNEL_ID = /^[a-zA-Z0-9._-]{1,100}$/
 const SAFE_SESSION_ID = /^[a-f0-9-]{36}$/
@@ -107,6 +112,46 @@ export class BunVirtualTunerFiles implements VirtualTunerFiles {
         await rm(temporary, { force: true }).catch(() => undefined)
         throw copyError
       }
+    }
+  }
+
+  async spliceSegment(
+    channelId: string,
+    sourceName: string,
+    sessionId: string,
+    outputName: string,
+    durationSeconds: number,
+    state: MpegTsTransportState
+  ): Promise<MpegTsTransportState> {
+    this.assertChannelId(channelId)
+    this.assertSegmentName(sourceName)
+    this.assertSegmentName(outputName)
+    const source = join(this.channelOutputRoot, channelId, 'live', sourceName)
+    const target = this.segmentPath(sessionId, outputName)
+    const sourceStat = await stat(source)
+    if (!sourceStat.isFile() || sourceStat.size <= 0) {
+      throw new Error(`Source segment ${sourceName} is empty`)
+    }
+    const rewritten = spliceMpegTsSegment(
+      await readFile(source),
+      durationSeconds,
+      state
+    )
+    const temporary = join(
+      this.sessionDirectory(sessionId),
+      `.${outputName}.${randomUUID()}.tmp`
+    )
+    try {
+      await writeFile(temporary, rewritten.bytes, { flag: 'wx' })
+      const saved = await stat(temporary)
+      if (!saved.isFile() || saved.size !== rewritten.bytes.byteLength) {
+        throw new Error(`Rewritten segment ${sourceName} is incomplete`)
+      }
+      await rename(temporary, target)
+      return rewritten.state
+    } catch (error) {
+      await rm(temporary, { force: true }).catch(() => undefined)
+      throw error
     }
   }
 

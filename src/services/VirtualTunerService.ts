@@ -4,6 +4,10 @@ import type {
   ContinuousChannelWorkerState,
 } from './ContinuousChannelWorkerManager'
 import { isStreamableChannelWorkerState } from './ContinuousChannelWorkerManager'
+import {
+  MpegTsTransportIncompatibleError,
+  type MpegTsTransportState,
+} from './MpegTsTransportSplicer'
 
 const SAFE_CLIENT_ID = /^[a-zA-Z0-9._:-]{1,160}$/
 const SAFE_OWNER_ID = /^[a-zA-Z0-9._:-]{1,160}$/
@@ -47,6 +51,15 @@ export interface VirtualTunerFiles {
     sessionId: string,
     outputName: string
   ): Promise<void>
+  /** Rewrites one compatible TS segment onto the viewer's transport clock. */
+  spliceSegment?(
+    channelId: string,
+    sourceName: string,
+    sessionId: string,
+    outputName: string,
+    durationSeconds: number,
+    state: MpegTsTransportState
+  ): Promise<MpegTsTransportState>
   removeSegment(sessionId: string, outputName: string): Promise<void>
   removeSession(sessionId: string): Promise<void>
   segmentPath(sessionId: string, outputName: string): string
@@ -104,6 +117,8 @@ export interface VirtualTunerSwitchBoundary {
   readonly targetDurationSeconds: number
   /** Sum of the actual EXTINF durations in the committed window. */
   readonly durationSeconds: number
+  /** Seamless keeps one decoder clock; discontinuity uses the guarded fallback. */
+  readonly transportMode: 'seamless' | 'discontinuity'
 }
 
 export class VirtualTunerSessionNotFoundError extends Error {
@@ -150,6 +165,8 @@ interface VirtualSegment {
 interface StagedSegments {
   readonly segments: VirtualSegment[]
   readonly nextSequence: number
+  readonly transportState?: MpegTsTransportState
+  readonly transportMode: 'seamless' | 'discontinuity'
 }
 
 interface CurrentEdgeStage {
@@ -191,6 +208,8 @@ interface VirtualTunerRecord {
   highestRequestId: number
   lastCommittedRequestId: number
   lastCommittedTune?: VirtualTunerTuneResult
+  transportState?: MpegTsTransportState
+  transportMode: 'unknown' | 'seamless' | 'discontinuity'
   pendingTunes: Map<number, PendingTune>
   operation: Promise<void>
 }
@@ -654,6 +673,7 @@ export class VirtualTunerService {
       closed: false,
       highestRequestId: -1,
       lastCommittedRequestId: -1,
+      transportMode: 'unknown',
       pendingTunes: new Map(),
       operation: Promise.resolve(),
     }
@@ -1149,7 +1169,48 @@ export class VirtualTunerService {
     parsed: ParsedSourcePlaylist,
     forceDiscontinuity: boolean
   ): Promise<StagedSegments> {
+    if (
+      this.files.spliceSegment &&
+      record.transportMode !== 'discontinuity'
+    ) {
+      try {
+        return await this.preserveParsedMode(
+          record,
+          channelId,
+          revision,
+          parsed,
+          forceDiscontinuity,
+          true
+        )
+      } catch (error) {
+        if (!(error instanceof MpegTsTransportIncompatibleError)) throw error
+        console.info(
+          `Virtual tuner ${record.sessionId} is using a discontinuity for ${channelId}: ${error.message}`
+        )
+      }
+    }
+    return this.preserveParsedMode(
+      record,
+      channelId,
+      revision,
+      parsed,
+      forceDiscontinuity,
+      false
+    )
+  }
+
+  private async preserveParsedMode(
+    record: VirtualTunerRecord,
+    channelId: string,
+    revision: number,
+    parsed: ParsedSourcePlaylist,
+    forceDiscontinuity: boolean,
+    seamless: boolean
+  ): Promise<StagedSegments> {
     const staged: VirtualSegment[] = []
+    let transportState: MpegTsTransportState = record.transportState ?? {
+      continuityCounters: {},
+    }
     try {
       for (const source of parsed.segments) {
         const sourceKey = `${revision}:${channelId}:${source.sourceName}`
@@ -1161,25 +1222,39 @@ export class VirtualTunerService {
         const outputId = record.nextOutputId
         record.nextOutputId += 1
         const outputName = `segment-${String(outputId).padStart(13, '0')}.ts`
-        await this.files.preserveSegment(
-          channelId,
-          source.sourceName,
-          record.sessionId,
-          outputName
-        )
+        if (seamless && this.files.spliceSegment) {
+          transportState = await this.files.spliceSegment(
+            channelId,
+            source.sourceName,
+            record.sessionId,
+            outputName,
+            source.durationSeconds,
+            transportState
+          )
+        } else {
+          await this.files.preserveSegment(
+            channelId,
+            source.sourceName,
+            record.sessionId,
+            outputName
+          )
+        }
         staged.push({
           sequence,
           outputName,
           sourceKey,
           durationSeconds: source.durationSeconds,
-          discontinuityBefore:
-            (forceDiscontinuity && staged.length === 0) ||
-            source.discontinuityBefore,
+          discontinuityBefore: seamless
+            ? false
+            : (forceDiscontinuity && staged.length === 0) ||
+              source.discontinuityBefore,
         })
       }
       return {
         segments: staged,
         nextSequence: record.nextSequence + staged.length,
+        transportState: seamless ? transportState : undefined,
+        transportMode: seamless ? 'seamless' : 'discontinuity',
       }
     } catch (error) {
       await this.cleanupSegments(
@@ -1196,6 +1271,8 @@ export class VirtualTunerService {
     replaceAdvertised = false
   ): Promise<void> {
     record.nextSequence = staged.nextSequence
+    record.transportState = staged.transportState
+    record.transportMode = staged.transportMode
     for (const segment of staged.segments) record.sourceKeys.add(segment.sourceKey)
     // A cross-channel commit is a hard live-window cut. Keeping the outgoing
     // entries advertised lets a lagging native HLS player continue requesting
@@ -1362,6 +1439,8 @@ export class VirtualTunerService {
         (total, entry) => total + entry.durationSeconds,
         0
       ),
+      transportMode:
+        record.transportMode === 'seamless' ? 'seamless' : 'discontinuity',
     })
     const result: VirtualTunerTuneResult = Object.freeze({
       ...this.describe(record),

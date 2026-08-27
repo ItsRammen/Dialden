@@ -83,6 +83,7 @@ const tunedDescriptor = (
     segmentCount,
     targetDurationSeconds: 1,
     durationSeconds: segmentCount,
+    transportMode: 'discontinuity' as const,
   },
 })
 
@@ -229,6 +230,7 @@ describe('virtual tuner HTTP contract', () => {
           segmentCount: 4,
           targetDurationSeconds: 1,
           durationSeconds: 4,
+          transportMode: 'discontinuity',
         },
       },
       now: { channelId: 'cartoons', program: { title: 'Current program' } },

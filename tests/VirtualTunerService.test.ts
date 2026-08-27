@@ -4,6 +4,7 @@ import { readFile, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { BunVirtualTunerFiles } from '../src/services/BunVirtualTunerFiles'
+import { MpegTsTransportIncompatibleError } from '../src/services/MpegTsTransportSplicer'
 import type {
   ChannelWorkerClock,
   ContinuousChannelWorkerState,
@@ -70,6 +71,20 @@ function state(channelId: string): ContinuousChannelWorkerState {
   }
 }
 
+function discontinuityAdapter(files: BunVirtualTunerFiles): VirtualTunerFiles {
+  return {
+    prepareSession: (sessionId) => files.prepareSession(sessionId),
+    readChannelPlaylist: (channelId) => files.readChannelPlaylist(channelId),
+    preserveSegment: (...args) => files.preserveSegment(...args),
+    removeSegment: (...args) => files.removeSegment(...args),
+    removeSession: (...args) => files.removeSession(...args),
+    segmentPath: (...args) => files.segmentPath(...args),
+    segmentExists: (...args) => files.segmentExists(...args),
+    sourcePresentationIsFresh: (...args) =>
+      files.sourcePresentationIsFresh(...args),
+  }
+}
+
 describe('VirtualTunerService', () => {
   let root: string
   let sourceRoot: string
@@ -93,7 +108,7 @@ describe('VirtualTunerService', () => {
     for (const [index, channelId] of ['kids', 'cartoons', 'nature'].entries()) {
       writeChannel(sourceRoot, channelId, index * 10 + 1)
     }
-    service = createService(files)
+    service = createService(discontinuityAdapter(files))
   })
 
   afterEach(() => rmSync(root, { recursive: true, force: true }))
@@ -262,6 +277,79 @@ describe('VirtualTunerService', () => {
     expect(await readFile(newSegment!, 'utf8')).toBe('cartoons-11')
   })
 
+  test('publishes a cross-channel cut without discontinuity when transport splicing succeeds', async () => {
+    const seamlessFiles: VirtualTunerFiles = {
+      ...discontinuityAdapter(files),
+      async spliceSegment(
+        channelId,
+        sourceName,
+        sessionId,
+        outputName,
+        durationSeconds,
+        transport
+      ) {
+        await files.preserveSegment(
+          channelId,
+          sourceName,
+          sessionId,
+          outputName
+        )
+        return {
+          programSignature: transport.programSignature ?? 'normalized-program',
+          nextTimestamp90k:
+            (transport.nextTimestamp90k ?? 0) +
+            Math.round(durationSeconds * 90_000),
+          continuityCounters: transport.continuityCounters,
+        }
+      },
+    }
+    service = createService(seamlessFiles)
+    const opened = await service.open('living-room', OWNER_ID, 'kids')
+    const tuned = await service.tune(
+      'living-room',
+      OWNER_ID,
+      opened.sessionId,
+      'cartoons',
+      1
+    )
+
+    expect(tuned.switchBoundary.transportMode).toBe('seamless')
+    const playlist = await service.playlist(opened.sessionId)
+    expect(playlist.split(/\r?\n/)).not.toContain('#EXT-X-DISCONTINUITY')
+    expect(playlist).toContain('#EXT-X-MEDIA-SEQUENCE:3')
+  })
+
+  test('stays in guarded discontinuity mode after a transport splice is rejected', async () => {
+    let spliceAttempts = 0
+    const fallbackFiles: VirtualTunerFiles = {
+      ...discontinuityAdapter(files),
+      async spliceSegment() {
+        spliceAttempts += 1
+        throw new MpegTsTransportIncompatibleError('changed program map')
+      },
+    }
+    service = createService(fallbackFiles)
+    const opened = await service.open('living-room', OWNER_ID, 'kids')
+    const attemptsAfterOpen = spliceAttempts
+
+    const first = await service.tune(
+      'living-room',
+      OWNER_ID,
+      opened.sessionId,
+      'cartoons',
+      1
+    )
+    expect(first.switchBoundary.transportMode).toBe('discontinuity')
+    expect(spliceAttempts).toBe(attemptsAfterOpen)
+
+    writeChannel(sourceRoot, 'cartoons', 13)
+    await service.playlist(opened.sessionId)
+    expect(spliceAttempts).toBe(attemptsAfterOpen)
+    expect(await service.playlist(opened.sessionId)).toContain(
+      '#EXT-X-DISCONTINUITY'
+    )
+  })
+
   test('returns the original committed switch boundary for an idempotent retry after the window slides', async () => {
     const opened = await service.open('living-room', OWNER_ID, 'kids')
     const committed = await service.tune(
@@ -295,6 +383,7 @@ describe('VirtualTunerService', () => {
       segmentCount: 2,
       targetDurationSeconds: 1,
       durationSeconds: 2,
+      transportMode: 'discontinuity',
     })
   })
 
@@ -766,7 +855,9 @@ describe('VirtualTunerService', () => {
   })
 
   test('stops serving a permanently stale edge and verifies same-channel health', async () => {
-    service = createService(files, { staleEdgeGraceMs: 1_000 })
+    service = createService(discontinuityAdapter(files), {
+      staleEdgeGraceMs: 1_000,
+    })
     const opened = await service.open('living-room', OWNER_ID, 'kids')
 
     await expect(
@@ -833,7 +924,9 @@ describe('VirtualTunerService', () => {
   })
 
   test('caps unique sessions while allowing the existing client to replace its owner', async () => {
-    service = createService(files, { maximumSessions: 1 })
+    service = createService(discontinuityAdapter(files), {
+      maximumSessions: 1,
+    })
     const first = await service.open('living-room', 'launch-old', 'kids', 1)
     await expect(
       Promise.resolve().then(() =>
