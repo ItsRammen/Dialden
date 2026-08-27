@@ -7,7 +7,7 @@
   var STORAGE_CLIENT_NAME = 'toasttv.clientName.v1';
   var STORAGE_SESSION_OWNER = 'toasttv.sessionOwner.v1';
   var STORAGE_SESSION_OWNER_EPOCH = 'toasttv.sessionOwnerEpoch.v1';
-  var CLIENT_VERSION = '0.3.13';
+  var CLIENT_VERSION = '0.3.14';
   var DEFAULT_SERVER = 'http://TOWER:1993';
   var POLL_INTERVAL_MS = 30000;
   var CHANNEL_REFRESH_INTERVAL_MS = 15000;
@@ -1190,9 +1190,12 @@
     clearInPlaceStableTunerProbe();
     logTunerStatus('warn', 'in-place switch to ' + probe.channelId +
       ' fell back to decoder reattach: ' + reason);
-    captureTuningFreezeFrame();
-    activeVideo().muted = true;
-    state.hasCommittedVideo = false;
+    /* Release the outgoing decoder before re-attaching. Muting alone leaves
+       LG's old pipeline running and it keeps draining that channel's audio
+       under the tuning backdrop, which is the overlapping-pipeline failure
+       detachVideoForTune() exists to prevent. Clearing hasCommittedVideo first
+       would make loadProgram() skip that detach entirely. */
+    detachVideoForTune();
     state.frameProbeAttempts = 0;
     state.hlsSeekPending = false;
     state.hardLiveEdgePending = true;
@@ -2288,9 +2291,8 @@
         queuePresenceHeartbeat();
         return;
       }
-      captureTuningFreezeFrame();
-      activeVideo().muted = true;
-      state.hasCommittedVideo = false;
+      // Same outgoing-decoder release as the in-place fallback above.
+      detachVideoForTune();
       state.frameProbeAttempts = 0;
       beginTuning('Switching the live picture…');
     }
@@ -2339,13 +2341,11 @@
     state.requestSerial += 1;
     clearTuningTimer();
     clearBufferingTimers();
-    state.pendingJoin = false;
-    state.hasCommittedVideo = false;
     state.hlsSeekPending = false;
     state.hardLiveEdgePending = true;
     state.frameProbeAttempts = 0;
-    captureTuningFreezeFrame();
-    activeVideo().muted = true;
+    // Clears pendingJoin and hasCommittedVideo, and releases both decoders.
+    detachVideoForTune();
     beginTuning('Resuming the selected channel…');
     applyNowResult(pendingNow, null, true);
     updateChannelOsdProgram(pendingNow.program.title);

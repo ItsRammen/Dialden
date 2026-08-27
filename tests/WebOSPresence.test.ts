@@ -494,8 +494,12 @@ describe('LG webOS presence telemetry', () => {
     expect(detachBody.indexOf('captureTuningFreezeFrame();')).toBeLessThan(
       detachBody.indexOf('window.ToastTVPlaybackPolicy.resetMediaElement(activeVideo())')
     )
-    expect(stableCommitBody.indexOf('captureTuningFreezeFrame();')).toBeLessThan(
-      stableCommitBody.indexOf('activeVideo().muted = true')
+    /* The stable re-attach delegates the whole outgoing release to
+       detachVideoForTune(). Muting in place would leave LG's old pipeline
+       running and draining that channel's audio under the tuning backdrop. */
+    expect(stableCommitBody).not.toContain('activeVideo().muted = true')
+    expect(stableCommitBody.indexOf('detachVideoForTune();')).toBeLessThan(
+      stableCommitBody.indexOf('applyNowResult(now, timing, requiresStableHandoff)')
     )
     expect(stabilizeBody.indexOf("classList.add('has-video')")).toBeLessThan(
       stabilizeBody.indexOf('clearTuningFreezeFrame();')
@@ -988,12 +992,11 @@ describe('LG webOS presence telemetry', () => {
     expect(stableCommitBody).toContain('state.candidateChannelId = requiresStableHandoff ? channelId : null')
     expect(stableCommitBody).toContain('if (!requiresStableHandoff)')
     expect(stableCommitBody).toContain('state.committedChannelId = channelId')
-    expect(stableCommitBody).toContain('activeVideo().muted = true')
-    expect(stableCommitBody).toContain('state.hasCommittedVideo = false')
+    expect(stableCommitBody).toContain('detachVideoForTune();')
     expect(stableCommitBody).toContain("beginTuning('Switching the live picture…')")
     expect(stableCommitBody).toContain('applyNowResult(now, timing, requiresStableHandoff)')
-    expect(stableCommitBody.indexOf('state.hasCommittedVideo = false')).toBeLessThan(
-      stableCommitBody.indexOf('applyNowResult(now, timing, requiresStableHandoff)')
+    expect(stableCommitBody.indexOf('detachVideoForTune();')).toBeLessThan(
+      stableCommitBody.indexOf("beginTuning('Switching the live picture…')")
     )
     expect(stableCommitBody.indexOf('if (requiresStableHandoff) {\n      queuePresenceHeartbeat();\n      return;')).toBeLessThan(
       stableCommitBody.indexOf('writeStorage(STORAGE_CHANNEL, channelId)')
@@ -1001,7 +1004,12 @@ describe('LG webOS presence telemetry', () => {
     expect(stableCommitBody).not.toContain('requestVideoFrameCallback')
     expect(stableCommitBody).toContain("tunerSwitched && typeof now.branding === 'undefined'")
     expect(stableCommitBody).toContain('scheduleStableTunerMetadataSync(')
-    expect(stableCommitBody).not.toContain('detachVideoForTune()')
+    /* The in-place branch must never tear down the decoder; that is the whole
+       point of the stable manifest. Only the fallback branch beneath it may,
+       because that path re-attaches. Anchor the call after the in-place return. */
+    expect(stableCommitBody.indexOf('detachVideoForTune();')).toBeGreaterThan(
+      stableCommitBody.indexOf('applyNowResult(now, timing, false)')
+    )
     expect(stableCommitBody).not.toContain('resetMediaElement(')
     expect(stableCommitBody).not.toContain('loadMediaElement(')
     expect(stableCommitBody).not.toContain('firstFrameAt = Date.now()')
@@ -1009,8 +1017,9 @@ describe('LG webOS presence telemetry', () => {
     expect(script).toContain('switchBoundary: stableTunerSwitchBoundary(tuner.switchBoundary, tuner.revision)')
     expect(script).toContain("value.transportMode === 'seamless'")
     expect(stableCommitBody).toContain('beginInPlaceStableTunerHandoff(')
+    // The in-place attempt is always made before the re-attach teardown.
     expect(stableCommitBody.indexOf('beginInPlaceStableTunerHandoff(')).toBeLessThan(
-      stableCommitBody.indexOf('activeVideo().muted = true')
+      stableCommitBody.indexOf('detachVideoForTune();')
     )
     expect(inPlaceBeginBody).toContain('hasAttachedStableTunerSource()')
     expect(inPlaceBeginBody).not.toContain('loadMediaElement(')
@@ -1029,6 +1038,15 @@ describe('LG webOS presence telemetry', () => {
     expect(inPlaceProbeBody).toContain('!state.hlsSeekPending && !video.seeking')
     expect(inPlaceFinishBody).toContain("state.tuneMetrics.src = 'session-tuner-in-place'")
     expect(inPlaceFinishBody).not.toContain('loadMediaElement(')
+    /* Setting hasCommittedVideo false before applyNowResult() makes
+       loadProgram() skip its detach, so this path has to release the outgoing
+       decoder itself or LG keeps playing the previous channel's audio over the
+       black tuning backdrop for several seconds. */
+    expect(inPlaceFallbackBody).toContain('detachVideoForTune();')
+    expect(inPlaceFallbackBody).not.toContain('activeVideo().muted = true')
+    expect(inPlaceFallbackBody.indexOf('detachVideoForTune();')).toBeLessThan(
+      inPlaceFallbackBody.indexOf('applyNowResult(probe.now, probe.timing, true)')
+    )
     expect(inPlaceFallbackBody).toContain('applyNowResult(probe.now, probe.timing, true)')
     expect(inPlaceFallbackBody).toContain("state.tuneMetrics.src = 'session-tuner-reattach-fallback'")
     expect(mediaErrorBody).toContain('state.previousTune.tunerChannelId || state.tunerRollbackChannelId')
