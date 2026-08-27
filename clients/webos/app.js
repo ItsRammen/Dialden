@@ -7,7 +7,7 @@
   var STORAGE_CLIENT_NAME = 'toasttv.clientName.v1';
   var STORAGE_SESSION_OWNER = 'toasttv.sessionOwner.v1';
   var STORAGE_SESSION_OWNER_EPOCH = 'toasttv.sessionOwnerEpoch.v1';
-  var CLIENT_VERSION = '0.3.12';
+  var CLIENT_VERSION = '0.3.13';
   var DEFAULT_SERVER = 'http://TOWER:1993';
   var POLL_INTERVAL_MS = 30000;
   var CHANNEL_REFRESH_INTERVAL_MS = 15000;
@@ -39,6 +39,12 @@
   var IN_PLACE_TUNER_PROBE_MS = 100;
   var IN_PLACE_TUNER_PROGRESS_MS = 650;
   var IN_PLACE_TUNER_RANGE_EPSILON = 0.08;
+  /* Outgoing media already inside the TV's buffer cannot be recalled by the
+     server, so a seamless cut only becomes visible once playback drains past
+     it. Beyond this budget the guarded re-attach reaches the new channel
+     sooner than waiting ever would. */
+  var IN_PLACE_TUNER_SEAMLESS_MAX_DRAIN_MS = 8000;
+  var IN_PLACE_TUNER_SEAMLESS_SLACK_MS = 1500;
 
   var state = {
     view: 'boot',
@@ -869,6 +875,15 @@
     return snapshot;
   }
 
+  function rangeEnd(ranges) {
+    var index;
+    var end = null;
+    for (index = 0; index < ranges.length; index += 1) {
+      if (end === null || ranges[index][1] > end) end = ranges[index][1];
+    }
+    return end;
+  }
+
   function timeIsInsideRanges(time, ranges) {
     var index;
     var epsilon = IN_PLACE_TUNER_RANGE_EPSILON;
@@ -979,13 +994,28 @@
         state.candidateSlot || video.readyState < 2 ||
         (!oldBaseline.buffered.length && !oldBaseline.seekable.length) ||
         (!acceptanceBaseline.buffered.length && !acceptanceBaseline.seekable.length)) return false;
-    var outgoingEnd = Math.max(
-      rangeEnd(oldBaseline.buffered) === null ? -1 : rangeEnd(oldBaseline.buffered),
-      rangeEnd(acceptanceBaseline.buffered) === null ? -1 : rangeEnd(acceptanceBaseline.buffered)
-    );
+    /* A discontinuity lands the target in its own range, so both baselines are
+       outgoing media to exclude. A seamless splice instead extends the SAME
+       range, and the acceptance snapshot may already hold target content the
+       player fetched while the tune was in flight. Only the request-time buffer
+       is a safe upper bound for outgoing media in that mode. */
+    var seamlessTransport = boundary.transportMode === 'seamless';
+    var outgoingEnd = seamlessTransport
+      ? rangeEnd(oldBaseline.buffered)
+      : Math.max(
+        rangeEnd(oldBaseline.buffered) === null ? -1 : rangeEnd(oldBaseline.buffered),
+        rangeEnd(acceptanceBaseline.buffered) === null ? -1 : rangeEnd(acceptanceBaseline.buffered)
+      );
+    if (outgoingEnd === null) outgoingEnd = -1;
     var bufferedWaitMs = outgoingEnd >= 0
       ? Math.max(0, outgoingEnd - (Number(video.currentTime) || 0)) * 1000
       : 0;
+    /* Decide up front rather than stalling on a probe that must expire: a deep
+       outgoing buffer reaches the new channel faster through the guarded
+       freeze/re-attach than through waiting for the drain. */
+    if (seamlessTransport && bufferedWaitMs > IN_PLACE_TUNER_SEAMLESS_MAX_DRAIN_MS) {
+      return false;
+    }
     var probe = {
       generation: generation,
       channelId: channelId,
@@ -995,17 +1025,22 @@
       timing: timing,
       requestBaseline: oldBaseline,
       acceptanceBaseline: acceptanceBaseline,
-      seamlessTransport: boundary.transportMode === 'seamless',
+      seamlessTransport: seamlessTransport,
       outgoingBufferedEnd: outgoingEnd >= 0 ? outgoingEnd : null,
       manifestBoundaryObserved: false,
       rangeBoundaryObserved: false,
       liveEdgeSeekIssued: false,
       progressStartedAt: 0,
       progressTime: 0,
-      deadlineAt: Date.now() + Math.max(
-        IN_PLACE_TUNER_DEADLINE_MS,
-        Math.min(6000, bufferedWaitMs + 1500)
-      )
+      /* Seamless confirmation needs the whole drain plus one progress window,
+         so a shorter budget could only ever expire. The discontinuity path
+         seeks straight into the proven range and keeps its original deadline. */
+      deadlineAt: Date.now() + (seamlessTransport
+        ? Math.max(
+          IN_PLACE_TUNER_DEADLINE_MS,
+          bufferedWaitMs + IN_PLACE_TUNER_PROGRESS_MS + IN_PLACE_TUNER_SEAMLESS_SLACK_MS
+        )
+        : IN_PLACE_TUNER_DEADLINE_MS)
     };
     state.tunerInPlaceSwitch = probe;
     state.hardLiveEdgePending = false;

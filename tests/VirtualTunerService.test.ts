@@ -85,6 +85,49 @@ function discontinuityAdapter(files: BunVirtualTunerFiles): VirtualTunerFiles {
   }
 }
 
+/** Counts real discontinuity markers, never the -SEQUENCE header. */
+function discontinuityCount(playlist: string): number {
+  return playlist
+    .split(/\r?\n/)
+    .filter((line) => line === '#EXT-X-DISCONTINUITY').length
+}
+
+/**
+ * Stands in for a working MPEG-TS splice. `reject` decides, per call, whether
+ * the transport is compatible; `attempts` records every call so a test can
+ * prove when the relay does and does not retry.
+ */
+function seamlessAdapter(
+  files: BunVirtualTunerFiles,
+  reject: () => boolean = () => false,
+  attempts: string[] = []
+): VirtualTunerFiles {
+  return {
+    ...discontinuityAdapter(files),
+    async spliceSegment(
+      channelId,
+      sourceName,
+      sessionId,
+      outputName,
+      durationSeconds,
+      transport
+    ) {
+      attempts.push(`${channelId}:${sourceName}`)
+      if (reject()) {
+        throw new MpegTsTransportIncompatibleError('changed program map')
+      }
+      await files.preserveSegment(channelId, sourceName, sessionId, outputName)
+      return {
+        programSignature: transport.programSignature ?? 'normalized-program',
+        nextTimestamp90k:
+          (transport.nextTimestamp90k ?? 0) +
+          Math.round(durationSeconds * 90_000),
+        continuityCounters: transport.continuityCounters,
+      }
+    },
+  }
+}
+
 describe('VirtualTunerService', () => {
   let root: string
   let sourceRoot: string
@@ -256,7 +299,7 @@ describe('VirtualTunerService', () => {
       },
     })
     const playlist = await service.playlist(opened.sessionId)
-    expect(playlist).toContain('#EXT-X-DISCONTINUITY')
+    expect(discontinuityCount(playlist)).toBe(1)
     expect(playlist).toContain('#EXT-X-MEDIA-SEQUENCE:3')
     expect(playlist.match(/#EXTINF:/g)).toHaveLength(2)
     expect(playlist).not.toContain('segment-0000000000001.ts')
@@ -277,33 +320,8 @@ describe('VirtualTunerService', () => {
     expect(await readFile(newSegment!, 'utf8')).toBe('cartoons-11')
   })
 
-  test('publishes a cross-channel cut without discontinuity when transport splicing succeeds', async () => {
-    const seamlessFiles: VirtualTunerFiles = {
-      ...discontinuityAdapter(files),
-      async spliceSegment(
-        channelId,
-        sourceName,
-        sessionId,
-        outputName,
-        durationSeconds,
-        transport
-      ) {
-        await files.preserveSegment(
-          channelId,
-          sourceName,
-          sessionId,
-          outputName
-        )
-        return {
-          programSignature: transport.programSignature ?? 'normalized-program',
-          nextTimestamp90k:
-            (transport.nextTimestamp90k ?? 0) +
-            Math.round(durationSeconds * 90_000),
-          continuityCounters: transport.continuityCounters,
-        }
-      },
-    }
-    service = createService(seamlessFiles)
+  test('keeps the outgoing window sliding across a seamless cross-channel cut', async () => {
+    service = createService(seamlessAdapter(files))
     const opened = await service.open('living-room', OWNER_ID, 'kids')
     const tuned = await service.tune(
       'living-room',
@@ -315,23 +333,37 @@ describe('VirtualTunerService', () => {
 
     expect(tuned.switchBoundary.transportMode).toBe('seamless')
     const playlist = await service.playlist(opened.sessionId)
-    expect(playlist.split(/\r?\n/)).not.toContain('#EXT-X-DISCONTINUITY')
-    expect(playlist).toContain('#EXT-X-MEDIA-SEQUENCE:3')
+    expect(discontinuityCount(playlist)).toBe(0)
+    // The target shares the outgoing decoder timeline, so the entries a native
+    // reader is positioned in must stay advertised. Cutting them would show an
+    // unexplained media-sequence jump with nothing marking it.
+    expect(playlist).toContain('#EXT-X-MEDIA-SEQUENCE:1')
+    expect(tuned.switchBoundary.firstMediaSequence).toBe(1)
+    expect(tuned.switchBoundary.lastMediaSequence).toBe(4)
+
+    const advertised = playlist
+      .split(/\r?\n/)
+      .filter((line) => /^segment-\d+\.ts$/.test(line))
+    expect(advertised).toHaveLength(4)
+    const newest = await service.segmentPath(opened.sessionId, advertised[3]!)
+    expect(await readFile(newest!, 'utf8')).toBe('cartoons-12')
   })
 
-  test('stays in guarded discontinuity mode after a transport splice is rejected', async () => {
-    let spliceAttempts = 0
-    const fallbackFiles: VirtualTunerFiles = {
-      ...discontinuityAdapter(files),
-      async spliceSegment() {
-        spliceAttempts += 1
-        throw new MpegTsTransportIncompatibleError('changed program map')
-      },
-    }
-    service = createService(fallbackFiles)
+  test('retries transport splicing at the next channel switch after a rejection', async () => {
+    const attempts: string[] = []
+    let rejecting = true
+    service = createService(seamlessAdapter(files, () => rejecting, attempts))
     const opened = await service.open('living-room', OWNER_ID, 'kids')
-    const attemptsAfterOpen = spliceAttempts
+    expect(attempts).toHaveLength(1)
 
+    // Steady-state polling must not retry a latched incompatibility: it would
+    // rewrite and discard every segment for the life of the session.
+    writeChannel(sourceRoot, 'kids', 3)
+    await service.playlist(opened.sessionId)
+    expect(attempts).toHaveLength(1)
+
+    // A channel switch already publishes a guarded discontinuity, so it is the
+    // one safe place to find out whether the transport became compatible again.
     const first = await service.tune(
       'living-room',
       OWNER_ID,
@@ -340,14 +372,51 @@ describe('VirtualTunerService', () => {
       1
     )
     expect(first.switchBoundary.transportMode).toBe('discontinuity')
-    expect(spliceAttempts).toBe(attemptsAfterOpen)
+    expect(attempts).toHaveLength(2)
+    expect(
+      discontinuityCount(await service.playlist(opened.sessionId))
+    ).toBe(1)
+  })
 
-    writeChannel(sourceRoot, 'cartoons', 13)
-    await service.playlist(opened.sessionId)
-    expect(spliceAttempts).toBe(attemptsAfterOpen)
-    expect(await service.playlist(opened.sessionId)).toContain(
-      '#EXT-X-DISCONTINUITY'
+  test('marks a discontinuity when a mid-channel splice failure falls back to source bytes', async () => {
+    let rejecting = false
+    service = createService(seamlessAdapter(files, () => rejecting))
+    const opened = await service.open('living-room', OWNER_ID, 'kids')
+    expect(
+      discontinuityCount(await service.playlist(opened.sessionId))
+    ).toBe(0)
+
+    // Everything published so far sits on the rewritten session clock. A torn
+    // segment read drops the relay back to raw source timestamps, which is a
+    // real timestamp reset even though the channel never changed.
+    rejecting = true
+    writeChannel(sourceRoot, 'kids', 3)
+    expect(
+      discontinuityCount(await service.playlist(opened.sessionId))
+    ).toBe(1)
+  })
+
+  test('marks a discontinuity when seamless output re-arms on a new clock', async () => {
+    let rejecting = true
+    service = createService(seamlessAdapter(files, () => rejecting))
+    const opened = await service.open('living-room', OWNER_ID, 'kids')
+
+    rejecting = false
+    const tuned = await service.tune(
+      'living-room',
+      OWNER_ID,
+      opened.sessionId,
+      'cartoons',
+      1
     )
+
+    // Seamless output only omits the marker when it continues an established
+    // clock. This batch starts one, so its join off raw source bytes is still a
+    // reset and has to stay marked.
+    expect(tuned.switchBoundary.transportMode).toBe('seamless')
+    expect(
+      discontinuityCount(await service.playlist(opened.sessionId))
+    ).toBe(1)
   })
 
   test('returns the original committed switch boundary for an idempotent retry after the window slides', async () => {

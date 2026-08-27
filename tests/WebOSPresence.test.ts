@@ -8,7 +8,9 @@ function functionSource(script: string, name: string, nextName: string): string 
   if (start < 0 || end <= start) {
     throw new Error(`Could not isolate ${name}() before ${nextName}()`)
   }
-  return script.slice(start, end)
+  // core.autocrlf checks the bundle out with CRLF on Windows, so assertions
+  // that span a line break only match after normalising.
+  return script.slice(start, end).replace(/\r\n/g, '\n')
 }
 
 describe('LG webOS presence telemetry', () => {

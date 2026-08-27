@@ -927,7 +927,16 @@ export class VirtualTunerService {
           record.revision = nextRevision
           transitioned = true
           record.sourceKeys.clear()
-          await this.commitStaged(record, staged, true)
+          // A seamless splice shares one decoder timeline with the outgoing
+          // window, so that window must keep sliding normally. Dropping the
+          // entries the player is currently positioned in would show a native
+          // reader an unexplained media-sequence jump with nothing marking it,
+          // which is exactly the resync this mode exists to avoid.
+          await this.commitStaged(
+            record,
+            staged,
+            staged.transportMode !== 'seamless'
+          )
           committed = true
           record.lastEdgeAdvancedAt = this.clock.now().getTime()
           this.rememberSourceSnapshot(
@@ -1169,9 +1178,17 @@ export class VirtualTunerService {
     parsed: ParsedSourcePlaylist,
     forceDiscontinuity: boolean
   ): Promise<StagedSegments> {
+    // Entries already published on a rewritten clock cannot be followed by raw
+    // source bytes without a marker: that is a real timestamp reset, and an
+    // unsignalled one strands the decoder for the rest of the session.
+    const continuingClock =
+      record.transportState?.nextTimestamp90k !== undefined
     if (
       this.files.spliceSegment &&
-      record.transportMode !== 'discontinuity'
+      // A guarded discontinuity is already being published here, so this is the
+      // one safe place to retry splicing after a transient incompatibility
+      // latched the session into discontinuity mode.
+      (record.transportMode !== 'discontinuity' || forceDiscontinuity)
     ) {
       try {
         return await this.preserveParsedMode(
@@ -1194,7 +1211,7 @@ export class VirtualTunerService {
       channelId,
       revision,
       parsed,
-      forceDiscontinuity,
+      forceDiscontinuity || continuingClock,
       false
     )
   }
@@ -1211,6 +1228,10 @@ export class VirtualTunerService {
     let transportState: MpegTsTransportState = record.transportState ?? {
       continuityCounters: {},
     }
+    // Seamless output is only continuous when it extends an established clock.
+    // Re-arming after a discontinuity latch starts a new one, so that first
+    // boundary still needs its marker.
+    const continuingClock = transportState.nextTimestamp90k !== undefined
     try {
       for (const source of parsed.segments) {
         const sourceKey = `${revision}:${channelId}:${source.sourceName}`
@@ -1245,7 +1266,7 @@ export class VirtualTunerService {
           sourceKey,
           durationSeconds: source.durationSeconds,
           discontinuityBefore: seamless
-            ? false
+            ? !continuingClock && forceDiscontinuity && staged.length === 0
             : (forceDiscontinuity && staged.length === 0) ||
               source.discontinuityBefore,
         })
@@ -1274,11 +1295,13 @@ export class VirtualTunerService {
     record.transportState = staged.transportState
     record.transportMode = staged.transportMode
     for (const segment of staged.segments) record.sourceKeys.add(segment.sourceKey)
-    // A cross-channel commit is a hard live-window cut. Keeping the outgoing
+    // A discontinuity commit is a hard live-window cut. Keeping the outgoing
     // entries advertised lets a lagging native HLS player continue requesting
     // the old channel after the tune response has already identified the new
     // one. Retain their bytes for requests already in flight, but make the
     // prepared destination edge the only playable window for the next reload.
+    // Seamless commits pass false here: their target shares the outgoing
+    // timeline, so the window has to slide instead of being cut.
     const replaced = replaceAdvertised
       ? record.entries.splice(0, record.entries.length)
       : []

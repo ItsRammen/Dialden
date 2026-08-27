@@ -25,7 +25,12 @@ For compatible MPEG-TS segments, the virtual tuner now:
 2. Rewrites PCR, PTS, and DTS onto the tuner's continuous 90 kHz clock.
 3. Rewrites per-PID MPEG-TS continuity counters across segment and channel
    boundaries.
-4. Publishes the target edge without an HLS discontinuity.
+4. Publishes the target edge without an HLS discontinuity, and keeps the
+   outgoing entries advertised so the live window slides by one segment as
+   usual. The target shares the outgoing decoder timeline, so cutting the
+   window would show a native reader an unexplained media-sequence jump with
+   nothing marking it — the resync this mode exists to avoid. Only a
+   discontinuity commit still cuts the window.
 5. Reports the transport mode and switch boundary to the client, which updates
    metadata only after playback crosses that boundary.
 
@@ -38,6 +43,18 @@ Malformed transport packets, missing PAT/PMT data, a changed program map, or a
 filesystem failure never produce a guessed seamless stream. The tuner falls
 back to preserved source bytes plus `#EXT-X-DISCONTINUITY`, and the webOS client
 uses its guarded freeze/re-attach transition.
+
+The marker is not optional on that path. Once a session has published anything
+on the rewritten clock, raw source bytes are a real timestamp reset even when
+the channel never changed, so a mid-channel fallback is marked exactly like a
+channel switch. Seamless output likewise only omits the marker while it
+continues an established clock: a session re-arming after an incompatibility
+starts a new one and marks that first boundary.
+
+An incompatibility latches the session into discontinuity mode so steady-state
+polling does not rewrite and discard every segment. The latch is retried at the
+next channel switch, which already publishes a guarded discontinuity and is
+therefore the one safe place to find out whether the transport recovered.
 
 ## Black bridge
 
@@ -53,3 +70,15 @@ segments and a client held near the live edge, the expected transport delay is
 roughly zero to one segment plus network jitter. Data already buffered by the TV
 cannot be recalled by the server, so this is near-instant rather than a literal
 zero-millisecond cut.
+
+That buffer sets the client's budget. A seamless cut is only confirmed once
+playback drains past the media buffered when the tune was requested, so the
+probe deadline is derived from that drain plus one progress window — a fixed
+budget could only ever expire. Beyond `IN_PLACE_TUNER_SEAMLESS_MAX_DRAIN_MS`
+the client does not start a seamless probe at all: the guarded freeze/re-attach
+reaches the new channel sooner than waiting for the drain would.
+
+Note that the drain reference must be the buffer measured when the tune was
+*requested*, not when the response arrived. Because a seamless splice extends
+the same buffered range, the later snapshot can already contain target content
+the player fetched while the tune was in flight.
