@@ -479,6 +479,10 @@ describe('LG webOS presence telemetry', () => {
     expect(detachBody).toContain('state.hasCommittedVideo = false')
     expect(captureBody).toContain('if (!hasCrossChannelHandoff()) return;')
     expect(captureBody).toContain("classList.add('is-zapping')")
+    expect(captureBody).toContain("canvas.classList.add('is-visible')")
+    expect(captureBody.indexOf("canvas.classList.add('is-visible')")).toBeLessThan(
+      captureBody.indexOf('context.drawImage(')
+    )
     expect(captureBody).toContain("canvas.getContext('2d')")
     expect(captureBody).toContain('context.drawImage(')
     expect(captureBody).toContain('catch (ignoreFreezeFrame)')
@@ -540,7 +544,7 @@ describe('LG webOS presence telemetry', () => {
     expect(tuneBody).toContain('abandonCandidateTune();')
     expect(tuneBody).toContain("showChannelOsd(targetIndex, 'Tuning…', true)")
     expect(tuneBody).toMatch(
-      /if \(isChannelChange\) \{[\s\S]{0,220}classList\.add\('is-zapping'\)[\s\S]{0,160}showChannelOsd/
+      /if \(isChannelChange\) \{[\s\S]{0,420}captureTuningFreezeFrame\(\);[\s\S]{0,160}showChannelOsd/
     )
     expect(script).toContain("if (state.view === 'player' && !restored) openChannelBrowser()")
     expect(script).toContain("updateChannelOsdProgram('Checking off-air schedule…')")
@@ -1013,9 +1017,9 @@ describe('LG webOS presence telemetry', () => {
     expect(script).toContain('!rangeOverlapsAny(candidate, acceptanceRanges)')
     expect(script).not.toContain('meaningfulAdvance')
     expect(inPlaceProbeBody).toContain('probe.targetRange = targetRange')
-    expect(inPlaceProbeBody).toContain('seekToProvenTargetRange(video, probe.targetRange)')
+    expect(inPlaceProbeBody).toContain('seekToProvenTargetRange(video, probe.targetRange, probe.boundary)')
     expect(inPlaceProbeBody).toContain('currentTargetRange = findProvenTargetRange(')
-    expect(inPlaceProbeBody).toContain('if (nearLive && currentTargetRange)')
+    expect(inPlaceProbeBody).toContain('targetHeadroom >= minimumRevealHeadroom')
     expect(inPlaceProbeBody).toContain('!state.hlsSeekPending && !video.seeking')
     expect(inPlaceFinishBody).toContain("state.tuneMetrics.src = 'session-tuner-in-place'")
     expect(inPlaceFinishBody).not.toContain('loadMediaElement(')

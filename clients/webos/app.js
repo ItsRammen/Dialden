@@ -7,7 +7,7 @@
   var STORAGE_CLIENT_NAME = 'toasttv.clientName.v1';
   var STORAGE_SESSION_OWNER = 'toasttv.sessionOwner.v1';
   var STORAGE_SESSION_OWNER_EPOCH = 'toasttv.sessionOwnerEpoch.v1';
-  var CLIENT_VERSION = '0.3.10';
+  var CLIENT_VERSION = '0.3.11';
   var DEFAULT_SERVER = 'http://TOWER:1993';
   var POLL_INTERVAL_MS = 30000;
   var CHANNEL_REFRESH_INTERVAL_MS = 15000;
@@ -27,7 +27,7 @@
   var CHANNEL_OSD_MS = 2800;
   var LIVE_EDGE_TOLERANCE_SECONDS = 3;
   var LIVE_JOIN_BEHIND_SECONDS = 1.75;
-  var TUNER_SWITCH_JOIN_BEHIND_SECONDS = 0.35;
+  var TUNER_SWITCH_JOIN_BEHIND_SECONDS = 1.25;
   var BUFFERING_NOTICE_MS = 800;
   var BUFFERING_RECOVERY_MS = 6000;
   var BUFFERING_REPROVE_MS = 1200;
@@ -35,9 +35,9 @@
   var TUNER_RETRY_DELAYS = [2000, 5000, 15000, 30000];
   var TUNER_DECODER_RECOVERY_LIMIT = 2;
   var TUNER_REQUEST_TIMEOUT_MS = 30000;
-  var IN_PLACE_TUNER_DEADLINE_MS = 1800;
+  var IN_PLACE_TUNER_DEADLINE_MS = 2800;
   var IN_PLACE_TUNER_PROBE_MS = 100;
-  var IN_PLACE_TUNER_PROGRESS_MS = 160;
+  var IN_PLACE_TUNER_PROGRESS_MS = 650;
   var IN_PLACE_TUNER_RANGE_EPSILON = 0.08;
 
   var state = {
@@ -376,8 +376,13 @@
 
   function hasCrossChannelHandoff() {
     var channel = currentChannel();
-    return !!(channel && state.previousTune && state.previousTune.channelId &&
-      state.previousTune.channelId !== channel.id);
+    var pendingChannelId = state.requestedChannelId || state.candidateChannelId;
+    return !!(
+      (pendingChannelId && state.committedChannelId &&
+        pendingChannelId !== state.committedChannelId) ||
+      (channel && state.previousTune && state.previousTune.channelId &&
+        state.previousTune.channelId !== channel.id)
+    );
   }
 
   function captureTuningFreezeFrame() {
@@ -386,10 +391,12 @@
     var canvas = elements.tuningFreezeFrame;
     if (canvas && canvas.classList.contains('is-visible')) return;
     var video = activeVideo();
-    if (!canvas || !video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
+    if (!canvas) return;
     try {
-      var width = Math.max(1, elements.playerScreen.clientWidth || video.videoWidth);
-      var height = Math.max(1, elements.playerScreen.clientHeight || video.videoHeight);
+      var width = Math.max(1, elements.playerScreen.clientWidth ||
+        (video && video.videoWidth) || 1920);
+      var height = Math.max(1, elements.playerScreen.clientHeight ||
+        (video && video.videoHeight) || 1080);
       var context = canvas.getContext('2d');
       if (!context) return;
       canvas.width = width;
@@ -399,6 +406,11 @@
       var scale = Math.min(width / video.videoWidth, height / video.videoHeight);
       var drawWidth = Math.max(1, Math.round(video.videoWidth * scale));
       var drawHeight = Math.max(1, Math.round(video.videoHeight * scale));
+      /* Make the canvas an opaque cover before sampling the hardware plane.
+         Some LG models reject drawImage(video); those TVs get a clean black
+         cut instead of exposing an unproven destination frame. */
+      canvas.classList.add('is-visible');
+      if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
       context.drawImage(
         video,
         Math.round((width - drawWidth) / 2),
@@ -406,7 +418,6 @@
         drawWidth,
         drawHeight
       );
-      canvas.classList.add('is-visible');
     } catch (ignoreFreezeFrame) {
       /* Some LG hardware video planes cannot be sampled by canvas. The
          is-zapping backdrop remains a clean black handoff on those models. */
@@ -887,9 +898,13 @@
     return null;
   }
 
-  function seekToProvenTargetRange(video, targetRange) {
+  function seekToProvenTargetRange(video, targetRange, boundary) {
     if (!video || !targetRange || video.seeking) return false;
-    var target = Math.max(targetRange[0], targetRange[1] - TUNER_SWITCH_JOIN_BEHIND_SECONDS);
+    var joinBehind = Math.max(
+      TUNER_SWITCH_JOIN_BEHIND_SECONDS,
+      Math.min(3, boundary.targetDurationSeconds * 0.75)
+    );
+    var target = Math.max(targetRange[0], targetRange[1] - joinBehind);
     try {
       if (Math.abs((Number(video.currentTime) || 0) - target) <= 0.03) {
         state.hlsSeekPending = false;
@@ -1011,7 +1026,7 @@
       probe.liveEdgeSeekIssued = true;
       probe.progressStartedAt = 0;
       state.hlsSeekPending = false;
-      seekToProvenTargetRange(video, probe.targetRange);
+      seekToProvenTargetRange(video, probe.targetRange, probe.boundary);
       scheduleInPlaceStableTunerProbe(probe);
       return;
     }
@@ -1026,9 +1041,16 @@
         currentTime
       );
       var edge = currentTargetRange && currentTargetRange[1];
-      var nearLive = edge !== null && edge !== undefined && edge - currentTime <=
-        Math.max(2.5, probe.boundary.targetDurationSeconds * 2);
-      if (nearLive && currentTargetRange) {
+      var targetHeadroom = edge !== null && edge !== undefined
+        ? edge - currentTime
+        : null;
+      var minimumRevealHeadroom = Math.max(
+        MIN_READY_BUFFER_SECONDS,
+        Math.min(1.5, probe.boundary.targetDurationSeconds * 0.5)
+      );
+      var nearLive = targetHeadroom !== null && targetHeadroom <=
+        Math.max(3, probe.boundary.targetDurationSeconds * 2);
+      if (nearLive && targetHeadroom >= minimumRevealHeadroom && currentTargetRange) {
         if (!probe.progressStartedAt) {
           probe.progressStartedAt = Date.now();
           probe.progressTime = currentTime;
@@ -1864,9 +1886,11 @@
     state.requestedChannelId = channel.id;
     state.tuneMetrics = { requestedAt: Date.now(), preparedAt: 0, attachedAt: 0, firstFrameAt: 0, channelId: channel.id, src: 'zap' };
     if (isChannelChange) {
-      /* Keep the outgoing picture, but remove its duplicated station chrome
-         while the compact target OSD communicates the pending zap. */
-      elements.playerScreen.classList.add('is-zapping');
+      /* Snapshot the proven outgoing picture before the server changes the
+         stable manifest. The single LG decoder may expose one destination
+         frame before its buffer is sustainable; keep that hidden until the
+         target has demonstrated continuous playback. */
+      captureTuningFreezeFrame();
       showChannelOsd(targetIndex, 'Tuning…', true);
     }
     if (zapTimer) window.clearTimeout(zapTimer);
