@@ -1100,6 +1100,18 @@ describe('LG webOS presence telemetry', () => {
     expect(inPlaceFinishBody).toContain("state.tuneMetrics.src = 'session-tuner-mse'")
     expect(inPlaceFinishBody).not.toContain('loadMediaElement(')
 
+    /* The switch reports its lifecycle to one state machine, which is the
+       authority on whether the destination may be named. Publishing before its
+       media is on screen captions the outgoing picture with the incoming
+       channel; that rule lives in switch-machine.js and is tested there. */
+    expect(script).toContain('dispatchSwitch({')
+    expect(inPlaceProbeBody).toContain('EVENTS.REVEALED')
+    expect(inPlaceProbeBody).toContain('EVENTS.TIMED_OUT')
+    expect(inPlaceFinishBody).toContain('if (!switchIdentityIsPublishable()) return;')
+    expect(inPlaceFinishBody.indexOf('if (!switchIdentityIsPublishable()) return;')).toBeLessThan(
+      inPlaceFinishBody.indexOf('state.committedChannelId = probe.channelId')
+    )
+
     /* The media element survives a failed switch: there is no decoder to reset,
        so the recovery rebuilds the engine rather than tearing down playback. */
     expect(inPlaceFallbackBody).not.toContain('detachVideoForTune();')

@@ -7,7 +7,7 @@
   var STORAGE_CLIENT_NAME = 'toasttv.clientName.v1';
   var STORAGE_SESSION_OWNER = 'toasttv.sessionOwner.v1';
   var STORAGE_SESSION_OWNER_EPOCH = 'toasttv.sessionOwnerEpoch.v1';
-  var CLIENT_VERSION = '0.4.2';
+  var CLIENT_VERSION = '0.5.0';
   var DEFAULT_SERVER = 'http://TOWER:1993';
   var POLL_INTERVAL_MS = 30000;
   var CHANNEL_REFRESH_INTERVAL_MS = 15000;
@@ -143,6 +143,12 @@
      change never detaches either: that is the decoder reset being avoided. */
   var liveEngine = null;
   var liveEngineVideo = null;
+  /* The channel switch as one named state rather than a set of booleans set in
+     order by several paths. It owns two rules the old code could only imply:
+     the destination is named on screen once its media is playing and not
+     before, and a callback from a superseded request cannot move anything. */
+  var switchContext = null;
+  var switchSerial = 0;
 
   document.addEventListener('DOMContentLoaded', boot, false);
 
@@ -855,6 +861,31 @@
     }, IN_PLACE_TUNER_PROBE_MS);
   }
 
+  function switchMachine() {
+    return window.ToastTVSwitchMachine;
+  }
+
+  function dispatchSwitch(event) {
+    var machine = switchMachine();
+    if (!machine) return [];
+    if (!switchContext) switchContext = machine.create();
+    var step = machine.transition(switchContext, event);
+    switchContext = step.context;
+    return step.effects;
+  }
+
+  /** True while the switch owns the screen, whoever else also thinks so. */
+  function switchIsInFlight() {
+    var machine = switchMachine();
+    return !!machine && machine.isSwitching(switchContext);
+  }
+
+  /** True once the destination may be named on screen. */
+  function switchIdentityIsPublishable() {
+    var machine = switchMachine();
+    return !machine || machine.identityIsPublishable(switchContext);
+  }
+
   function liveEngineActive() {
     return !!(liveEngine && liveEngineVideo && liveEngineVideo === activeVideo());
   }
@@ -883,6 +914,10 @@
       liveEngine.on('lost', function (payload) {
         logTunerStatus('warn', 'playback engine lost the session: ' +
           (payload && payload.details ? payload.details : 'unrecoverable'));
+        dispatchSwitch({
+          type: switchMachine().EVENTS.LOST,
+          requestId: switchContext ? switchContext.requestId : -1
+        });
         handleMediaError();
       });
     }
@@ -921,6 +956,7 @@
       timing: timing,
       baseline: switched.baseline,
       discarded: switched.discarded,
+      switchRequestId: switchContext ? switchContext.requestId : -1,
       deadlineAt: Date.now() + MSE_SWITCH_DEADLINE_MS
     };
     state.tunerInPlaceSwitch = probe;
@@ -959,10 +995,20 @@
     /* Media before the cut is still the outgoing channel, so playback has to
        pass it before the new one is genuinely on screen. */
     if (window.ToastTVPlaybackEngine.isRevealed(liveEngine.stats(), probe.baseline)) {
+      dispatchSwitch({
+        type: switchMachine().EVENTS.REVEALED,
+        channelId: probe.channelId,
+        requestId: probe.switchRequestId
+      });
       finishInPlaceStableTunerHandoff(probe);
       return;
     }
     if (Date.now() >= probe.deadlineAt) {
+      dispatchSwitch({
+        type: switchMachine().EVENTS.TIMED_OUT,
+        channelId: probe.channelId,
+        requestId: probe.switchRequestId
+      });
       fallbackInPlaceStableTunerHandoff(probe, 'new media did not appear in time');
       return;
     }
@@ -982,6 +1028,10 @@
     state.hasCommittedVideo = true;
     state.tunerNeedsRecovery = false;
     state.tunerDecoderRecoveryAttempts = 0;
+    /* The machine is the authority on whether the destination may be named:
+       publishing before its media is on screen is what captioned the outgoing
+       picture with the incoming channel. */
+    if (!switchIdentityIsPublishable()) return;
     state.committedChannelId = probe.channelId;
     state.tunerRollbackChannelId = null;
     state.candidateChannelId = null;
@@ -1930,6 +1980,13 @@
       state.tunerRollbackChannelId = previousChannelId;
     }
     if (!liveEngineActive()) updateChannelOsdProgram('Switching live signal…');
+    switchSerial += 1;
+    var switchRequestId = switchSerial;
+    dispatchSwitch({
+      type: switchMachine().EVENTS.REQUESTED,
+      channelId: channelId,
+      requestId: switchRequestId
+    });
     postStableTunerSwitch(channelId, function (error, data) {
       if (generation !== state.tuneGeneration || state.requestedChannelId !== channelId) return;
       if (error || !data) {
@@ -1982,6 +2039,11 @@
         return;
       }
       setStableTuner(acceptedTuner);
+      dispatchSwitch({
+        type: switchMachine().EVENTS.ACCEPTED,
+        channelId: channelId,
+        requestId: switchRequestId
+      });
       logTunerStatus('log', 'switch to ' + channelId + ' accepted at revision ' + acceptedTuner.revision);
       if (state.tuneMetrics) state.tuneMetrics.preparedAt = Date.now();
       if (!liveEngineActive()) updateChannelOsdProgram('Loading channel schedule…');
