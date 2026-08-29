@@ -76,8 +76,8 @@
 
         <div class="channel-browser">
           <section class="channel-rail-shell" aria-labelledby="channel-list-heading">
-            <header class="section-heading">
-              <div><p class="eyebrow">Live lineup</p><h1 id="channel-list-heading">Channels</h1></div>
+            <header class="rail-head">
+              <div><p class="eyebrow">Live lineup</p><h1 id="channel-list-heading" class="section-heading">Channels</h1></div>
               <span id="channelCount" class="channel-count">0</span>
             </header>
             <div id="channelGrid" class="channel-grid"></div>
@@ -107,13 +107,13 @@
               <p id="channelPreviewEpisode" class="channel-preview__episode">Every channel joins at the point already in progress.</p>
               <div class="preview-timeline" role="progressbar" aria-label="Program progress" aria-valuemin="0" aria-valuemax="100"><div id="channelPreviewTimelineFill" class="preview-timeline__fill"></div></div>
               <div class="channel-preview__time-row"><span id="channelPreviewTime">—</span><span>LIVE</span></div>
-              <div class="channel-preview__next">
-                <span>COMING UP</span>
-                <div id="channelPreviewUpcoming" class="channel-preview__upcoming">
-                  <p id="channelPreviewNext">Checking the schedule…</p>
-                  <p id="channelPreviewNext2" class="hidden"></p>
-                  <p id="channelPreviewNext3" class="hidden"></p>
-                </div>
+            </div>
+            <div class="channel-preview__next">
+              <p class="eyebrow">Coming up</p>
+              <div id="channelPreviewUpcoming" class="channel-preview__upcoming">
+                <p id="channelPreviewNext">Checking the schedule…</p>
+                <p id="channelPreviewNext2" class="hidden"></p>
+                <p id="channelPreviewNext3" class="hidden"></p>
               </div>
             </div>
             <div class="channel-preview__actions">
@@ -144,9 +144,11 @@
         <header id="playerHeader" class="player-header player-chrome">
           <div class="player-channel">
             <div class="player-channel__identity">
+              <span id="playerChannelNumber" class="player-channel__number">CH 101</span>
+            </div>
+            <div class="player-channel__plate">
               <img id="playerChannelLogo" class="player-channel-logo hidden" alt="">
               <span id="playerChannelMonogram" class="player-channel__monogram">TV</span>
-              <span id="playerChannelNumber" class="player-channel__number">CH 101</span>
             </div>
             <div><p><span class="live-dot"></span><span id="playerChannelName">ToastTV</span></p><p id="playerStatus" class="player-status">Tuning…</p></div>
           </div>
