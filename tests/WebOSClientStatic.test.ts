@@ -45,6 +45,7 @@ describe('webOS client static checks', () => {
       join(root, 'app.js'),
       join(root, 'playback-policy.js'),
       join(root, 'playback-engine.js'),
+      join(root, 'switch-machine.js'),
     ])
 
     expect(found).toEqual([])
