@@ -7,7 +7,7 @@
   var STORAGE_CLIENT_NAME = 'toasttv.clientName.v1';
   var STORAGE_SESSION_OWNER = 'toasttv.sessionOwner.v1';
   var STORAGE_SESSION_OWNER_EPOCH = 'toasttv.sessionOwnerEpoch.v1';
-  var CLIENT_VERSION = '0.4.0';
+  var CLIENT_VERSION = '0.4.1';
   var DEFAULT_SERVER = 'http://TOWER:1993';
   var POLL_INTERVAL_MS = 30000;
   var CHANNEL_REFRESH_INTERVAL_MS = 15000;
@@ -928,7 +928,7 @@
    * refilling is all that is required. There is no drain to wait out, no
    * boundary to observe and no freeze frame to hide, because nothing resets.
    */
-  function beginInPlaceStableTunerHandoff(channelId, generation, now, timing, requestBaseline) {
+  function beginInPlaceStableTunerHandoff(channelId, generation, now, timing) {
     var boundary = state.tuner && state.tuner.switchBoundary;
     if (!boundary || boundary.revision !== state.tuner.revision ||
         !hasAttachedStableTunerSource() || !state.hasCommittedVideo ||
@@ -942,7 +942,6 @@
       boundary: boundary,
       now: now,
       timing: timing,
-      requestBaseline: requestBaseline,
       baseline: switched.baseline,
       discarded: switched.discarded,
       deadlineAt: Date.now() + MSE_SWITCH_DEADLINE_MS
@@ -2016,16 +2015,15 @@
           data.now,
           null,
           true,
-          previousChannelId,
-          requestBaseline
+          previousChannelId
         );
         return;
       }
-      resolveStableTunerNow(channelId, previousChannelId, generation, pushHistory, 0, requestBaseline);
+      resolveStableTunerNow(channelId, previousChannelId, generation, pushHistory, 0);
     });
   }
 
-  function resolveStableTunerNow(channelId, previousChannelId, generation, pushHistory, attempt, requestBaseline) {
+  function resolveStableTunerNow(channelId, previousChannelId, generation, pushHistory, attempt) {
     requestJson(
       state.serverUrl + '/api/v1/channels/' + encodeURIComponent(channelId) + '/now',
       8000,
@@ -2039,14 +2037,13 @@
             data,
             timing,
             true,
-            previousChannelId,
-            requestBaseline
+            previousChannelId
           );
           return;
         }
         if (attempt < 2) {
           window.setTimeout(function () {
-            resolveStableTunerNow(channelId, previousChannelId, generation, pushHistory, attempt + 1, requestBaseline);
+            resolveStableTunerNow(channelId, previousChannelId, generation, pushHistory, attempt + 1);
           }, 180 + attempt * 170);
           return;
         }
@@ -2063,8 +2060,7 @@
     now,
     timing,
     tunerSwitched,
-    previousTunerChannelId,
-    requestBaseline
+    previousTunerChannelId
   ) {
     if (generation !== state.tuneGeneration || state.requestedChannelId !== channelId) return;
     var index = findChannelIndex(channelId);
@@ -2129,13 +2125,7 @@
     if (pushHistory) safePushHistory({ view: 'player' });
     activateView('player');
     if (requiresStableHandoff) {
-      if (beginInPlaceStableTunerHandoff(
-        channelId,
-        generation,
-        now,
-        timing,
-        requestBaseline
-      )) {
+      if (beginInPlaceStableTunerHandoff(channelId, generation, now, timing)) {
         applyNowResult(now, timing, false);
         if (state.tuneMetrics && state.tuneMetrics.channelId === channelId) {
           state.tuneMetrics.metadataAt = Date.now();
