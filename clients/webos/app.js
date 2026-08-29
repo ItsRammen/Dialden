@@ -7,7 +7,7 @@
   var STORAGE_CLIENT_NAME = 'toasttv.clientName.v1';
   var STORAGE_SESSION_OWNER = 'toasttv.sessionOwner.v1';
   var STORAGE_SESSION_OWNER_EPOCH = 'toasttv.sessionOwnerEpoch.v1';
-  var CLIENT_VERSION = '0.4.1';
+  var CLIENT_VERSION = '0.4.2';
   var DEFAULT_SERVER = 'http://TOWER:1993';
   var POLL_INTERVAL_MS = 30000;
   var CHANNEL_REFRESH_INTERVAL_MS = 15000;
@@ -1817,11 +1817,12 @@
     state.requestedChannelId = channel.id;
     state.tuneMetrics = { requestedAt: Date.now(), preparedAt: 0, attachedAt: 0, firstFrameAt: 0, channelId: channel.id, src: 'zap' };
     if (isChannelChange) {
-      /* Snapshot the proven outgoing picture before the server changes the
-         stable manifest. The single LG decoder may expose one destination
-         frame before its buffer is sustainable; keep that hidden until the
-         target has demonstrated continuous playback. */
-      captureTuningFreezeFrame();
+      /* The engine never resets the decoder: the outgoing channel keeps
+         rendering until the incoming one replaces it mid-stream. Covering that
+         with a freeze frame would replace good video with a black still for the
+         length of the switch, which is the whole visible cost we just removed.
+         The native path still needs the cover, because it does reset. */
+      if (!liveEngineActive()) captureTuningFreezeFrame();
       showChannelOsd(targetIndex, 'Tuning…', true);
     }
     if (zapTimer) window.clearTimeout(zapTimer);
@@ -1951,7 +1952,7 @@
     if (!state.tunerRollbackChannelId) {
       state.tunerRollbackChannelId = previousChannelId;
     }
-    updateChannelOsdProgram('Switching live signal…');
+    if (!liveEngineActive()) updateChannelOsdProgram('Switching live signal…');
     postStableTunerSwitch(channelId, function (error, data) {
       if (generation !== state.tuneGeneration || state.requestedChannelId !== channelId) return;
       if (error || !data) {
@@ -2006,7 +2007,7 @@
       setStableTuner(acceptedTuner);
       logTunerStatus('log', 'switch to ' + channelId + ' accepted at revision ' + acceptedTuner.revision);
       if (state.tuneMetrics) state.tuneMetrics.preparedAt = Date.now();
-      updateChannelOsdProgram('Loading channel schedule…');
+      if (!liveEngineActive()) updateChannelOsdProgram('Loading channel schedule…');
       if (isNowResult(data.now) && data.now.channelId === channelId) {
         commitStableTunerChannel(
           channelId,

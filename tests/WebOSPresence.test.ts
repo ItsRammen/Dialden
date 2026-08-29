@@ -595,8 +595,11 @@ describe('LG webOS presence telemetry', () => {
     expect(tuneBody).toMatch(/!state\.hasCommittedVideo\s*&&\s*!state\.previousTune/)
     expect(tuneBody).toContain('abandonCandidateTune();')
     expect(tuneBody).toContain("showChannelOsd(targetIndex, 'Tuning…', true)")
+    /* The cover exists to hide a decoder reset. The engine does not reset, so
+       covering an engine switch would replace live video with a black still for
+       the whole half second it takes. Only the native path still needs it. */
     expect(tuneBody).toMatch(
-      /if \(isChannelChange\) \{[\s\S]{0,420}captureTuningFreezeFrame\(\);[\s\S]{0,160}showChannelOsd/
+      /if \(isChannelChange\) \{[\s\S]{0,700}if \(!liveEngineActive\(\)\) captureTuningFreezeFrame\(\);[\s\S]{0,160}showChannelOsd/
     )
     expect(script).toContain("if (state.view === 'player' && !restored) openChannelBrowser()")
     expect(script).toContain("updateChannelOsdProgram('Checking off-air schedule…')")
