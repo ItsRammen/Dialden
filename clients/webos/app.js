@@ -7,7 +7,7 @@
   var STORAGE_CLIENT_NAME = 'toasttv.clientName.v1';
   var STORAGE_SESSION_OWNER = 'toasttv.sessionOwner.v1';
   var STORAGE_SESSION_OWNER_EPOCH = 'toasttv.sessionOwnerEpoch.v1';
-  var CLIENT_VERSION = '0.3.16';
+  var CLIENT_VERSION = '0.4.0';
   var DEFAULT_SERVER = 'http://TOWER:1993';
   var POLL_INTERVAL_MS = 30000;
   var CHANNEL_REFRESH_INTERVAL_MS = 15000;
@@ -35,20 +35,16 @@
   var TUNER_RETRY_DELAYS = [2000, 5000, 15000, 30000];
   var TUNER_DECODER_RECOVERY_LIMIT = 2;
   var TUNER_REQUEST_TIMEOUT_MS = 30000;
-  var IN_PLACE_TUNER_DEADLINE_MS = 2800;
   var IN_PLACE_TUNER_PROBE_MS = 100;
   var IN_PLACE_TUNER_PROGRESS_MS = 650;
-  var IN_PLACE_TUNER_RANGE_EPSILON = 0.08;
   /* Settle time before warming a highlighted channel. Long enough that holding
      an arrow key through the lineup does not queue a retarget per row. */
   var WARM_HIGHLIGHT_DELAY_MS = 350;
-  /* Outgoing media already inside the TV's buffer cannot be recalled by the
-     server, so a seamless cut only becomes visible once playback drains past
-     it. Measured on LG webOS 6.5, a decoder re-attach costs about 2.8s of
-     teardown and rebuild; waiting out a deeper buffer than that is strictly
-     slower than resetting, so the cut is not worth waiting for. */
-  var IN_PLACE_TUNER_REATTACH_COST_MS = 2800;
-  var IN_PLACE_TUNER_SEAMLESS_SLACK_MS = 1500;
+  /* Budget for new media to appear after the outgoing buffer is discarded.
+     Prototype measurements on this hardware landed between 282 and 1813 ms, so
+     this is generous rather than tight; exceeding it means something is wrong,
+     not merely slow. */
+  var MSE_SWITCH_DEADLINE_MS = 6000;
 
   var state = {
     view: 'boot',
@@ -145,6 +141,10 @@
   var tunerRetryTimer = null;
   var inPlaceTunerTimer = null;
   var warmHighlightTimer = null;
+  /* One engine, one media element, for the life of the session. A channel
+     change never detaches either: that is the decoder reset being avoided. */
+  var liveEngine = null;
+  var liveEngineVideo = null;
 
   document.addEventListener('DOMContentLoaded', boot, false);
 
@@ -858,99 +858,104 @@
       state.tuner.channelId === state.candidateChannelId);
   }
 
-  function mediaRangeSnapshot(video) {
-    var snapshot = {
-      currentTime: Number(video && video.currentTime) || 0,
-      buffered: [],
-      seekable: []
+  function clearInPlaceStableTunerProbe() {
+    if (inPlaceTunerTimer) window.clearTimeout(inPlaceTunerTimer);
+    inPlaceTunerTimer = null;
+    state.tunerInPlaceSwitch = null;
+  }
+
+  function scheduleInPlaceStableTunerProbe(probe) {
+    if (state.tunerInPlaceSwitch !== probe || inPlaceTunerTimer) return;
+    inPlaceTunerTimer = window.setTimeout(function () {
+      inPlaceTunerTimer = null;
+      probeInPlaceStableTunerHandoff(probe);
+    }, IN_PLACE_TUNER_PROBE_MS);
+  }
+
+  function liveEngineActive() {
+    return !!(liveEngine && liveEngineVideo && liveEngineVideo === activeVideo());
+  }
+
+  /**
+   * Attaches the live channel stream through the MSE engine.
+   *
+   * hls.js transmuxes the tuner's MPEG-TS to fMP4 in the page, so the server is
+   * unchanged. The element is bound once and kept: switching channels later
+   * discards the buffer rather than the decoder.
+   */
+  function attachLiveSource(url) {
+    if (!window.ToastTVPlaybackEngine || !window.Hls ||
+        !window.ToastTVPlaybackEngine.isSupported(window.Hls)) {
+      logTunerStatus('warn', 'MSE playback is unavailable on this device');
+      return false;
+    }
+    /* Live never swaps slots, so retire any candidate the direct path left. */
+    if (state.candidateSlot) {
+      window.ToastTVPlaybackPolicy.resetMediaElement(videoForSlot(state.candidateSlot));
+      state.candidateSlot = null;
+      applyVideoVisibility();
+    }
+    var video = activeVideo();
+    if (liveEngine && liveEngineVideo !== video) detachLiveEngine();
+    if (!liveEngine) {
+      liveEngine = window.ToastTVPlaybackEngine.createEngine({
+        video: video,
+        Hls: window.Hls
+      });
+      liveEngineVideo = video;
+      liveEngine.on('lost', function (payload) {
+        logTunerStatus('warn', 'playback engine lost the session: ' +
+          (payload && payload.details ? payload.details : 'unrecoverable'));
+        handleMediaError();
+      });
+    }
+    liveEngine.attach(url);
+    return true;
+  }
+
+  function detachLiveEngine() {
+    if (!liveEngine) return;
+    liveEngine.detach();
+    liveEngine = null;
+    liveEngineVideo = null;
+  }
+
+  /**
+   * Switches channel without touching the decoder.
+   *
+   * The server has already published the incoming channel on the same
+   * continuous timeline, so discarding everything ahead of the playhead and
+   * refilling is all that is required. There is no drain to wait out, no
+   * boundary to observe and no freeze frame to hide, because nothing resets.
+   */
+  function beginInPlaceStableTunerHandoff(channelId, generation, now, timing, requestBaseline) {
+    var boundary = state.tuner && state.tuner.switchBoundary;
+    if (!boundary || boundary.revision !== state.tuner.revision ||
+        !hasAttachedStableTunerSource() || !state.hasCommittedVideo ||
+        !liveEngineActive()) return false;
+    var switched = liveEngine.switchNow();
+    if (!switched) return false;
+    var probe = {
+      generation: generation,
+      channelId: channelId,
+      revision: boundary.revision,
+      boundary: boundary,
+      now: now,
+      timing: timing,
+      requestBaseline: requestBaseline,
+      baseline: switched.baseline,
+      discarded: switched.discarded,
+      deadlineAt: Date.now() + MSE_SWITCH_DEADLINE_MS
     };
-    function copyRanges(source, target) {
-      if (!source) return;
-      var index;
-      try {
-        for (index = 0; index < source.length; index += 1) {
-          var start = Number(source.start(index));
-          var end = Number(source.end(index));
-          if (isFinite(start) && isFinite(end) && end >= start) target.push([start, end]);
-        }
-      } catch (ignoreRanges) {}
-    }
-    copyRanges(video && video.buffered, snapshot.buffered);
-    copyRanges(video && video.seekable, snapshot.seekable);
-    return snapshot;
-  }
-
-  function rangeEnd(ranges) {
-    var index;
-    var end = null;
-    for (index = 0; index < ranges.length; index += 1) {
-      if (end === null || ranges[index][1] > end) end = ranges[index][1];
-    }
-    return end;
-  }
-
-  function timeIsInsideRanges(time, ranges) {
-    var index;
-    var epsilon = IN_PLACE_TUNER_RANGE_EPSILON;
-    for (index = 0; index < ranges.length; index += 1) {
-      if (time >= ranges[index][0] - epsilon && time <= ranges[index][1] + epsilon) return true;
-    }
-    return false;
-  }
-
-  function rangeOverlapsAny(candidate, ranges) {
-    var index;
-    var epsilon = IN_PLACE_TUNER_RANGE_EPSILON;
-    for (index = 0; index < ranges.length; index += 1) {
-      if (candidate[0] <= ranges[index][1] + epsilon &&
-          candidate[1] >= ranges[index][0] - epsilon) return true;
-    }
-    return false;
-  }
-
-  function findProvenTargetRange(current, requestBaseline, acceptanceBaseline, requiredTime) {
-    var candidates = current.seekable.concat(current.buffered);
-    var requestRanges = requestBaseline.seekable.concat(requestBaseline.buffered);
-    var acceptanceRanges = acceptanceBaseline.seekable.concat(acceptanceBaseline.buffered);
-    var index;
-    for (index = candidates.length - 1; index >= 0; index -= 1) {
-      var candidate = candidates[index];
-      if (requiredTime !== null && !timeIsInsideRanges(requiredTime, [candidate])) continue;
-      if (!rangeOverlapsAny(candidate, requestRanges) &&
-          !rangeOverlapsAny(candidate, acceptanceRanges)) return candidate;
-    }
-    return null;
-  }
-
-  function seekToProvenTargetRange(video, targetRange, boundary) {
-    if (!video || !targetRange || video.seeking) return false;
-    var joinBehind = Math.max(
-      TUNER_SWITCH_JOIN_BEHIND_SECONDS,
-      Math.min(3, boundary.targetDurationSeconds * 0.75)
-    );
-    var target = Math.max(targetRange[0], targetRange[1] - joinBehind);
-    try {
-      if (Math.abs((Number(video.currentTime) || 0) - target) <= 0.03) {
-        state.hlsSeekPending = false;
-        return true;
-      }
-      state.hlsSeekPending = true;
-      video.currentTime = target;
-    } catch (ignoreTargetSeek) {
-      state.hlsSeekPending = false;
-    }
-    return false;
-  }
-
-  function manifestReachedSwitchBoundary(text, boundary) {
-    if (!boundary || !/^#EXTM3U(?:\r?\n|$)/.test(String(text || ''))) return false;
-    var sequenceMatch = /^#EXT-X-MEDIA-SEQUENCE:(\d+)\s*$/mi.exec(String(text));
-    if (!sequenceMatch) return false;
-    var first = Number(sequenceMatch[1]);
-    var segments = String(text).match(/^#EXTINF:/gmi);
-    var count = segments ? segments.length : 0;
-    if (!isFinite(first) || count < 1) return false;
-    return first + count - 1 >= boundary.lastMediaSequence;
+    state.tunerInPlaceSwitch = probe;
+    state.hardLiveEdgePending = false;
+    state.hlsSeekPending = false;
+    setPlayerStatus('Switching live picture…');
+    logTunerStatus('log', 'flushed ' +
+      (switched.discarded === null ? '?' : switched.discarded.toFixed(2)) +
+      's of outgoing buffer for ' + channelId);
+    scheduleInPlaceStableTunerProbe(probe);
+    return true;
   }
 
   function clearInPlaceStableTunerProbe() {
@@ -967,183 +972,23 @@
     }, IN_PLACE_TUNER_PROBE_MS);
   }
 
-  function observeInPlaceTunerManifest(probe, attempt) {
-    var boundary = probe.boundary;
-    var separator = state.tuner.manifestUrl.indexOf('?') === -1 ? '?' : '&';
-    var url = state.tuner.manifestUrl + separator +
-      'observeRevision=' + encodeURIComponent(String(boundary.revision)) +
-      '&observeAttempt=' + encodeURIComponent(String(attempt));
-    requestText(url, 900, function (error, text) {
-      if (state.tunerInPlaceSwitch !== probe || probe.generation !== state.tuneGeneration ||
-          !state.tuner || state.tuner.revision !== boundary.revision) return;
-      if (!error && manifestReachedSwitchBoundary(text, boundary)) {
-        probe.manifestBoundaryObserved = true;
-        probeInPlaceStableTunerHandoff(probe);
-        return;
-      }
-      if (attempt < 1 && Date.now() + 180 < probe.deadlineAt) {
-        window.setTimeout(function () {
-          if (state.tunerInPlaceSwitch === probe) observeInPlaceTunerManifest(probe, attempt + 1);
-        }, 180);
-      }
-    });
-  }
-
-  function beginInPlaceStableTunerHandoff(channelId, generation, now, timing, requestBaseline) {
-    var boundary = state.tuner && state.tuner.switchBoundary;
-    var video = activeVideo();
-    var acceptanceBaseline = mediaRangeSnapshot(video);
-    var oldBaseline = requestBaseline || acceptanceBaseline;
-    if (!boundary || boundary.revision !== state.tuner.revision ||
-        !hasAttachedStableTunerSource() || !state.hasCommittedVideo ||
-        state.candidateSlot || video.readyState < 2 ||
-        (!oldBaseline.buffered.length && !oldBaseline.seekable.length) ||
-        (!acceptanceBaseline.buffered.length && !acceptanceBaseline.seekable.length)) return false;
-    /* A discontinuity lands the target in its own range, so both baselines are
-       outgoing media to exclude. A seamless splice instead extends the SAME
-       range, and the acceptance snapshot may already hold target content the
-       player fetched while the tune was in flight. Only the request-time buffer
-       is a safe upper bound for outgoing media in that mode. */
-    var seamlessTransport = boundary.transportMode === 'seamless';
-    var outgoingEnd = seamlessTransport
-      ? rangeEnd(oldBaseline.buffered)
-      : Math.max(
-        rangeEnd(oldBaseline.buffered) === null ? -1 : rangeEnd(oldBaseline.buffered),
-        rangeEnd(acceptanceBaseline.buffered) === null ? -1 : rangeEnd(acceptanceBaseline.buffered)
-      );
-    if (outgoingEnd === null) outgoingEnd = -1;
-    var bufferedWaitMs = outgoingEnd >= 0
-      ? Math.max(0, outgoingEnd - (Number(video.currentTime) || 0)) * 1000
-      : 0;
-    /* Decide up front rather than stalling on a probe that must expire, and
-       decide on cost: a seamless cut has to drain the outgoing buffer and then
-       prove progress, so it only wins while that totals less than a re-attach. */
-    if (seamlessTransport &&
-        bufferedWaitMs + IN_PLACE_TUNER_PROGRESS_MS > IN_PLACE_TUNER_REATTACH_COST_MS) {
-      return false;
-    }
-    var probe = {
-      generation: generation,
-      channelId: channelId,
-      revision: boundary.revision,
-      boundary: boundary,
-      now: now,
-      timing: timing,
-      requestBaseline: oldBaseline,
-      acceptanceBaseline: acceptanceBaseline,
-      seamlessTransport: seamlessTransport,
-      outgoingBufferedEnd: outgoingEnd >= 0 ? outgoingEnd : null,
-      manifestBoundaryObserved: false,
-      rangeBoundaryObserved: false,
-      liveEdgeSeekIssued: false,
-      progressStartedAt: 0,
-      progressTime: 0,
-      /* Seamless confirmation needs the whole drain plus one progress window,
-         so a shorter budget could only ever expire. The discontinuity path
-         seeks straight into the proven range and keeps its original deadline. */
-      deadlineAt: Date.now() + (seamlessTransport
-        ? Math.max(
-          IN_PLACE_TUNER_DEADLINE_MS,
-          bufferedWaitMs + IN_PLACE_TUNER_PROGRESS_MS + IN_PLACE_TUNER_SEAMLESS_SLACK_MS
-        )
-        : IN_PLACE_TUNER_DEADLINE_MS)
-    };
-    state.tunerInPlaceSwitch = probe;
-    state.hardLiveEdgePending = false;
-    setPlayerStatus('Switching live picture…');
-    observeInPlaceTunerManifest(probe, 0);
-    scheduleInPlaceStableTunerProbe(probe);
-    return true;
-  }
-
   function probeInPlaceStableTunerHandoff(probe) {
     if (state.tunerInPlaceSwitch !== probe || probe.generation !== state.tuneGeneration ||
         state.view !== 'player' || !state.tuner || state.tuner.revision !== probe.revision ||
         state.tuner.channelId !== probe.channelId || !state.tuning) return;
+    if (!liveEngineActive()) {
+      fallbackInPlaceStableTunerHandoff(probe, 'playback engine detached mid-switch');
+      return;
+    }
+    /* Media before the cut is still the outgoing channel, so playback has to
+       pass it before the new one is genuinely on screen. */
+    if (window.ToastTVPlaybackEngine.isRevealed(liveEngine.stats(), probe.baseline)) {
+      finishInPlaceStableTunerHandoff(probe);
+      return;
+    }
     if (Date.now() >= probe.deadlineAt) {
-      fallbackInPlaceStableTunerHandoff(probe, 'native range boundary was not observable');
+      fallbackInPlaceStableTunerHandoff(probe, 'new media did not appear in time');
       return;
-    }
-    var video = activeVideo();
-    var ranges = mediaRangeSnapshot(video);
-    if (probe.seamlessTransport) {
-      if (probe.manifestBoundaryObserved &&
-          !state.hlsSeekPending && !video.seeking &&
-          window.ToastTVPlaybackPolicy.isPlaybackStable(video)) {
-        var seamlessTime = Number(video.currentTime) || 0;
-        var crossedOutgoing = probe.outgoingBufferedEnd !== null &&
-          seamlessTime > probe.outgoingBufferedEnd + 0.03;
-        var seamlessHeadroom = playbackHeadroomSeconds(video);
-        if (crossedOutgoing && seamlessHeadroom !== null &&
-            seamlessHeadroom >= MIN_READY_BUFFER_SECONDS) {
-          if (!probe.progressStartedAt) {
-            probe.progressStartedAt = Date.now();
-            probe.progressTime = seamlessTime;
-          } else if (Date.now() - probe.progressStartedAt >= IN_PLACE_TUNER_PROGRESS_MS &&
-                     seamlessTime > probe.progressTime + 0.03) {
-            finishInPlaceStableTunerHandoff(probe);
-            return;
-          }
-        } else {
-          probe.progressStartedAt = 0;
-        }
-      }
-      scheduleInPlaceStableTunerProbe(probe);
-      return;
-    }
-    var targetRange = probe.manifestBoundaryObserved
-      ? findProvenTargetRange(
-        ranges,
-        probe.requestBaseline,
-        probe.acceptanceBaseline,
-        null
-      )
-      : null;
-    if (targetRange) {
-      probe.rangeBoundaryObserved = true;
-      probe.targetRange = targetRange;
-    }
-    if (probe.manifestBoundaryObserved && probe.rangeBoundaryObserved &&
-        !probe.liveEdgeSeekIssued) {
-      probe.liveEdgeSeekIssued = true;
-      probe.progressStartedAt = 0;
-      state.hlsSeekPending = false;
-      seekToProvenTargetRange(video, probe.targetRange, probe.boundary);
-      scheduleInPlaceStableTunerProbe(probe);
-      return;
-    }
-    if (probe.manifestBoundaryObserved && probe.rangeBoundaryObserved &&
-        !state.hlsSeekPending && !video.seeking &&
-        window.ToastTVPlaybackPolicy.isPlaybackStable(video)) {
-      var currentTime = Number(video.currentTime) || 0;
-      var currentTargetRange = findProvenTargetRange(
-        ranges,
-        probe.requestBaseline,
-        probe.acceptanceBaseline,
-        currentTime
-      );
-      var edge = currentTargetRange && currentTargetRange[1];
-      var targetHeadroom = edge !== null && edge !== undefined
-        ? edge - currentTime
-        : null;
-      var minimumRevealHeadroom = Math.max(
-        MIN_READY_BUFFER_SECONDS,
-        Math.min(1.5, probe.boundary.targetDurationSeconds * 0.5)
-      );
-      var nearLive = targetHeadroom !== null && targetHeadroom <=
-        Math.max(3, probe.boundary.targetDurationSeconds * 2);
-      if (nearLive && targetHeadroom >= minimumRevealHeadroom && currentTargetRange) {
-        if (!probe.progressStartedAt) {
-          probe.progressStartedAt = Date.now();
-          probe.progressTime = currentTime;
-        } else if (Date.now() - probe.progressStartedAt >= IN_PLACE_TUNER_PROGRESS_MS &&
-                   currentTime > probe.progressTime + 0.03) {
-          finishInPlaceStableTunerHandoff(probe);
-          return;
-        }
-      } else {
-        probe.progressStartedAt = 0;
-      }
     }
     scheduleInPlaceStableTunerProbe(probe);
   }
@@ -1177,7 +1022,7 @@
     retargetLineupSession(probe.channelId, probe.generation);
     if (state.tuneMetrics && state.tuneMetrics.channelId === probe.channelId) {
       state.tuneMetrics.firstFrameAt = Date.now();
-      state.tuneMetrics.src = 'session-tuner-in-place';
+      state.tuneMetrics.src = 'session-tuner-mse';
       logTuneMetrics(state.tuneMetrics);
       state.tuneMetrics = null;
     }
@@ -1191,21 +1036,22 @@
     }, 300);
   }
 
+  /**
+   * Rebuilds the engine on the tuner's current revision.
+   *
+   * This is not the old decoder re-attach: the media element is never dropped,
+   * so there is no black frame to cover and no freeze frame to capture.
+   */
   function fallbackInPlaceStableTunerHandoff(probe, reason) {
     if (state.tunerInPlaceSwitch !== probe) return;
     clearInPlaceStableTunerProbe();
-    logTunerStatus('warn', 'in-place switch to ' + probe.channelId +
-      ' fell back to decoder reattach: ' + reason);
-    /* Release the outgoing decoder before re-attaching. Muting alone leaves
-       LG's old pipeline running and it keeps draining that channel's audio
-       under the tuning backdrop, which is the overlapping-pipeline failure
-       detachVideoForTune() exists to prevent. Clearing hasCommittedVideo first
-       would make loadProgram() skip that detach entirely. */
-    detachVideoForTune();
+    logTunerStatus('warn', 'switch to ' + probe.channelId +
+      ' fell back to an engine reattach: ' + reason);
+    state.hasCommittedVideo = false;
     state.frameProbeAttempts = 0;
     state.hlsSeekPending = false;
-    state.hardLiveEdgePending = true;
-    if (state.tuneMetrics) state.tuneMetrics.src = 'session-tuner-reattach-fallback';
+    state.hardLiveEdgePending = false;
+    if (state.tuneMetrics) state.tuneMetrics.src = 'session-tuner-engine-reattach';
     beginTuning('Switching the live picture…');
     applyNowResult(probe.now, probe.timing, true);
     queuePresenceHeartbeat();
@@ -2106,7 +1952,6 @@
     if (!state.tunerRollbackChannelId) {
       state.tunerRollbackChannelId = previousChannelId;
     }
-    var requestBaseline = mediaRangeSnapshot(activeVideo());
     updateChannelOsdProgram('Switching live signal…');
     postStableTunerSwitch(channelId, function (error, data) {
       if (generation !== state.tuneGeneration || state.requestedChannelId !== channelId) return;
@@ -3048,19 +2893,26 @@
   function loadProgram(program, source) {
     clearPlaybackError();
     hideOffAir();
-    if (state.hasCommittedVideo && !state.candidateSlot) detachVideoForTune();
-    beginTuning(source.mode === 'channel-hls' ? 'Joining live channel…' : 'Loading ' + program.title + '…');
+    var live = source.mode === 'channel-hls';
+    /* Direct play is a plain file, which MSE cannot take and hls.js cannot
+       parse, so it keeps the native element and the slot handoff. */
+    if (!live && state.hasCommittedVideo && !state.candidateSlot) detachVideoForTune();
+    beginTuning(live ? 'Joining live channel…' : 'Loading ' + program.title + '…');
     state.pendingJoin = true;
     state.frameProbeAttempts = 0;
     state.hlsSeekPending = false;
     state.activeSource = source;
     state.playToken += 1;
-    if (!window.ToastTVPlaybackPolicy.loadMediaElement(tuneVideo(), source.url)) handleMediaError();
+    if (live) {
+      if (!attachLiveSource(source.url)) handleMediaError();
+    } else {
+      detachLiveEngine();
+      if (!window.ToastTVPlaybackPolicy.loadMediaElement(tuneVideo(), source.url)) handleMediaError();
+    }
     if (state.tuneMetrics && !state.tuneMetrics.attachedAt) state.tuneMetrics.attachedAt = Date.now();
-    /* Native HLS can fail without emitting canplay, waiting, or error. Start
-       the same bounded decoder proof from attachment rather than relying on a
-       media event to arm it. */
-    if (source.mode === 'channel-hls') stabilizeTuning();
+    /* Playback can fail without emitting canplay, waiting, or error. Start the
+       bounded proof from attachment rather than relying on a media event. */
+    if (live) stabilizeTuning();
   }
 
   function joinLive() {
@@ -3096,6 +2948,14 @@
   }
 
   function seekHlsLiveEdge(forceLiveEdge) {
+    /* The engine keeps its own live sync through liveSyncDurationCount. Seeking
+       the element underneath it fights that and can strand the playhead in a
+       range the loader is about to discard. */
+    if (liveEngineActive()) {
+      state.hlsSeekPending = false;
+      if (forceLiveEdge) state.hardLiveEdgePending = false;
+      return true;
+    }
     try {
       var video = tuneVideo();
       if (!video.seekable || video.seekable.length < 1) return false;
@@ -3595,6 +3455,7 @@
   }
 
   function resetAllVideos() {
+    detachLiveEngine();
     window.ToastTVPlaybackPolicy.resetMediaElement(elements.videoA);
     window.ToastTVPlaybackPolicy.resetMediaElement(elements.videoB);
   }
@@ -4808,6 +4669,10 @@
   }
 
   function detachVideoForTune() {
+    /* Resetting the element underneath an attached MediaSource strands the
+       engine on a source it no longer owns. Tear it down so the next attach
+       builds a clean one. */
+    detachLiveEngine();
     captureTuningFreezeFrame();
     state.pendingJoin = false;
     state.playToken += 1;

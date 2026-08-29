@@ -930,7 +930,7 @@ describe('LG webOS presence telemetry', () => {
     }
   })
 
-  test('holds a zap transition frame until revisioned playback proves the target', () => {
+  test('switches channel by discarding the outgoing buffer, never the decoder', () => {
     const script = readFileSync(
       join(import.meta.dir, '..', 'clients', 'webos', 'app.js'),
       'utf8'
@@ -1069,32 +1069,34 @@ describe('LG webOS presence telemetry', () => {
     )
     expect(inPlaceBeginBody).toContain('hasAttachedStableTunerSource()')
     expect(inPlaceBeginBody).not.toContain('loadMediaElement(')
-    expect(inPlaceProbeBody).toContain('probe.manifestBoundaryObserved')
-    expect(inPlaceProbeBody).toContain('if (probe.seamlessTransport)')
-    expect(inPlaceProbeBody).toContain('seamlessTime > probe.outgoingBufferedEnd + 0.03')
-    expect(inPlaceProbeBody).toContain('seamlessHeadroom >= MIN_READY_BUFFER_SECONDS')
-    expect(script).toContain('function findProvenTargetRange(')
-    expect(script).toContain('!rangeOverlapsAny(candidate, requestRanges)')
-    expect(script).toContain('!rangeOverlapsAny(candidate, acceptanceRanges)')
-    expect(script).not.toContain('meaningfulAdvance')
-    expect(inPlaceProbeBody).toContain('probe.targetRange = targetRange')
-    expect(inPlaceProbeBody).toContain('seekToProvenTargetRange(video, probe.targetRange, probe.boundary)')
-    expect(inPlaceProbeBody).toContain('currentTargetRange = findProvenTargetRange(')
-    expect(inPlaceProbeBody).toContain('targetHeadroom >= minimumRevealHeadroom')
-    expect(inPlaceProbeBody).toContain('!state.hlsSeekPending && !video.seeking')
-    expect(inPlaceFinishBody).toContain("state.tuneMetrics.src = 'session-tuner-in-place'")
-    expect(inPlaceFinishBody).not.toContain('loadMediaElement(')
-    /* Setting hasCommittedVideo false before applyNowResult() makes
-       loadProgram() skip its detach, so this path has to release the outgoing
-       decoder itself or LG keeps playing the previous channel's audio over the
-       black tuning backdrop for several seconds. */
-    expect(inPlaceFallbackBody).toContain('detachVideoForTune();')
-    expect(inPlaceFallbackBody).not.toContain('activeVideo().muted = true')
-    expect(inPlaceFallbackBody.indexOf('detachVideoForTune();')).toBeLessThan(
-      inPlaceFallbackBody.indexOf('applyNowResult(probe.now, probe.timing, true)')
+
+    /* A channel change discards the outgoing buffer. It does not wait for it to
+       drain, does not seek into a proven range, and does not watch the manifest
+       for a boundary — all of which existed only because the native player
+       would not release its buffer. */
+    expect(inPlaceBeginBody).toContain('liveEngine.switchNow()')
+    expect(inPlaceBeginBody).toContain('liveEngineActive()')
+    expect(script).not.toContain('findProvenTargetRange')
+    expect(script).not.toContain('seekToProvenTargetRange')
+    expect(script).not.toContain('manifestBoundaryObserved')
+    expect(script).not.toContain('outgoingBufferedEnd')
+
+    /* Media before the cut is still the outgoing channel, so the reveal test is
+       whether playback has passed it. That predicate lives in the engine and is
+       unit tested there; here we only check the client asks for it. */
+    expect(inPlaceProbeBody).toContain(
+      'window.ToastTVPlaybackEngine.isRevealed(liveEngine.stats(), probe.baseline)'
     )
+    expect(inPlaceProbeBody).not.toContain('seek')
+    expect(inPlaceFinishBody).toContain("state.tuneMetrics.src = 'session-tuner-mse'")
+    expect(inPlaceFinishBody).not.toContain('loadMediaElement(')
+
+    /* The media element survives a failed switch: there is no decoder to reset,
+       so the recovery rebuilds the engine rather than tearing down playback. */
+    expect(inPlaceFallbackBody).not.toContain('detachVideoForTune();')
+    expect(inPlaceFallbackBody).not.toContain('captureTuningFreezeFrame();')
     expect(inPlaceFallbackBody).toContain('applyNowResult(probe.now, probe.timing, true)')
-    expect(inPlaceFallbackBody).toContain("state.tuneMetrics.src = 'session-tuner-reattach-fallback'")
+    expect(inPlaceFallbackBody).toContain("state.tuneMetrics.src = 'session-tuner-engine-reattach'")
     expect(mediaErrorBody).toContain('state.previousTune.tunerChannelId || state.tunerRollbackChannelId')
     expect(mediaErrorBody).toContain('state.candidateChannelId !== stableRestoreChannelId')
     expect(mediaErrorBody.indexOf('rollbackAcceptedStableTunerTune(')).toBeLessThan(
