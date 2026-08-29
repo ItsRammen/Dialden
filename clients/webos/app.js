@@ -86,8 +86,6 @@
     scheduleRefreshSerial: 0,
     scheduleHydrating: false,
     scheduleHydratedAt: 0,
-    videoSlot: 'A',
-    candidateSlot: null,
     candidateChannelId: null,
     hasCommittedVideo: false,
     committedChannelId: null,
@@ -187,7 +185,7 @@
       'channelPreviewState', 'channelPreviewName', 'channelPreviewProgram', 'channelPreviewEpisode',
       'channelPreviewTimelineFill', 'channelPreviewTime', 'channelPreviewUpcoming', 'channelPreviewNext',
       'channelPreviewNext2', 'channelPreviewNext3', 'channelGuideButton',
-      'serverLabel', 'videoA', 'videoB', 'tuningFreezeFrame', 'playerBackdrop', 'playerHeader', 'playerChannelName',
+      'serverLabel', 'videoA', 'tuningFreezeFrame', 'playerBackdrop', 'playerHeader', 'playerChannelName',
       'playerChannelLogo', 'playerChannelMonogram', 'playerChannelNumber', 'playerStatus', 'playerClock', 'playerInfo', 'playerCollection', 'playerTitle', 'playerEpisode',
       'timelineFill', 'programTimes', 'nextTitle', 'offAirPanel', 'offAirNext',
       'offAirGuideButton', 'offAirChannelsButton',
@@ -269,8 +267,6 @@
     elements.channelPreviewLogo.addEventListener('error', hideChannelPreviewLogo, false);
 
     bindVideoEvents(elements.videoA);
-    bindVideoEvents(elements.videoB);
-    applyVideoVisibility();
 
     document.addEventListener('keydown', handleKeyDown, false);
     document.addEventListener('mouseover', function (event) {
@@ -365,24 +361,11 @@
   }
 
   function activeVideo() {
-    return videoForSlot(state.videoSlot);
-  }
-
-  function standbyVideo() {
-    return state.videoSlot === 'A' ? elements.videoB : elements.videoA;
-  }
-
-  function videoForSlot(slot) {
-    return slot === 'A' ? elements.videoA : elements.videoB;
+    return elements.videoA;
   }
 
   function tuneVideo() {
-    return state.candidateSlot ? videoForSlot(state.candidateSlot) : activeVideo();
-  }
-
-  function applyVideoVisibility() {
-    elements.videoA.classList.toggle('player-video--standby', state.videoSlot !== 'A');
-    elements.videoB.classList.toggle('player-video--standby', state.videoSlot !== 'B');
+    return activeVideo();
   }
 
   function hasCrossChannelHandoff() {
@@ -888,12 +871,6 @@
         !window.ToastTVPlaybackEngine.isSupported(window.Hls)) {
       logTunerStatus('warn', 'MSE playback is unavailable on this device');
       return false;
-    }
-    /* Live never swaps slots, so retire any candidate the direct path left. */
-    if (state.candidateSlot) {
-      window.ToastTVPlaybackPolicy.resetMediaElement(videoForSlot(state.candidateSlot));
-      state.candidateSlot = null;
-      applyVideoVisibility();
     }
     var video = activeVideo();
     if (liveEngine && liveEngineVideo !== video) detachLiveEngine();
@@ -2887,7 +2864,7 @@
     var live = source.mode === 'channel-hls';
     /* Direct play is a plain file, which MSE cannot take and hls.js cannot
        parse, so it keeps the native element and the slot handoff. */
-    if (!live && state.hasCommittedVideo && !state.candidateSlot) detachVideoForTune();
+    if (!live && state.hasCommittedVideo) detachVideoForTune();
     beginTuning(live ? 'Joining live channel…' : 'Loading ' + program.title + '…');
     state.pendingJoin = true;
     state.frameProbeAttempts = 0;
@@ -3078,15 +3055,7 @@
       state.hlsSeekPending = false;
       state.hardLiveEdgePending = false;
       state.frameProbeAttempts = 0;
-      var oldVideo = activeVideo();
-      if (state.candidateSlot) {
-        state.videoSlot = state.candidateSlot;
-        state.candidateSlot = null;
-        applyVideoVisibility();
-      }
       video.muted = false;
-      if (oldVideo !== video) window.ToastTVPlaybackPolicy.resetMediaElement(oldVideo);
-      else window.ToastTVPlaybackPolicy.resetMediaElement(standbyVideo());
       state.hasCommittedVideo = true;
       state.tunerNeedsRecovery = false;
       state.tunerDecoderRecoveryAttempts = 0;
@@ -3448,7 +3417,6 @@
   function resetAllVideos() {
     detachLiveEngine();
     window.ToastTVPlaybackPolicy.resetMediaElement(elements.videoA);
-    window.ToastTVPlaybackPolicy.resetMediaElement(elements.videoB);
   }
 
   function showOffAir(nextProgram) {
@@ -3464,7 +3432,6 @@
       state.activeSource = null;
       resetAllVideos();
     }
-    state.candidateSlot = null;
     state.candidateChannelId = null;
     state.hardLiveEdgePending = false;
     state.hasCommittedVideo = keepStableTuner;
@@ -4667,19 +4634,14 @@
     captureTuningFreezeFrame();
     state.pendingJoin = false;
     state.playToken += 1;
-    state.candidateSlot = state.videoSlot === 'A' ? 'B' : 'A';
-    /* LG does not officially support two simultaneous video decoders. Release
-       the outgoing decoder before attaching the hidden candidate; the tuning
-       backdrop covers this short handoff and avoids the audio-loop failures
-       caused by overlapping playback pipelines on physical TVs. */
-    standbyVideo().muted = true;
-    window.ToastTVPlaybackPolicy.resetMediaElement(standbyVideo());
+    /* Release the outgoing decoder before re-attaching. Muting alone leaves
+       LG's pipeline running and draining the previous channel's audio under the
+       tuning backdrop. */
     activeVideo().muted = true;
     window.ToastTVPlaybackPolicy.resetMediaElement(activeVideo());
     state.hasCommittedVideo = false;
     elements.playerScreen.classList.remove('has-video');
     elements.playerBackdrop.classList.remove('hidden');
-    applyVideoVisibility();
   }
 
   function abandonCandidateTune() {
@@ -4695,23 +4657,17 @@
     state.activeSource = null;
     state.programId = null;
     state.currentNow = null;
-    if (state.candidateSlot) {
-      window.ToastTVPlaybackPolicy.resetMediaElement(videoForSlot(state.candidateSlot));
-    }
-    state.candidateSlot = null;
     state.candidateChannelId = null;
   }
 
   function rollbackCandidateTune(restoredTuner) {
     clearInPlaceStableTunerProbe();
-    if (!state.candidateSlot && !state.previousTune) {
+    if (!state.previousTune) {
       clearTuningFreezeFrame();
       return state.hasCommittedVideo;
     }
     clearTuningTimer();
     clearLiveRetryTimer();
-    if (state.candidateSlot) window.ToastTVPlaybackPolicy.resetMediaElement(videoForSlot(state.candidateSlot));
-    state.candidateSlot = null;
     state.candidateChannelId = null;
     state.tuning = false;
     state.pendingJoin = false;
@@ -4840,7 +4796,6 @@
     state.hlsSeekPending = false;
     state.hardLiveEdgePending = false;
     state.liveRetryAttempt = 0;
-    state.candidateSlot = null;
     state.candidateChannelId = null;
     state.hasCommittedVideo = false;
     state.tunerNeedsRecovery = false;

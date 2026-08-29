@@ -166,8 +166,13 @@ describe('LG webOS presence telemetry', () => {
     expect(script).toContain("'tune=' + encodeURIComponent(String(state.tuneGeneration))")
     expect(script).toContain('liveEdge - video.currentTime > DRIFT_LIMIT_SECONDS')
     expect(script).toContain('detachVideoForTune();')
-    expect(script).toContain('window.ToastTVPlaybackPolicy.resetMediaElement(standbyVideo())')
-    expect(script).toContain('standbyVideo().muted = true')
+    /* One element for the session's life. The second existed so a re-attach
+       could build the incoming channel on a hidden decoder; the engine never
+       tears the decoder down, so with one element there is never a second
+       decoder to collide with. */
+    expect(script).not.toContain('standbyVideo')
+    expect(script).not.toContain('candidateSlot')
+    expect(script).not.toContain('videoB')
     expect(script).toContain('window.ToastTVPlaybackPolicy.loadMediaElement(tuneVideo(), source.url)')
     expect(script).toContain('window.ToastTVPlaybackPolicy.isPlaybackStable(video)')
     expect(script).toContain('function playbackHeadroomSeconds(video)')
@@ -176,8 +181,6 @@ describe('LG webOS presence telemetry', () => {
     expect(script).toContain('if (!state.hlsSeekPending)')
     expect(script).toContain('generation !== state.tuneGeneration')
     expect(script).toContain('video !== tuneVideo()')
-    expect(script).toContain("state.candidateSlot = state.videoSlot === 'A' ? 'B' : 'A'")
-    expect(script).toContain('state.videoSlot = state.candidateSlot')
     expect(script).toContain("'&attach=' + encodeURIComponent(String(state.attachAttempt))")
     expect(script).not.toContain('LIVE_EDGE_LOCK_TIMEOUT_MS')
     expect(script).not.toContain("retryLiveStream('Tuning — reacquiring the live position…')")
@@ -497,8 +500,6 @@ describe('LG webOS presence telemetry', () => {
       script.indexOf('function tuneChannel('),
       prepareStart
     )
-    const stableCheck = script.indexOf('window.ToastTVPlaybackPolicy.isPlaybackStable(video)')
-    const slotCommit = script.indexOf('state.videoSlot = state.candidateSlot')
     const stableCommitBody = script.slice(
       script.indexOf('function commitStableTunerChannel('),
       script.indexOf('function recoverRejectedStableTunerTune(')
@@ -520,8 +521,8 @@ describe('LG webOS presence telemetry', () => {
       script.indexOf('function reconcileOpenCatalog(')
     )
 
-    expect(detachBody).toContain("state.candidateSlot = state.videoSlot === 'A' ? 'B' : 'A'")
-    expect(detachBody).not.toContain("state.videoSlot = state.videoSlot === 'A' ? 'B' : 'A'")
+    // Releases the one element rather than swapping to a hidden second one.
+    expect(detachBody).not.toContain('candidateSlot')
     expect(detachBody).toContain('activeVideo().muted = true')
     expect(detachBody).toContain('window.ToastTVPlaybackPolicy.resetMediaElement(activeVideo())')
     expect(detachBody).toContain('state.hasCommittedVideo = false')
@@ -570,7 +571,12 @@ describe('LG webOS presence telemetry', () => {
       const lifecycleEnd = script.indexOf('\n  function ', lifecycleStart + 1)
       expect(script.slice(lifecycleStart, lifecycleEnd)).toContain('clearTuningFreezeFrame();')
     }
-    expect(slotCommit).toBeGreaterThan(stableCheck)
+    /* The invariant the slot promotion used to carry: the attach is not
+       committed until playback has actually been proven stable. Scoped to
+       stabilizeTuning, since the reveal path commits on its own proof. */
+    expect(stabilizeBody.indexOf('state.hasCommittedVideo = true')).toBeGreaterThan(
+      stabilizeBody.indexOf('window.ToastTVPlaybackPolicy.isPlaybackStable(video)')
+    )
     expect(script).toContain('var TUNING_PROBE_LIMIT = 20')
     expect(script).toContain('state.frameProbeAttempts >= TUNING_PROBE_LIMIT')
     expect(script).toContain('rollbackCandidateTune();')
