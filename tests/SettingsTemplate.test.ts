@@ -49,6 +49,18 @@ describe('settings template', () => {
     expect(html).toContain('href="/settings/metadata"')
   })
 
+  test('hides the legacy MPV socket control on a headless administration server', () => {
+    const html = renderSettings({
+      config,
+      mediaDirectory: '/media',
+      localPlaybackEnabled: false,
+    })
+
+    expect(html).not.toContain('MPV connection')
+    expect(html).not.toContain('name="mpvSocket"')
+    expect(html).toContain('name="serverPort"')
+  })
+
   test('escapes host-provided status and path values', () => {
     const html = renderSettings({
       config: {

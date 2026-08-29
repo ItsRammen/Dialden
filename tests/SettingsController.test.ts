@@ -102,6 +102,24 @@ describe('SettingsController', () => {
     expect(json).toEqual({ server: { port: 3000 } })
   })
 
+  test('headless settings do not overwrite the hidden legacy MPV configuration', async () => {
+    const controller = createSettingsController({
+      config: configService,
+      media: mediaService,
+      update: updateService,
+      localPlaybackEnabled: false,
+    })
+    const local = new Hono().route('/', controller)
+
+    await local.request('/api/config', {
+      method: 'POST',
+      body: new URLSearchParams({ serverPort: '1993' }),
+    })
+
+    expect(configService.update).toHaveBeenCalledTimes(1)
+    expect(configService.update.mock.calls[0]![0]).not.toHaveProperty('mpv')
+  })
+
   test('persists and applies the library safety-scan interval', async () => {
     const applied: number[] = []
     const controller = createSettingsController({

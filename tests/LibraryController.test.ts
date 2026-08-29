@@ -439,12 +439,13 @@ describe('LibraryController', () => {
       pageSize: 100,
       prioritizedIds: [],
     })
-    expect(markup).toContain('Media Library (275)')
+    expect(markup).toContain('<h1>Indexed files</h1>')
+    expect(markup).toContain('275 records')
     expect(markup).toContain('Showing 101–200 of 275 files · Page 2 of 3')
     expect(markup).toContain('page=1')
     expect(markup).toContain('page=3')
     expect(markup).toContain('search=Family%20%26%20Friends')
-    expect(markup).toContain('✅ Playable')
+    expect(markup).toContain('>Playable</a>')
     expect(markup).toContain(
       'hx-trigger="libraryEligibilityChanged from:body"'
     )

@@ -17,8 +17,17 @@ export function renderLayout(
   content: string,
   options?: LayoutOptions
 ): string {
+  const activeSection = title.toLowerCase().includes('channel')
+    ? 'channels'
+    : title.toLowerCase().includes('librar') || title.toLowerCase().includes('media')
+      ? 'library'
+      : title.toLowerCase().includes('setting') || title.toLowerCase().includes('metadata')
+        ? 'settings'
+        : 'dashboard'
+  const navLink = (section: string, href: string, label: string) =>
+    `<a href="${href}"${activeSection === section ? ' aria-current="page"' : ''}>${label}</a>`
   const updateDot = options?.updateAvailable
-    ? '<a href="/settings#about" class="update-dot" title="Update available">●</a>'
+    ? '<a href="/settings#about" class="update-dot" title="Update available" aria-label="Update available">Update available</a>'
     : ''
 
   return `<!DOCTYPE html>
@@ -26,33 +35,34 @@ export function renderLayout(
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${title} - Toast TV</title>
+  <title>${title} · ToastTV Admin</title>
   <link rel="stylesheet" href="/style.css">
   <link rel="manifest" href="/manifest.json">
   <link rel="apple-touch-icon" href="/app-icon.png">
-  <meta name="theme-color" content="#e94560">
+  <meta name="theme-color" content="#0b1220">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <script src="https://unpkg.com/htmx.org@1.9.10"></script>
 </head>
-<body>
-<nav class="navbar">
-    <a href="/" class="logo">
+<body class="app-shell">
+  <a class="skip-link" href="#main-content">Skip to content</a>
+  <header class="navbar">
+    <a href="/" class="logo" aria-label="ToastTV administration overview">
       <img src="/logo" alt="" class="nav-logo" onerror="this.style.display='none'">
-      <span>Toast TV</span>
+      <span class="brand-copy"><strong>ToastTV</strong><small>Administration</small></span>
     </a>
-    <div class="nav-links">
-      <a href="/">Dashboard</a>
-      <a href="/library">Library</a>
-      <a href="/channels">Channels</a>
-      <a href="/settings">Settings</a>
-    </div>
-  </nav>
-  <main class="container">
+    <nav class="nav-links" aria-label="Primary navigation">
+      ${navLink('dashboard', '/', 'Overview')}
+      ${navLink('library', '/library', 'Library')}
+      ${navLink('channels', '/channels', 'Channels')}
+      ${navLink('settings', '/settings', 'Settings')}
+    </nav>
+  </header>
+  <main class="container" id="main-content">
     ${content}
   </main>
   <footer class="app-footer">
-    <span>${appVersion}</span>${updateDot}
+    <span>ToastTV Server</span><span class="footer-separator" aria-hidden="true">·</span><span>v${appVersion}</span>${updateDot}
   </footer>
   <div id="toast-container"></div>
   <script>

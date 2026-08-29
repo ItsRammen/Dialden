@@ -19,6 +19,8 @@ export interface SettingsProps {
   updateAvailable?: boolean
   currentVersion?: string
   latestVersion?: string | null
+  /** Whether this process owns the legacy local MPV player. */
+  localPlaybackEnabled?: boolean
   /** Resolved once at startup from the container's transcoding environment. */
   transcodingStatus?: FfmpegTranscodingStatus
   /** The lineup-wide quality decision derived from the probe and channel count. */
@@ -42,9 +44,9 @@ export function renderSettings(props: SettingsProps): string {
     <div class="settings settings-page">
       <header class="settings-page-header">
         <div>
-          <p class="settings-eyebrow">Server configuration</p>
-          <h1>Settings</h1>
-          <p class="settings-lede">Manage playback, library services, and this ToastTV server from one place.</p>
+          <p class="settings-eyebrow">Administration</p>
+          <h1>Server settings</h1>
+          <p class="settings-lede">Configure broadcast policy, catalog services, compatibility, and deployment settings.</p>
         </div>
         <nav class="settings-section-nav" aria-label="Settings sections">
           <a href="#branding">Branding</a>
@@ -254,7 +256,7 @@ export function renderSettings(props: SettingsProps): string {
             </div>
           </section>
 
-          <section class="settings-card">
+          ${props.localPlaybackEnabled === false ? '' : `<section class="settings-card">
             <div class="card-header">
               <div><p class="settings-card-kicker">Local player</p><h3>MPV connection</h3></div>
             </div>
@@ -264,7 +266,7 @@ export function renderSettings(props: SettingsProps): string {
               <input type="text" id="mpvSocket" name="mpvSocket" value="${escapeHtml(config.mpv.ipcSocket)}">
               <span class="hint">Used when ToastTV controls a local MPV process.</span>
             </div>
-          </section>
+          </section>`}
 
           <section class="settings-card" id="about">
             <div class="card-header">

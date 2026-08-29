@@ -650,18 +650,18 @@ export function renderCollectionLibraryContent(
     <div class="collection-library">
       <header class="collection-library-header">
         <div>
-          <p class="collection-eyebrow">Managed media library</p>
+          <p class="collection-eyebrow">Catalog operations</p>
           <h1>${heading}</h1>
           ${description}
         </div>
-        <a class="collection-advanced-link" href="/library/files">Advanced files</a>
+        <a class="collection-advanced-link" href="/library/files">File diagnostics</a>
       </header>
       <nav class="collection-library-nav" aria-label="Library sections">
         <a href="/library">Overview</a>
         <a href="/library/tv">TV shows</a>
         <a href="/library/movies">Movies</a>
         <a href="/library/interludes">Interludes</a>
-        <a href="/library/review">Needs review</a>
+        <a href="/library/review">Review queue</a>
       </nav>
       <section id="collection-live-work" class="collection-live-work" role="status" aria-live="polite" hidden>
         <strong id="collection-live-title">Library scan</strong>

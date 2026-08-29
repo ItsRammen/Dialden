@@ -75,7 +75,8 @@ describe('headless dashboard template', () => {
     const markup = renderHeadlessDashboardContent(dashboard())
 
     expect(markup).toContain('Server online')
-    expect(markup).toContain('Now and next')
+    expect(markup).toContain('Broadcast status')
+    expect(markup).toContain('System overview')
     expect(markup).toContain('Magic Xylophone')
     expect(markup).toContain('Hospital')
     expect(markup).toContain('Needs review')

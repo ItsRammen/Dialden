@@ -23,6 +23,7 @@ interface SettingsControllerDeps {
   update: UpdateService
   transcodingStatus?: FfmpegTranscodingStatus
   qualityTier?: () => TierDecision | undefined
+  localPlaybackEnabled?: boolean
   onInterludeUpdated?: (
     policy: ChannelInterludePolicy
   ) => Promise<void> | void
@@ -56,6 +57,7 @@ export function createSettingsController(deps: SettingsControllerDeps) {
         updateAvailable: updateInfo?.updateAvailable,
         currentVersion: updateInfo?.currentVersion ?? update.currentVersion,
         latestVersion: updateInfo?.latestVersion,
+        localPlaybackEnabled: deps.localPlaybackEnabled,
         transcodingStatus: deps.transcodingStatus,
         qualityTier: deps.qualityTier?.(),
         libraryMonitoring: deps.libraryMonitoring?.(),
@@ -90,9 +92,14 @@ export function createSettingsController(deps: SettingsControllerDeps) {
         enabled: body['interludeEnabled'] === 'true',
         frequency: parseInt(body['interludeFrequency'] as string, 10) || 3,
       },
-      mpv: {
-        ipcSocket: (body['mpvSocket'] as string) || '/tmp/toasttv-mpv.sock',
-      },
+      ...(deps.localPlaybackEnabled === false
+        ? {}
+        : {
+            mpv: {
+              ipcSocket:
+                (body['mpvSocket'] as string) || '/tmp/toasttv-mpv.sock',
+            },
+          }),
       logo: {
         enabled: body['logoEnabled'] === 'true',
         opacity: parseInt(body['logoOpacity'] as string, 10) || 200,

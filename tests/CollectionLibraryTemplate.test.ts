@@ -95,7 +95,7 @@ describe('collection library template', () => {
     expect(markup).toContain('Parent block')
     expect(markup).toContain('Use policy')
     expect(markup).toContain('Change metadata match')
-    expect(markup).toContain('href="/library/files">Advanced files</a>')
+    expect(markup).toContain('href="/library/files">File diagnostics</a>')
     expect(markup).not.toMatch(/on(?:click|change|submit)=/i)
     expect(markup).not.toContain('<script')
   })

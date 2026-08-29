@@ -54,13 +54,12 @@ export function renderChannelAdministration(
     <div class="channel-admin">
       <header class="channel-admin-hero">
         <div>
-          <p class="channel-admin-eyebrow">Broadcast setup</p>
-          <h1>Channels</h1>
-          <p>Create schedules from playable collections. Channel settings are saved in appdata and take effect immediately.</p>
+          <p class="channel-admin-eyebrow">Broadcast operations</p>
+          <h1>Channel management</h1>
+          <p>Manage channel availability, automated lineups, schedules, and app branding.</p>
         </div>
         <div class="channel-admin-hero-actions">
           <a class="channel-admin-link channel-admin-create" href="/channels?builder=create#station-builder">Create station</a>
-          <a class="channel-admin-link" href="/">Back to dashboard</a>
         </div>
       </header>
 

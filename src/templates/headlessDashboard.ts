@@ -366,8 +366,8 @@ export function renderHeadlessDashboardContent(
     <div class="headless-dashboard">
       <header class="headless-dashboard-header">
         <div>
-          <p class="headless-eyebrow">Broadcast server</p>
-          <h1>ToastTV</h1>
+          <p class="headless-eyebrow">Operations</p>
+          <h1>System overview</h1>
         </div>
         <div class="headless-server-state headless-server-${view.server.status}" role="status" aria-live="polite">
           <strong><span aria-hidden="true">${serverStatus.icon}</span> ${serverStatus.label}</strong>
@@ -382,8 +382,8 @@ export function renderHeadlessDashboardContent(
       <section class="headless-channels" aria-labelledby="headless-channels-title">
         <div class="headless-section-heading">
           <div>
-            <p class="headless-eyebrow">Channels</p>
-            <h2 id="headless-channels-title">Now and next</h2>
+            <p class="headless-eyebrow">Broadcast status</p>
+            <h2 id="headless-channels-title">Channels</h2>
           </div>
           <a class="headless-card-link" href="/channels">Manage channels</a>
         </div>

@@ -149,7 +149,7 @@ export function renderLibraryContent(props: LibraryProps): string {
   } else if (filter === 'videos') {
     mediaContent = renderMediaSection(
       'Videos',
-      '📺',
+      '',
       videos,
       view,
       config,
@@ -159,7 +159,7 @@ export function renderLibraryContent(props: LibraryProps): string {
   } else if (filter === 'interludes') {
     mediaContent = renderMediaSection(
       'Interludes',
-      '🎬',
+      '',
       interludes,
       view,
       config,
@@ -169,7 +169,7 @@ export function renderLibraryContent(props: LibraryProps): string {
   } else if (filter === 'errors') {
     mediaContent = renderMediaSection(
       'Technical failures',
-      '⚠️',
+      '',
       filteredMedia,
       view,
       config,
@@ -179,7 +179,7 @@ export function renderLibraryContent(props: LibraryProps): string {
   } else {
     mediaContent = renderMediaSection(
       filter === 'approved' ? 'Playable files' : 'Not Scheduled',
-      filter === 'approved' ? '✅' : '🔒',
+      '',
       filteredMedia,
       view,
       config,
@@ -194,7 +194,10 @@ export function renderLibraryContent(props: LibraryProps): string {
          hx-trigger="libraryEligibilityChanged from:body"
          hx-target="this"
          hx-swap="outerHTML">
-      <h1>Media Library (${total})</h1>
+      <div class="library-page-heading">
+        <div><p class="library-eyebrow">File diagnostics</p><h1>Indexed files</h1></div>
+        <span class="library-count">${total.toLocaleString('en-US')} records</span>
+      </div>
       
       <!-- Toolbar -->
       <div class="library-toolbar">
@@ -202,6 +205,7 @@ export function renderLibraryContent(props: LibraryProps): string {
           <input type="text" 
                  id="search-input"
                  name="search"
+                 aria-label="Search indexed files"
                  placeholder="Search..." 
                  value="${safeSearch}"
                  autocomplete="off"
@@ -225,11 +229,11 @@ export function renderLibraryContent(props: LibraryProps): string {
         
         <div class="filter-buttons">
           ${renderLibraryLink('All Media', { ...navigation, filter: 'all', page: 1 }, `btn btn-small ${filter === 'all' ? 'active' : ''}`)}
-          ${renderLibraryLink('✅ Playable', { ...navigation, filter: 'approved', page: 1 }, `btn btn-small ${filter === 'approved' ? 'active' : ''}`)}
-          ${renderLibraryLink('🔒 Not Scheduled', { ...navigation, filter: 'blocked', page: 1 }, `btn btn-small ${filter === 'blocked' ? 'active' : ''}`)}
-          ${renderLibraryLink('⚠️ File Errors', { ...navigation, filter: 'errors', page: 1 }, `btn btn-small library-filter-errors ${filter === 'errors' ? 'active' : ''}`)}
-          ${renderLibraryLink('📺 Videos', { ...navigation, filter: 'videos', page: 1 }, `btn btn-small ${filter === 'videos' ? 'active' : ''}`)}
-          ${renderLibraryLink('🎬 Interludes', { ...navigation, filter: 'interludes', page: 1 }, `btn btn-small ${filter === 'interludes' ? 'active' : ''}`)}
+          ${renderLibraryLink('Playable', { ...navigation, filter: 'approved', page: 1 }, `btn btn-small ${filter === 'approved' ? 'active' : ''}`)}
+          ${renderLibraryLink('Not scheduled', { ...navigation, filter: 'blocked', page: 1 }, `btn btn-small ${filter === 'blocked' ? 'active' : ''}`)}
+          ${renderLibraryLink('File errors', { ...navigation, filter: 'errors', page: 1 }, `btn btn-small library-filter-errors ${filter === 'errors' ? 'active' : ''}`)}
+          ${renderLibraryLink('Videos', { ...navigation, filter: 'videos', page: 1 }, `btn btn-small ${filter === 'videos' ? 'active' : ''}`)}
+          ${renderLibraryLink('Interludes', { ...navigation, filter: 'interludes', page: 1 }, `btn btn-small ${filter === 'interludes' ? 'active' : ''}`)}
         </div>
         
         <div class="view-buttons">
@@ -251,9 +255,7 @@ export function renderLibraryContent(props: LibraryProps): string {
            ondragleave="this.classList.remove('dragover')"
            ondrop="this.classList.remove('dragover')">
         <div class="dropzone-content">
-          <span class="dropzone-icon">📂</span>
-          <span class="dropzone-text">Drop video files here</span>
-          <span class="dropzone-or">or</span>
+          <span class="dropzone-text"><strong>Add files</strong><small>Drop compatible media here or choose files.</small></span>
           <label class="btn btn-primary">
             Choose Files
             <input type="file"
@@ -275,7 +277,6 @@ export function renderLibraryContent(props: LibraryProps): string {
       </div>`
           : `<div class="dropzone dropzone-readonly">
         <div class="dropzone-content">
-          <span class="dropzone-icon">🔒</span>
           <span class="dropzone-readonly-copy"><strong>Media is mounted read-only</strong><small>Add files on the Docker host, then rescan.</small></span>
         </div>
       </div>`
@@ -285,8 +286,7 @@ export function renderLibraryContent(props: LibraryProps): string {
         ${
           libraryIsActuallyEmpty
             ? `<div class="empty-state">
-               <span class="empty-icon">📺</span>
-               <p>No media indexed yet</p>
+               <p><strong>No media indexed yet</strong></p>
                <p class="empty-hint">${mediaWritable ? 'Drop files above or add to' : 'Add files on the host mount for'} <code>${safeMediaDirectory}</code></p>
              </div>`
             : mediaContent

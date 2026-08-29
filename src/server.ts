@@ -325,6 +325,7 @@ export async function createServer(
     hardware: daemon.getHardwareService(),
     transcodingStatus,
     qualityTier: () => qualityDecision,
+    localPlaybackEnabled: !runtime.headless,
     update: updateService,
     onInterludeUpdated: async (policy) => {
       channelService.setInterludePolicy(policy)
