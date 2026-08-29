@@ -216,7 +216,12 @@ export async function createServer(
         .map((channel) => channel.id),
     {
       ttlMs: 180_000,
-      playlistWindowSegments: 10,
+      // The window is the switch latency: a player cannot buffer past the live
+      // edge it is offered, and a seamless cut cannot reach the screen until
+      // the media already buffered ahead of it has played out. Four one-second
+      // segments keeps that drain short enough for the seamless path to beat a
+      // decoder re-attach. Retained bytes stay generous for a lagging reader.
+      playlistWindowSegments: 4,
       retainedSegmentCount: 30,
     }
   )

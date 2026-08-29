@@ -7,7 +7,7 @@
   var STORAGE_CLIENT_NAME = 'toasttv.clientName.v1';
   var STORAGE_SESSION_OWNER = 'toasttv.sessionOwner.v1';
   var STORAGE_SESSION_OWNER_EPOCH = 'toasttv.sessionOwnerEpoch.v1';
-  var CLIENT_VERSION = '0.3.15';
+  var CLIENT_VERSION = '0.3.16';
   var DEFAULT_SERVER = 'http://TOWER:1993';
   var POLL_INTERVAL_MS = 30000;
   var CHANNEL_REFRESH_INTERVAL_MS = 15000;
@@ -39,14 +39,15 @@
   var IN_PLACE_TUNER_PROBE_MS = 100;
   var IN_PLACE_TUNER_PROGRESS_MS = 650;
   var IN_PLACE_TUNER_RANGE_EPSILON = 0.08;
-  /* Outgoing media already inside the TV's buffer cannot be recalled by the
-     server, so a seamless cut only becomes visible once playback drains past
-     it. Beyond this budget the guarded re-attach reaches the new channel
-     sooner than waiting ever would. */
   /* Settle time before warming a highlighted channel. Long enough that holding
      an arrow key through the lineup does not queue a retarget per row. */
   var WARM_HIGHLIGHT_DELAY_MS = 350;
-  var IN_PLACE_TUNER_SEAMLESS_MAX_DRAIN_MS = 8000;
+  /* Outgoing media already inside the TV's buffer cannot be recalled by the
+     server, so a seamless cut only becomes visible once playback drains past
+     it. Measured on LG webOS 6.5, a decoder re-attach costs about 2.8s of
+     teardown and rebuild; waiting out a deeper buffer than that is strictly
+     slower than resetting, so the cut is not worth waiting for. */
+  var IN_PLACE_TUNER_REATTACH_COST_MS = 2800;
   var IN_PLACE_TUNER_SEAMLESS_SLACK_MS = 1500;
 
   var state = {
@@ -1014,10 +1015,11 @@
     var bufferedWaitMs = outgoingEnd >= 0
       ? Math.max(0, outgoingEnd - (Number(video.currentTime) || 0)) * 1000
       : 0;
-    /* Decide up front rather than stalling on a probe that must expire: a deep
-       outgoing buffer reaches the new channel faster through the guarded
-       freeze/re-attach than through waiting for the drain. */
-    if (seamlessTransport && bufferedWaitMs > IN_PLACE_TUNER_SEAMLESS_MAX_DRAIN_MS) {
+    /* Decide up front rather than stalling on a probe that must expire, and
+       decide on cost: a seamless cut has to drain the outgoing buffer and then
+       prove progress, so it only wins while that totals less than a re-attach. */
+    if (seamlessTransport &&
+        bufferedWaitMs + IN_PLACE_TUNER_PROGRESS_MS > IN_PLACE_TUNER_REATTACH_COST_MS) {
       return false;
     }
     var probe = {
