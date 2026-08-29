@@ -1,0 +1,12 @@
+{
+  "id": "com.itsrammen.app.toasttvlab",
+  "version": "0.0.1",
+  "vendor": "ItsRammen",
+  "type": "web",
+  "main": "index.html",
+  "title": "ToastTV Lab",
+  "icon": "icon.png",
+  "largeIcon": "largeIcon.png",
+  "resolution": "1920x1080",
+  "disableBackHistoryAPI": true
+}

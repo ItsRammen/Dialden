@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>ToastTV Lab</title>
+  <style>
+    html, body { margin: 0; padding: 0; background: #000; color: #e8edf5; font-family: monospace; overflow: hidden; }
+    #stage { position: relative; width: 1920px; height: 1080px; }
+    video { position: absolute; inset: 0; width: 100%; height: 100%; background: #000; }
+    #hud {
+      position: absolute; left: 32px; top: 32px; z-index: 10;
+      background: rgba(6, 12, 23, 0.86); border: 1px solid #293750; border-radius: 6px;
+      padding: 20px 24px; font-size: 22px; line-height: 1.65; min-width: 780px;
+    }
+    #hud b { color: #6d9dff; font-weight: 600; }
+    #hud .ok { color: #39c98a; }
+    #hud .bad { color: #f06f7c; }
+    #hud .warn { color: #f2b84b; }
+    #log { position: absolute; left: 32px; bottom: 32px; z-index: 10;
+      background: rgba(6, 12, 23, 0.86); border: 1px solid #293750; border-radius: 6px;
+      padding: 16px 20px; font-size: 19px; line-height: 1.6; max-height: 360px; overflow: hidden; min-width: 780px; }
+  </style>
+</head>
+<body>
+  <div id="stage">
+    <video id="v" autoplay playsinline></video>
+    <div id="hud">booting…</div>
+    <div id="log"></div>
+  </div>
+  <script src="hls.light.min.js"></script>
+  <script src="lab.js"></script>
+</body>
+</html>
