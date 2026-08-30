@@ -33,6 +33,17 @@ import type { MetadataCandidateRecord } from '../../types'
 export const RUNTIME_MATCH_TOLERANCE_MINUTES = 3
 
 /**
+ * The window required when a tied candidate has no runtime recorded.
+ *
+ * A missing runtime is an absence of evidence, not evidence against the
+ * candidate that does fit, so it no longer abandons the comparison outright.
+ * What it does is remove the chance to rule that rival out, and the answer to
+ * that is to demand more of the leader rather than to give up: it must agree
+ * with the file almost exactly, not merely closely.
+ */
+export const RUNTIME_STRICT_TOLERANCE_MINUTES = 2
+
+/**
  * How far a rival must sit before it counts as ruled out. A director's cut
  * or a restored edition routinely differs by ten minutes, so anything closer
  * than this is treated as still plausible and blocks the match.
@@ -91,10 +102,21 @@ export function resolveByRuntime(
   const contenders = contending(candidates)
   if (contenders.length === 0) return null
 
-  // An unknown runtime cannot be ruled out, so it rules out the comparison.
-  if (contenders.some((candidate) => !isUsableRuntime(candidate.runtimeMinutes))) {
-    return null
-  }
+  /* A rival with no runtime cannot be ruled out, so the leader is held to the
+     stricter window instead. Abandoning here was too blunt: a single record
+     TMDB happens to hold no length for would veto a decision the rest of the
+     field settles clearly. */
+  const unknownRival = contenders.some(
+    (candidate) => !isUsableRuntime(candidate.runtimeMinutes)
+  )
+  const tolerance = unknownRival
+    ? RUNTIME_STRICT_TOLERANCE_MINUTES
+    : RUNTIME_MATCH_TOLERANCE_MINUTES
+  const measurable = contenders.filter((candidate) =>
+    isUsableRuntime(candidate.runtimeMinutes)
+  )
+  // With nothing measurable there is no evidence at all, only a preference.
+  if (measurable.length === 0) return null
 
   /* A single contender was never a tie: ordinary matching refused it for not
      being an exact title, so the runtime is corroborating a near miss rather
@@ -105,6 +127,7 @@ export function resolveByRuntime(
     const only = contenders[0]
     if (!only) return null
     if (only.confidence < LONE_CANDIDATE_MIN_CONFIDENCE) return null
+    if (!isUsableRuntime(only.runtimeMinutes)) return null
     // Nothing else may be near enough to have been the answer instead.
     const runnerUp = Math.max(
       0,
@@ -126,14 +149,12 @@ export function resolveByRuntime(
       : null
   }
 
-  const measured = contenders.map((candidate) => ({
+  const measured = measurable.map((candidate) => ({
     candidate,
     deltaMinutes: Math.abs((candidate.runtimeMinutes as number) - fileRuntimeMinutes),
   }))
 
-  const inside = measured.filter(
-    (entry) => entry.deltaMinutes <= RUNTIME_MATCH_TOLERANCE_MINUTES
-  )
+  const inside = measured.filter((entry) => entry.deltaMinutes <= tolerance)
   if (inside.length !== 1) return null
 
   const winner = inside[0]

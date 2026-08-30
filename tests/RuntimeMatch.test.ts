@@ -40,10 +40,16 @@ describe('breaking a tie with the file runtime', () => {
     expect(resolveByRuntime([candidate('1', 108), candidate('2', 33)], 0)).toBeNull()
   })
 
-  test('refuses when any tied candidate has no runtime', () => {
-    // An unknown rival cannot be ruled out, so it rules out the comparison.
+  test('holds the leader to a tighter window when a rival has no runtime', () => {
+    /* An unknown rival cannot be ruled out, so the leader must agree with the
+       file almost exactly rather than merely closely. One minute passes;
+       three, which the ordinary window would accept, does not. */
     expect(
       resolveByRuntime([candidate('1', 108), candidate('2', undefined)], 109)
+        ?.candidate.externalId
+    ).toBe('1')
+    expect(
+      resolveByRuntime([candidate('1', 106), candidate('2', undefined)], 109)
     ).toBeNull()
   })
 
@@ -236,9 +242,12 @@ describe('only genuine ties are weighed', () => {
     expect(resolved).toBeNull()
   })
 
-  test('a true tie with an unknown runtime is still refused', () => {
-    /* Collection 379: three records all titled Absolution, all 2024, one
-       with no runtime at all. That is genuinely undecidable here. */
+  test('an unrecorded runtime does not veto an exact match', () => {
+    /* Collection 379: three records titled Absolution, all 2024. One has no
+       runtime in TMDB at all, but the leader agrees with the file to the
+       minute and the only measurable rival runs three minutes. A missing
+       figure is an absence of evidence, not evidence against the record
+       that fits. */
     const resolved = resolveByRuntime(
       [
         at('974453', 1, 112, 2024),
@@ -250,7 +259,22 @@ describe('only genuine ties are weighed', () => {
       2024
     )
 
-    expect(resolved).toBeNull()
+    expect(resolved?.candidate.externalId).toBe('974453')
+    expect(resolved?.deltaMinutes).toBe(0)
+  })
+
+  test('but it does hold the leader to a tighter window', () => {
+    // Three minutes is inside the ordinary window and outside the strict
+    // one. With a rival that cannot be ruled out, ordinary is not enough.
+    expect(resolveByRuntime([at('a', 1, 109), at('b', 1)], 112, 2010)).toBeNull()
+    expect(
+      resolveByRuntime([at('a', 1, 111), at('b', 1)], 112, 2010)
+        ?.candidate.externalId
+    ).toBe('a')
+  })
+
+  test('a field with no runtimes at all decides nothing', () => {
+    expect(resolveByRuntime([at('a', 1), at('b', 1)], 112, 2010)).toBeNull()
   })
 
   test('a lone candidate needs clear air behind it', () => {

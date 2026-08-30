@@ -189,11 +189,32 @@ describe('resolving a tie from the file on disk', () => {
     expect(await repository.listReviewDecisions()).toHaveLength(0)
   })
 
-  test('leaves the collection for review when a runtime is unknown', async () => {
+  test('an unrecorded rival runtime does not veto a near-exact match', async () => {
+    // 6514 seconds is 108.6 minutes; Burton's film is listed at 108.
     const collection = await seed(6514)
     const service = new MetadataEnrichmentService(
       repository,
       providerWithRuntimes({ '12155': 108, '135361': undefined, '423971': 52 }),
+      runtimeConfig,
+      null,
+      undefined,
+      repository
+    )
+
+    await service.runPending()
+    const updated = await repository.getCollectionById(collection.id)
+
+    expect(updated?.metadataStatus).toBe('matched')
+    expect(updated?.metadataExternalId).toBe('12155')
+  })
+
+  test('but it does leave one the leader only loosely fits', async () => {
+    /* Five minutes is inside the ordinary window and outside the strict one.
+       With a rival that cannot be ruled out, ordinary is not enough. */
+    const collection = await seed(6514)
+    const service = new MetadataEnrichmentService(
+      repository,
+      providerWithRuntimes({ '12155': 104, '135361': undefined, '423971': 52 }),
       runtimeConfig,
       null,
       undefined,
