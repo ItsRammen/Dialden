@@ -954,7 +954,7 @@ export class MetadataEnrichmentService {
       return false
     }
 
-    const resolved = resolveByRuntime(candidates, fileRuntime)
+    const resolved = resolveByRuntime(candidates, fileRuntime, collection.year)
     if (!resolved) return false
 
     try {

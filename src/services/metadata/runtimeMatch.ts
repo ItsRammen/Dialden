@@ -6,17 +6,21 @@
  * locally and is not a catalogue opinion, which makes it the one piece of
  * evidence that can separate them.
  *
- * The rule is deliberately narrow, because it is the only place automation
- * picks between titles that a person could not:
+ * Two situations reach here, and both are narrow, because this is the only
+ * place automation settles a title that ordinary matching would not.
  *
- *  - The file's own length must be known.
- *  - Every tied candidate must have a runtime. One unknown and the comparison
- *    is abandoned, because an unknown rival cannot be ruled out.
- *  - Exactly one candidate may be inside the tight window.
- *  - Every other candidate must be clearly outside it.
+ * Several contenders -- it chooses between them. Exactly one may fall inside
+ * the tight window, every other must be clearly outside it, and all of them
+ * must have a runtime, since an unknown rival cannot be ruled out.
  *
- * Anything less unanimous leaves the collection for review. Pure, so the
- * thresholds are testable without a database or a provider.
+ * One contender -- it confirms a near miss. Ordinary matching refused the
+ * candidate for not being an exact title, so there is no rival whose
+ * wrongness is doing any of the work, and the test is stricter: a decent
+ * title score, the same year, and a runtime inside the window.
+ *
+ * In both cases the file's own length must be known, and anything short of
+ * unanimous leaves the collection for review. Pure, so the thresholds are
+ * testable without a database or a provider.
  */
 import type { MetadataCandidateRecord } from '../../types'
 
@@ -35,6 +39,20 @@ export const RUNTIME_MATCH_TOLERANCE_MINUTES = 3
  */
 export const RUNTIME_RIVAL_MARGIN_MINUTES = 10
 
+/**
+ * How far below the leader a candidate can score and still be worth ruling
+ * out. Anything further back is noise -- a title that happens to share a
+ * word -- and demanding it be checked would block every real decision.
+ */
+export const CONTENDER_SCORE_MARGIN = 0.25
+
+/**
+ * How well a lone candidate must match by title before its runtime is allowed
+ * to confirm it. Ordinary matching has already refused it for not being an
+ * exact title, so this guards against a weak name plus a coincidental length.
+ */
+export const LONE_CANDIDATE_MIN_CONFIDENCE = 0.7
+
 export interface RuntimeResolution {
   readonly candidate: MetadataCandidateRecord
   /** Absolute difference in minutes, for the audit trail. */
@@ -47,7 +65,9 @@ export interface RuntimeResolution {
  */
 export function resolveByRuntime(
   candidates: readonly MetadataCandidateRecord[],
-  fileRuntimeMinutes: number | undefined
+  fileRuntimeMinutes: number | undefined,
+  /** Required for a lone candidate, which must agree on the year as well. */
+  collectionYear?: number | null
 ): RuntimeResolution | null {
   if (
     fileRuntimeMinutes === undefined ||
@@ -57,16 +77,37 @@ export function resolveByRuntime(
     return null
   }
 
-  const tied = topScoring(candidates)
-  // One candidate is not a tie; ordinary matching already had its say.
-  if (tied.length < 2) return null
+  const contenders = contending(candidates)
+  if (contenders.length === 0) return null
 
   // An unknown runtime cannot be ruled out, so it rules out the comparison.
-  if (tied.some((candidate) => !isUsableRuntime(candidate.runtimeMinutes))) {
+  if (contenders.some((candidate) => !isUsableRuntime(candidate.runtimeMinutes))) {
     return null
   }
 
-  const measured = tied.map((candidate) => ({
+  /* A single contender was never a tie: ordinary matching refused it for not
+     being an exact title, so the runtime is corroborating a near miss rather
+     than choosing between rivals. That deserves the stricter test -- a decent
+     title score and the same year -- because there is no competitor whose
+     wrongness is doing any of the work. */
+  if (contenders.length === 1) {
+    const only = contenders[0]
+    if (!only) return null
+    if (only.confidence < LONE_CANDIDATE_MIN_CONFIDENCE) return null
+    if (
+      collectionYear === undefined ||
+      collectionYear === null ||
+      only.year !== collectionYear
+    ) {
+      return null
+    }
+    const delta = Math.abs((only.runtimeMinutes as number) - fileRuntimeMinutes)
+    return delta <= RUNTIME_MATCH_TOLERANCE_MINUTES
+      ? { candidate: only, deltaMinutes: delta }
+      : null
+  }
+
+  const measured = contenders.map((candidate) => ({
     candidate,
     deltaMinutes: Math.abs((candidate.runtimeMinutes as number) - fileRuntimeMinutes),
   }))
@@ -89,14 +130,18 @@ export function resolveByRuntime(
   return { candidate: winner.candidate, deltaMinutes: winner.deltaMinutes }
 }
 
-/** Only the candidates ordinary matching could not separate are in play. */
-function topScoring(
+/**
+ * The candidates close enough to the leader to be worth weighing. A title
+ * that merely shares a word scores far back and is excluded, so it can
+ * neither win on a coincidental runtime nor block a decision by lacking one.
+ */
+function contending(
   candidates: readonly MetadataCandidateRecord[]
 ): readonly MetadataCandidateRecord[] {
   if (candidates.length === 0) return []
   const best = Math.max(...candidates.map((candidate) => candidate.confidence))
   return candidates.filter(
-    (candidate) => Math.abs(candidate.confidence - best) < 1e-9
+    (candidate) => candidate.confidence >= best - CONTENDER_SCORE_MARGIN
   )
 }
 

@@ -66,9 +66,11 @@ describe('breaking a tie with the file runtime', () => {
     ).toBeNull()
   })
 
-  test('leaves a single candidate to ordinary matching', () => {
-    // Not a tie; the normal rules already decided what to do with it.
+  test('will not confirm a lone candidate without a year to check', () => {
+    // A near miss on the title needs the year to agree before its runtime
+    // is allowed to settle anything.
     expect(resolveByRuntime([candidate('1', 108)], 109)).toBeNull()
+    expect(resolveByRuntime([candidate('1', 108)], 109, null)).toBeNull()
   })
 
   test('only weighs the candidates that actually tie', () => {
@@ -114,5 +116,75 @@ describe('the comparable length of a collection', () => {
     expect(collectionRuntimeMinutes([0, null, undefined, 6514])).toBe(109)
     expect(collectionRuntimeMinutes([0, null, undefined])).toBeUndefined()
     expect(collectionRuntimeMinutes([])).toBeUndefined()
+  })
+})
+
+describe('confirming a lone near-miss with the runtime', () => {
+  /** The real case: "A Tale of Autumn" against "An Autumn Tale". */
+  const autumn = (
+    confidence = 0.7857,
+    runtimeMinutes = 112,
+    year = 1998
+  ): MetadataCandidateRecord => ({
+    provider: 'tmdb',
+    externalId: '10239',
+    mediaType: 'movie',
+    title: 'An Autumn Tale',
+    year,
+    confidence,
+    runtimeMinutes,
+  })
+
+  const noise: MetadataCandidateRecord = {
+    provider: 'tmdb',
+    externalId: '17031',
+    mediaType: 'movie',
+    title: 'Dragonlance: Dragons of Autumn Twilight',
+    year: 2008,
+    confidence: 0.1173,
+    runtimeMinutes: 91,
+  }
+
+  test('confirms a reordered title when the year and length agree', () => {
+    const resolved = resolveByRuntime([autumn(), noise], 111, 1998)
+
+    expect(resolved?.candidate.externalId).toBe('10239')
+    expect(resolved?.deltaMinutes).toBe(1)
+  })
+
+  test('a far-back candidate neither blocks nor wins', () => {
+    // Dragonlance shares one word. It must not be treated as a rival to
+    // rule out, nor be able to win on a runtime of its own.
+    const resolved = resolveByRuntime([autumn(), noise], 111, 1998)
+
+    expect(resolved?.candidate.externalId).toBe('10239')
+    expect(resolveByRuntime([noise], 91, 2008)).toBeNull()
+  })
+
+  test('refuses when the year disagrees', () => {
+    /* A Real Young Girl: exact title, runtime would agree, but the year is
+       twenty-five years out. That is indistinguishable from a remake, so a
+       lone candidate never gets the benefit of the doubt. */
+    expect(resolveByRuntime([autumn(0.9, 112, 2001)], 111, 1998)).toBeNull()
+  })
+
+  test('refuses when the title is only a weak resemblance', () => {
+    expect(resolveByRuntime([autumn(0.55)], 111, 1998)).toBeNull()
+  })
+
+  test('refuses when the length does not actually agree', () => {
+    expect(resolveByRuntime([autumn(0.7857, 120)], 111, 1998)).toBeNull()
+  })
+
+  test('refuses when the lone candidate has no runtime', () => {
+    expect(
+      resolveByRuntime([{ ...autumn(), runtimeMinutes: undefined }], 111, 1998)
+    ).toBeNull()
+  })
+
+  test('a genuine rival puts it back to the stricter tie rules', () => {
+    // Two contenders both near the file length: no decision.
+    const rival: MetadataCandidateRecord = { ...autumn(), externalId: '99', runtimeMinutes: 110 }
+    expect(resolveByRuntime([autumn(), rival], 111, 1998)).toBeNull()
   })
 })
