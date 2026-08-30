@@ -17,6 +17,7 @@ import {
 import type {
   LibrarySummary,
   MediaCollection,
+  MetadataCandidateRecord,
   MediaItem,
   PolicyDecision,
 } from '../types'
@@ -412,6 +413,7 @@ function collectionDetailModel(
           episodes,
         }),
     metadataCandidates: collection.metadataCandidates.map((candidate) => ({
+      ...scoreLabelling(candidate, collection.metadataCandidates),
       externalId: candidate.externalId,
       title: candidate.title,
       ...(candidate.year === undefined ? {} : { year: candidate.year }),
@@ -670,4 +672,28 @@ function safeReturnPath(value: string): string {
 function truncateOverview(value: string): string {
   const clean = value.replace(/\s+/gu, ' ').trim()
   return clean.length <= 220 ? clean : `${clean.slice(0, 219)}\u2026`
+}
+
+/**
+ * Describes the score honestly, and says when it cannot separate candidates.
+ *
+ * A perfect score means the title and year agree exactly. Three records can
+ * do that at once, and presenting each as "100% match confidence" reads as a
+ * promise the number was never making.
+ */
+function scoreLabelling(
+  candidate: MetadataCandidateRecord,
+  all: readonly MetadataCandidateRecord[]
+): { scoreLabel: string; tiedWith?: number } {
+  const percent = Math.round(candidate.confidence * 100)
+  const label =
+    percent >= 100
+      ? 'Title and year match exactly'
+      : `${percent}% title and year match`
+  const ties = all.filter(
+    (other) =>
+      other.externalId !== candidate.externalId &&
+      Math.round(other.confidence * 100) === percent
+  ).length
+  return ties > 0 ? { scoreLabel: label, tiedWith: ties } : { scoreLabel: label }
 }

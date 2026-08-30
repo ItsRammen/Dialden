@@ -104,6 +104,14 @@ export interface CollectionMetadataCandidateViewModel {
   readonly posterUrl?: string
   readonly referenceUrl?: string
   readonly runtimeLabel?: string
+  /**
+   * How well the title and year agree -- not a probability that this is the
+   * right title. Several records can score identically, which is the whole
+   * reason this list needs a person or the assistant.
+   */
+  readonly scoreLabel: string
+  /** Set when this candidate cannot be separated from others by score alone. */
+  readonly tiedWith?: number
   readonly confirmAction: string
 }
 
@@ -523,7 +531,7 @@ export function renderCollectionDetail(
         candidates.length > 0 || manualMatchAction
           ? `<section class="collection-match-review" aria-labelledby="collection-match-title">
               <h3 id="collection-match-title">Choose the metadata match</h3>
-              <p>Confirm only the title that represents this collection. The choice is remembered across rescans.</p>
+              <p>Confirm only the title that represents this collection. The choice is remembered across rescans. The percentage is how closely the title and year agree, not a judgement that a record is the right one — several can agree equally well.</p>
               ${candidates.length > 0 ? `<ul>${candidates
                 .map((candidate) => {
                   const action = safeInternalHref(candidate.confirmAction)
@@ -540,7 +548,11 @@ export function renderCollectionDetail(
                     }
                     <div class="collection-candidate-body">
                       <strong>${escapeHtml(candidate.title)}</strong>${candidate.year ? ` <span>${year(candidate.year)}</span>` : ''}
-                      <small>${Math.round(candidate.confidence * 100)}% match confidence${
+                      <small>${escapeHtml(candidate.scoreLabel)}${
+                        candidate.tiedWith
+                          ? ` · <span class="collection-candidate-tie">ties with ${candidate.tiedWith} other${candidate.tiedWith === 1 ? '' : 's'}</span>`
+                          : ''
+                      }${
                         candidate.runtimeLabel
                           ? ` · ${escapeHtml(candidate.runtimeLabel)}`
                           : ''
