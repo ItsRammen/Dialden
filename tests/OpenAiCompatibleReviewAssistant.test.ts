@@ -159,6 +159,63 @@ describe('OpenAiCompatibleReviewAssistant', () => {
     })
   })
 
+  describe('providers that cannot do structured output', () => {
+    /** Refuses a strict schema once, then answers a plain JSON request. */
+    function pickyFetch(content: string) {
+      const bodies: any[] = []
+      const impl: FetchLike = async (_url, init) => {
+        const body = JSON.parse(init.body)
+        bodies.push(body)
+        const strict = body.response_format?.type === 'json_schema'
+        return {
+          ok: !strict,
+          status: strict ? 400 : 200,
+          headers: { get: () => null },
+          text: async () =>
+            strict
+              ? 'response_format json_schema is not supported'
+              : JSON.stringify({ choices: [{ message: { content } }] }),
+        }
+      }
+      return { impl, bodies }
+    }
+
+    test('retries without the schema rather than failing the run', async () => {
+      // Free tiers commonly reject strict schemas. Validation catches anything
+      // malformed either way, so degrading costs nothing.
+      const { impl, bodies } = pickyFetch('{"externalId":"1002","confidence":0.9,"reason":"ok"}')
+      const outcome = await new OpenAiCompatibleReviewAssistant(config, impl).disambiguate(request)
+
+      expect(outcome.status).toBe('accepted')
+      expect(bodies).toHaveLength(2)
+      expect(bodies[0].response_format.type).toBe('json_schema')
+      expect(bodies[1].response_format.type).toBe('json_object')
+    })
+
+    test('stops asking for a schema once refused', async () => {
+      const { impl, bodies } = pickyFetch('{"externalId":null,"confidence":0.1,"reason":""}')
+      const assistant = new OpenAiCompatibleReviewAssistant(config, impl)
+
+      await assistant.disambiguate(request)
+      await assistant.disambiguate(request)
+
+      // Three calls, not four: the second request never retries the schema.
+      expect(bodies).toHaveLength(3)
+    })
+
+    test('still surfaces a real 400 that is not about schemas', async () => {
+      // The fallback must not swallow genuine bad requests; it retries once
+      // and then reports whatever the second attempt says.
+      const { impl } = fakeFetch('', { status: 400 })
+      try {
+        await new OpenAiCompatibleReviewAssistant(config, impl).disambiguate(request)
+        throw new Error('should have thrown')
+      } catch (error) {
+        expect((error as MetadataProviderError).code).toBe('upstream')
+      }
+    })
+  })
+
   describe('failures surface the way TMDB failures do', () => {
     const cases: [number, string, boolean][] = [
       [401, 'unauthorized', false],

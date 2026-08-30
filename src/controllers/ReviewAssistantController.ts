@@ -48,7 +48,12 @@ export function createReviewAssistantController(
 
   controller.post('/api/admin/v1/review-assistant/test', async (c) => {
     const config = await loadPersistedReviewAssistantConfig(deps.store)
-    const assistant = new OpenAiCompatibleReviewAssistant(config)
+    /* Test what is stored even when the assistant has not been switched on:
+       checking credentials before enabling them is the normal order. */
+    const assistant = new OpenAiCompatibleReviewAssistant({
+      ...config,
+      enabled: Boolean(config.apiKey && config.baseUrl),
+    })
     if (!assistant.configured) {
       return c.json({ ok: false, error: 'Review assistant is not configured' }, 400)
     }

@@ -72,6 +72,8 @@ const SUITABILITY_SCHEMA = {
 
 export class OpenAiCompatibleReviewAssistant implements ReviewAssistant {
   readonly id = PROVIDER_ID
+  /** Cleared for the process once a provider refuses a strict schema. */
+  private schemaSupported = true
 
   constructor(
     private readonly config: ReviewAssistantRuntimeConfig,
@@ -142,10 +144,33 @@ export class OpenAiCompatibleReviewAssistant implements ReviewAssistant {
     return parseSuitability(content, request)
   }
 
+  /**
+   * Many hosted models, free tiers especially, reject a strict JSON schema.
+   * Ask for one, and on a rejection retry once asking only for JSON. The
+   * validation boundary does not care which came back: it rejects anything
+   * that fails the same checks either way.
+   */
   private async complete(
     messages: readonly { role: string; content: string }[],
     schema: { name: string; schema: unknown } | null,
     signal?: AbortSignal
+  ): Promise<string> {
+    try {
+      return await this.request(messages, schema, signal)
+    } catch (error) {
+      if (schema && isSchemaRejection(error)) {
+        this.schemaSupported = false
+        return this.request(messages, null, signal, true)
+      }
+      throw error
+    }
+  }
+
+  private async request(
+    messages: readonly { role: string; content: string }[],
+    schema: { name: string; schema: unknown } | null,
+    signal?: AbortSignal,
+    forceJsonObject = false
   ): Promise<string> {
     if (!this.configured) {
       throw this.error('Review assistant is not configured', 'not_configured')
@@ -172,14 +197,16 @@ export class OpenAiCompatibleReviewAssistant implements ReviewAssistant {
             model: this.config.model,
             temperature: 0,
             messages,
-            ...(schema
+            ...(schema && this.schemaSupported
               ? {
                   response_format: {
                     type: 'json_schema',
                     json_schema: { name: schema.name, strict: true, schema: schema.schema },
                   },
                 }
-              : {}),
+              : forceJsonObject || schema
+                ? { response_format: { type: 'json_object' } }
+                : {}),
           }),
           signal: controller.signal,
         }
@@ -310,6 +337,15 @@ function extractContent(body: string, onInvalid: () => MetadataProviderError): s
     if (error instanceof MetadataProviderError) throw error
     throw onInvalid()
   }
+}
+
+/**
+ * A provider that cannot do structured output answers 400 or 422 rather than
+ * advertising the limitation, so the status is the signal.
+ */
+function isSchemaRejection(error: unknown): boolean {
+  if (!(error instanceof MetadataProviderError)) return false
+  return error.status === 400 || error.status === 422
 }
 
 function isAbort(error: unknown): boolean {
