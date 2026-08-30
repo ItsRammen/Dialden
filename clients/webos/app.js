@@ -1041,6 +1041,8 @@
     elements.playerScreen.classList.add('has-video');
     clearTuningFreezeFrame();
     renderProgramInfo();
+    // The dock waited for this; it now has a programme to announce.
+    showChrome();
     updateChannelOsdProgram(state.currentNow && state.currentNow.program
       ? state.currentNow.program.title : 'Live');
     scheduleChannelOsdHide();
@@ -3046,7 +3048,13 @@
     if (elements.tuningChannelName && currentChannel()) elements.tuningChannelName.textContent = currentChannel().name;
     if (elements.tuningMessage) elements.tuningMessage.textContent = message || 'Preparing the live broadcast…';
     setPlayerStatus(message || 'Tuning…');
-    showChrome();
+    /* With no picture yet the tuning card is the whole screen, and it already
+       names the channel. Showing the dock underneath it stacks a second
+       announcement over the first, filled with placeholders that visibly
+       change to the real programme the moment a frame arrives. Hold it back
+       so the commit can reveal it once, with the truth already in it. */
+    if (state.hasCommittedVideo) showChrome();
+    else hideChrome();
   }
 
   function stabilizeTuning() {
@@ -3129,6 +3137,8 @@
       elements.playerScreen.classList.add('has-video');
       clearTuningFreezeFrame();
       renderProgramInfo();
+      // The dock waited for this; it now has a programme to announce.
+      showChrome();
       updateChannelOsdProgram(state.currentNow && state.currentNow.program ? state.currentNow.program.title : 'Live');
       scheduleChannelOsdHide();
       writeStorage(STORAGE_CHANNEL, currentChannel().id);

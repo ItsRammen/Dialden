@@ -1400,3 +1400,48 @@ describe('the channel rail scrolls along its own axis', () => {
     expect(animate).toContain('if (isRail) container.scrollLeft = position')
   })
 })
+
+describe('the first tune shows one announcement, not two', () => {
+  const script = readFileSync(
+    join(import.meta.dir, '..', 'clients', 'webos', 'app.js'),
+    'utf8'
+  )
+
+  test('the dock stays back while the tuning card is up', () => {
+    /* With no picture yet the tuning card fills the screen and already names
+       the channel. Showing the dock underneath stacked a second announcement
+       over the first, carrying placeholders that visibly changed to the real
+       programme the moment a frame arrived. */
+    const begin = functionSource(script, 'beginTuning', 'stabilizeTuning')
+
+    expect(begin).toContain('if (state.hasCommittedVideo) showChrome()')
+    expect(begin).toContain('else hideChrome()')
+  })
+
+  test('a channel change still gets its dock immediately', () => {
+    // Zapping has a picture already, so there is no card to compete with.
+    const begin = functionSource(script, 'beginTuning', 'stabilizeTuning')
+
+    expect(begin).toContain('state.hasCommittedVideo')
+    expect(begin).not.toMatch(/^\s*showChrome\(\);\s*$/m)
+  })
+
+  test('every path that commits video reveals the dock again', () => {
+    /* Holding the dock back is only safe if each path that actually commits
+       video shows it again, or a first launch ends with no chrome at all
+       until a key is pressed.
+
+       The commit ceremony is the signature, not renderProgramInfo on its
+       own: that also runs on schedule refreshes and rollbacks, where forcing
+       the dock open would pop it every time a programme changed. */
+    const commits = script.split('clearTuningFreezeFrame();')
+    const ceremonies = commits
+      .slice(1)
+      .filter((slice) => slice.slice(0, 120).includes('renderProgramInfo();'))
+
+    expect(ceremonies.length).toBe(2)
+    for (const slice of ceremonies) {
+      expect(slice.slice(0, 220)).toContain('showChrome();')
+    }
+  })
+})
