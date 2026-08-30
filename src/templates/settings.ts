@@ -343,7 +343,6 @@ export function renderSettings(props: SettingsProps): string {
     
     <link rel="stylesheet" href="/css/settings.css">
     <script>
-      ${getSettingsScript()}
       ${getUpdateScript()}
     </script>
   `,
@@ -532,67 +531,6 @@ function renderLogoUpload(hasLogo: boolean): string {
   `
 }
 
-function renderPositionGrid(currentPosition: number): string {
-  const positions = [
-    { pos: 0, title: 'Top-Left', icon: '↖' },
-    { pos: 2, title: 'Top-Right', icon: '↗' },
-    { pos: 6, title: 'Bottom-Left', icon: '↙' },
-    { pos: 8, title: 'Bottom-Right', icon: '↘' },
-  ]
-
-  return `
-    <div class="form-group">
-      <label>Position</label>
-      <div class="position-grid corners-only">
-        ${positions
-          .map(
-            (p) => `
-          <button type="button" 
-                  class="position-btn ${currentPosition === p.pos ? 'active' : ''}" 
-                  data-position="${p.pos}" 
-                  title="${p.title}"
-                  onclick="selectPosition(this, ${p.pos})">${p.icon}</button>
-        `
-          )
-          .join('')}
-      </div>
-      <input type="hidden" id="logoPosition" name="logoPosition" value="${currentPosition}">
-    </div>
-  `
-}
-
-function renderOffsetControls(x: number, y: number): string {
-  return `
-    <div class="form-row" style="grid-template-columns: 1fr 1fr;">
-      <div class="form-group">
-        <label for="logoX">Offset X (px)</label>
-        <input type="number" id="logoX" name="logoX" value="${x}" oninput="updateLogoPreview()" style="width: 100%;">
-      </div>
-      <div class="form-group">
-        <label for="logoY">Offset Y (px)</label>
-        <input type="number" id="logoY" name="logoY" value="${y}" oninput="updateLogoPreview()" style="width: 100%;">
-      </div>
-    </div>
-  `
-}
-
-function renderOpacitySlider(opacity: number): string {
-  const percent = Math.round((opacity / 255) * 100)
-
-  return `
-    <div class="form-group">
-      <label for="logoOpacity">Opacity: <span id="opacityValue">${percent}%</span></label>
-      <input type="range" 
-             id="logoOpacity" 
-             name="logoOpacity" 
-             value="${opacity}" 
-             min="0" 
-             max="255" 
-             oninput="updateOpacityDisplay(this.value)">
-    </div>
-  `
-}
-
 function renderLogoPreview(
   hasLogo: boolean,
   _opacity: number,
@@ -612,44 +550,6 @@ function renderLogoPreview(
         }
       </div>
     </div>
-  `
-}
-
-function getSettingsScript(): string {
-  // Note: These JS functions are necessary for live preview updates
-  // The form itself is submitted via htmx with standard form encoding
-  return `
-    // Position selection - updates hidden input and preview
-    function selectPosition(btn, pos) {
-      document.querySelectorAll('.position-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      document.getElementById('logoPosition').value = pos;
-      updateLogoPreview();
-    }
-    
-    // Opacity display and preview
-    function updateOpacityDisplay(value) {
-      const percent = Math.round((value / 255) * 100);
-      document.getElementById('opacityValue').textContent = percent + '%';
-      updateLogoPreview();
-    }
-    
-    // Update logo preview position and opacity
-    function updateLogoPreview() {
-      const logo = document.getElementById('screenLogo');
-      if (!logo) return;
-      
-      const opacity = document.getElementById('logoOpacity').value / 255;
-      const position = document.getElementById('logoPosition').value;
-      const x = document.getElementById('logoX').value + 'px';
-      const y = document.getElementById('logoY').value + 'px';
-      
-      logo.style.opacity = opacity;
-      logo.style.top = (position === '0' || position === '2') ? y : 'auto';
-      logo.style.bottom = (position === '6' || position === '8') ? y : 'auto';
-      logo.style.left = (position === '0' || position === '6') ? x : 'auto';
-      logo.style.right = (position === '2' || position === '8') ? x : 'auto';
-    }
   `
 }
 

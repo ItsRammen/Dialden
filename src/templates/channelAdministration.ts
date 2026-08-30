@@ -358,14 +358,6 @@ function brandingMode(
   return `<label><input type="radio" name="brandingMode" value="${value}" ${selected === value ? 'checked' : ''}><span><strong>${title}</strong><small>${description}</small></span></label>`
 }
 
-function brandingPosition(
-  value: 0 | 2 | 6 | 8,
-  label: string,
-  selected: number
-): string {
-  return `<option value="${value}" ${selected === value ? 'selected' : ''}>${label}</option>`
-}
-
 type NetworkProfile = NonNullable<
   StationAutomationCatalog['networkProfiles']
 >[number]
