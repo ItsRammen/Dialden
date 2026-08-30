@@ -15,7 +15,7 @@ describe('LG webOS package assets', () => {
     const manifest = JSON.parse(readFileSync(join(root, 'appinfo.json'), 'utf8'))
     expect(manifest).toMatchObject({
       id: 'com.itsrammen.app.toasttv',
-      version: '0.6.2',
+      version: '0.6.3',
       type: 'web',
       main: 'index.html',
       title: 'ToastTV',
@@ -73,18 +73,43 @@ describe('LG webOS package assets', () => {
     )
   })
 
-  test('shows no scrollbars anywhere in the guide', () => {
-    /* These were once styled to be visible, as a reading aid. On the set they
-       read as browser furniture; position is carried by the lit current row
-       and the focus ring instead. Every scrolling surface in the overlay is
-       covered, not just the programme list. */
+  test('replaces the browser scrollbar rather than showing it', () => {
+    /* The previous version of this test used a regular expression whose
+       escapes were lost when it was generated, so it searched for a literal
+       letter and could never fail. Plain strings cannot rot that way. */
     const styles = readFileSync(join(root, 'styles.css'), 'utf8')
 
-    expect(styles).not.toMatch(/::-webkit-scrollbar { width: (?!0)d/)
-    expect(styles).not.toMatch(/::-webkit-scrollbar-button { height: (?!0)d/)
-    for (const surface of ['.guide-list', '.catalog-rail', '.catalog-days']) {
-      expect(styles).toContain(`${surface}::-webkit-scrollbar`)
-    }
+    // A catch-all, so a surface that becomes scrollable later cannot show
+    // Chromium's own bar unnoticed.
+    expect(styles).toContain('*::-webkit-scrollbar { width: 6px; height: 6px; }')
+    expect(styles).toContain('*::-webkit-scrollbar-thumb { background: var(--line-hot)')
+    // Stepper arrows cannot be clicked with a remote and shorten the track.
+    expect(styles).toContain('*::-webkit-scrollbar-button { width: 0; height: 0; display: none; }')
+  })
+
+  test('lights the thumb on the lists that are actually read', () => {
+    const styles = readFileSync(join(root, 'styles.css'), 'utf8')
+
+    expect(styles).toContain('.channel-grid::-webkit-scrollbar-thumb,')
+    expect(styles).toContain('.guide-list::-webkit-scrollbar-thumb { background: var(--orange-dark); }')
+  })
+
+  test('hides the bar under the horizontal strips', () => {
+    // Stepped through with the remote, always showing the focused chip, so
+    // a bar reports nothing worth the pixels.
+    const styles = readFileSync(join(root, 'styles.css'), 'utf8')
+
+    expect(styles).toContain('.catalog-days::-webkit-scrollbar { width: 0; height: 0; }')
+  })
+
+  test('fits more of the lineup on screen', () => {
+    const styles = readFileSync(join(root, 'styles.css'), 'utf8')
+
+    // The bar took 108px of a 1080 line screen before a channel appeared.
+    expect(styles).toContain('height: 76px;')
+    expect(styles).toContain('.channel-browser { position: absolute; top: 76px;')
+    expect(styles).toContain('.channel-card__topline { font-size: 17px')
+    expect(styles).not.toContain('.channel-card__topline { font-size: 24px')
   })
 
   test('keeps the guide and dock legible without filling the screen', () => {

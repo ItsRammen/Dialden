@@ -102,7 +102,7 @@ button { font-family: var(--body); }
 
 .section-heading {
   font-family: var(--display);
-  font-size: 30px;
+  font-size: 21px;
   font-weight: 600;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -275,9 +275,9 @@ body::after {
 .boot-actions .button { margin: 0 8px; }
 
 .brand { display: flex; align-items: center; }
-.brand__logo { width: 60px; height: 60px; margin-right: 16px; object-fit: contain; }
-.brand__name { font-family: var(--display); font-size: 34px; letter-spacing: 0.16em; text-transform: uppercase; }
-.brand__status { font-family: var(--mono); font-size: 16px; letter-spacing: 0.18em; color: var(--muted); }
+.brand__logo { width: 42px; height: 42px; margin-right: 12px; object-fit: contain; }
+.brand__name { font-family: var(--display); font-size: 24px; letter-spacing: 0.16em; text-transform: uppercase; }
+.brand__status { font-family: var(--mono); font-size: 12px; letter-spacing: 0.18em; color: var(--muted); }
 
 .signal-dots { display: inline-block; }
 .tuning-spinner {
@@ -319,68 +319,68 @@ body::after {
   top: 0;
   right: 0;
   left: 0;
-  height: 108px;
-  padding: 0 64px;
+  height: 76px;
+  padding: 0 44px;
   display: flex;
   align-items: center;
-  border-bottom: 3px solid var(--line);
+  border-bottom: 2px solid var(--line);
 }
 .topbar__right { margin-left: auto; display: flex; align-items: center; }
 .topbar__right .button { margin-left: 16px; }
-.clock { font-family: var(--mono); font-size: 30px; letter-spacing: 0.1em; }
+.clock { font-family: var(--mono); font-size: 21px; letter-spacing: 0.1em; }
 
-.connection-state { display: flex; align-items: center; font-family: var(--mono); font-size: 16px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); margin-right: 24px; }
-.connection-state__dot { width: 12px; height: 12px; margin-right: 10px; border-radius: 50%; background: var(--green); }
+.connection-state { display: flex; align-items: center; font-family: var(--mono); font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); margin-right: 18px; }
+.connection-state__dot { width: 9px; height: 9px; margin-right: 8px; border-radius: 50%; background: var(--green); }
 
 /* ------------------------------------------------------------- the lineup */
 
 .channels-screen { background: var(--bg); }
 
-.channel-browser { position: absolute; top: 108px; right: 0; bottom: 0; left: 0; display: flex; }
+.channel-browser { position: absolute; top: 76px; right: 0; bottom: 0; left: 0; display: flex; }
 
-.channel-rail-shell { width: 38%; height: 100%; border-right: 3px solid var(--line); display: flex; flex-direction: column; }
-.rail-head { display: flex; align-items: flex-end; padding: 26px 40px 18px; border-bottom: 2px solid var(--line); }
-.rail-head h1 { margin: 4px 0 0; font-size: 34px; }
-.channel-count { font-family: var(--mono); font-size: 17px; letter-spacing: 0.18em; color: var(--muted); margin-left: auto; }
+.channel-rail-shell { width: 38%; height: 100%; border-right: 2px solid var(--line); display: flex; flex-direction: column; }
+.rail-head { display: flex; align-items: flex-end; padding: 18px 28px 12px; border-bottom: 2px solid var(--line); }
+.rail-head h1 { margin: 3px 0 0; font-size: 24px; }
+.channel-count { font-family: var(--mono); font-size: 12px; letter-spacing: 0.18em; color: var(--muted); margin-left: auto; }
 
-.channel-grid { overflow-y: auto; padding: 14px 24px 40px; }
+.channel-grid { flex: 1 1 auto; overflow-y: auto; padding: 10px 18px 28px; }
 
 /* The number is the address on a television, so it leads. */
 .channel-card {
   display: flex;
   align-items: center;
   width: 100%;
-  min-height: 58px;
-  padding: 16px 20px;
-  margin-bottom: 8px;
+  min-height: 41px;
+  padding: 11px 14px;
+  margin-bottom: 5px;
   text-align: left;
   color: var(--text);
   background: transparent;
   border: 0;
-  border-left: 5px solid transparent;
+  border-left: 4px solid transparent;
   cursor: pointer;
   transition: background-color 130ms ease, border-color 130ms ease, transform 130ms ease;
 }
-.channel-card__number { font-family: var(--display); font-size: 32px; font-weight: 600; letter-spacing: 0.04em; color: var(--orange); width: 108px; }
+.channel-card__number { font-family: var(--display); font-size: 23px; font-weight: 600; letter-spacing: 0.04em; color: var(--orange); width: 76px; }
 .channel-card__logo {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 52px;
-  height: 52px;
-  min-width: 52px;
-  margin-right: 16px;
+  width: 38px;
+  height: 38px;
+  min-width: 38px;
+  margin-right: 12px;
   overflow: hidden;
   font-family: var(--display);
-  font-size: 20px;
+  font-size: 15px;
   color: var(--muted);
 }
 .channel-card__logo img { max-width: 100%; max-height: 100%; object-fit: contain; }
 .channel-card__copy { flex: 1 1 auto; min-width: 0; }
-.channel-card__topline { font-size: 24px; font-weight: 600; }
-.channel-card__program { font-size: 18px; color: var(--muted); }
-.channel-card__next { font-family: var(--mono); font-size: 15px; letter-spacing: 0.08em; color: var(--dim); }
-.channel-card__live { font-family: var(--mono); font-size: 14px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--green); margin-left: auto; }
+.channel-card__topline { font-size: 17px; font-weight: 600; }
+.channel-card__program { font-size: 13px; color: var(--muted); }
+.channel-card__next { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; color: var(--dim); }
+.channel-card__live { font-family: var(--mono); font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--green); margin-left: auto; }
 .channel-card.is-previewed { background: var(--surface-raised); border-left-color: var(--orange); }
 .channel-card.is-focused,
 .channel-card:focus {
@@ -393,21 +393,21 @@ body::after {
 .channel-card.is-off-air .channel-card__topline { color: var(--muted); }
 .channel-card.is-off-air .channel-card__live { color: var(--dim); }
 
-.air-state { font-family: var(--mono); font-size: 14px; letter-spacing: 0.2em; text-transform: uppercase; }
+.air-state { font-family: var(--mono); font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; }
 .air-state[data-air-status="on-air"] { color: var(--green); }
 .air-state[data-air-status="off-air"] { color: var(--dim); }
 .air-state[data-air-status="checking"] { color: var(--yellow); }
 .air-state[data-air-status="unavailable"] { color: var(--error); }
 
 /* The panel is the continuity announcer: what is on, how far through, next. */
-.channel-preview { position: relative; flex: 1 1 auto; padding: 40px 56px; display: flex; flex-direction: column; }
+.channel-preview { position: relative; flex: 1 1 auto; padding: 28px 40px; display: flex; flex-direction: column; overflow-y: auto; }
 .channel-preview__wash { position: absolute; top: 0; right: 0; bottom: 0; left: 0; background: radial-gradient(120% 90% at 70% 20%, rgba(255, 171, 46, 0.10) 0, rgba(11, 7, 5, 0) 60%); pointer-events: none; }
-.channel-preview__identity { position: relative; display: flex; align-items: center; margin-bottom: 30px; }
+.channel-preview__identity { position: relative; display: flex; align-items: center; margin-bottom: 21px; }
 .channel-preview__logo-plate {
-  width: 128px;
-  height: 128px;
-  min-width: 128px;
-  margin-right: 28px;
+  width: 90px;
+  height: 90px;
+  min-width: 90px;
+  margin-right: 20px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -415,25 +415,25 @@ body::after {
 }
 .channel-preview__logo { max-width: 100%; max-height: 100%; object-fit: contain; }
 .channel-preview__logo-plate img { max-width: 100%; max-height: 100%; object-fit: contain; }
-.channel-preview__monogram { font-family: var(--display); font-size: 46px; font-weight: 600; letter-spacing: 0.06em; color: var(--orange); }
-.channel-preview__channel .section-heading { font-size: 46px; }
-.channel-preview__channel #channelPreviewNumber { font-family: var(--mono); font-size: 19px; letter-spacing: 0.22em; color: var(--muted); }
+.channel-preview__monogram { font-family: var(--display); font-size: 32px; font-weight: 600; letter-spacing: 0.06em; color: var(--orange); }
+.channel-preview__channel .section-heading { font-size: 33px; }
+.channel-preview__channel #channelPreviewNumber { font-family: var(--mono); font-size: 13px; letter-spacing: 0.22em; color: var(--muted); }
 
-.channel-preview__program { position: relative; border-top: 3px solid var(--line); padding-top: 26px; }
-#channelPreviewProgram { font-size: 40px; font-weight: 600; margin: 0 0 8px; line-height: 1.15; }
-.channel-preview__episode { font-size: 21px; color: var(--muted); margin: 0 0 22px; }
-.channel-preview__time-row { display: flex; font-family: var(--mono); font-size: 19px; letter-spacing: 0.08em; color: var(--muted); margin-top: 14px; }
+.channel-preview__program { position: relative; border-top: 2px solid var(--line); padding-top: 18px; }
+#channelPreviewProgram { font-size: 28px; font-weight: 600; margin: 0 0 6px; line-height: 1.15; }
+.channel-preview__episode { font-size: 15px; color: var(--muted); margin: 0 0 15px; }
+.channel-preview__time-row { display: flex; font-family: var(--mono); font-size: 13px; letter-spacing: 0.08em; color: var(--muted); margin-top: 10px; }
 .channel-preview__time-row span:last-child { margin-left: auto; color: var(--tally); letter-spacing: 0.22em; }
 
-.channel-preview__next { position: relative; margin-top: auto; border-top: 3px solid var(--line); padding-top: 22px; }
+.channel-preview__next { position: relative; margin-top: auto; border-top: 2px solid var(--line); padding-top: 15px; }
 .channel-preview__next .eyebrow { color: var(--aqua); }
-.channel-preview__upcoming p { font-size: 21px; margin: 8px 0 0; }
+.channel-preview__upcoming p { font-size: 15px; margin: 6px 0 0; }
 /* Keep the row height stable when a slot is empty, or the panel jumps as the
    schedule fills in. */
 .channel-preview__upcoming p.hidden { display: block !important; visibility: hidden; }
-.channel-preview__actions { position: relative; margin-top: 26px; }
+.channel-preview__actions { position: relative; margin-top: 18px; }
 
-.preview-timeline { height: 8px; background: var(--line); }
+.preview-timeline { height: 6px; background: var(--line); }
 .preview-timeline__fill { height: 100%; background: var(--orange); }
 
 .empty-state { position: absolute; top: 50%; left: 50%; width: 760px; text-align: center; transform: translate(-50%, -50%); }
@@ -645,18 +645,34 @@ body::after {
 .guide-item.is-focused,
 .guide-item:focus { outline: none; background: var(--surface-soft); transform: translateX(4px); }
 
-.guide-list::-webkit-scrollbar,
+/* ------------------------------------------------------------ scrollbars
+ *
+ * Chromium's own scrollbar is desktop furniture: wide, grey, with stepper
+ * arrows nobody can click from a sofa. Every scrolling surface gets the same
+ * treatment instead -- a thin unlit channel with a warm thumb, matching the
+ * rules and the tally elsewhere.
+ *
+ * The star selector is the point: it catches any surface that becomes
+ * scrollable later, so a default bar cannot reappear somewhere unnoticed.
+ */
+
+*::-webkit-scrollbar { width: 6px; height: 6px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--line-hot); border-radius: 3px; }
+*::-webkit-scrollbar-corner { background: transparent; }
+/* Steppers are unreachable with a remote and only shorten the track. */
+*::-webkit-scrollbar-button { width: 0; height: 0; display: none; }
+
+/* A lit thumb where the eye already is. */
+.channel-grid::-webkit-scrollbar-thumb,
+.guide-list::-webkit-scrollbar-thumb { background: var(--orange-dark); }
+
+/* The horizontal strips are stepped through with the remote and always show
+   the focused chip, so a bar under them reports nothing worth the pixels. */
 .catalog-rail::-webkit-scrollbar,
-.catalog-days::-webkit-scrollbar,
-.channel-grid::-webkit-scrollbar,
-.overlay ::-webkit-scrollbar { width: 0; height: 0; }
-.guide-list::-webkit-scrollbar-track,
-.catalog-rail::-webkit-scrollbar-track,
-.catalog-days::-webkit-scrollbar-track { background: transparent; }
-.guide-list::-webkit-scrollbar-thumb,
+.catalog-days::-webkit-scrollbar { width: 0; height: 0; }
 .catalog-rail::-webkit-scrollbar-thumb,
 .catalog-days::-webkit-scrollbar-thumb { background: transparent; }
-.guide-list::-webkit-scrollbar-button { width: 0; height: 0; }
 
 /* ------------------------------------------------------------------ toast */
 

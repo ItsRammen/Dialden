@@ -1,6 +1,6 @@
 {
   "id": "com.itsrammen.app.toasttv",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "vendor": "ItsRammen",
   "type": "web",
   "main": "index.html",
