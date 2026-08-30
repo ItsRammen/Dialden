@@ -24,6 +24,7 @@ import {
   type RatingPolicyProfile,
 } from '../../policy/PolicyEngine'
 import {
+  cleanCollectionTitle,
   matchMetadata,
   normalizeTitle,
   type ParsedCollectionTitle,
@@ -695,6 +696,42 @@ export class MetadataEnrichmentService {
           : await this.provider.searchTV(fallbackInput)
       candidates = [...candidates, ...fallbackCandidates]
       result = matchMetadata(parsed, candidates)
+    }
+
+    /* Filename furniture blocks the exact title the strict matcher requires:
+       "28 Years Later Part 2 The Bone Temple" cannot match "28 Years Later:
+       The Bone Temple" until the part marker goes. Search once more with it
+       stripped, and adopt the result only when it is a clean match -- cleaning
+       must never turn an honest unmatched into an ambiguous one. */
+    if (result.status !== 'matched') {
+      const cleanedTitle = cleanCollectionTitle(collection.parsedTitle)
+      if (cleanedTitle) {
+        const cleanedCandidates =
+          collection.libraryKind === 'movie'
+            ? await this.provider.searchMovie({
+                title: cleanedTitle,
+                ...(collection.year === null ? {} : { year: collection.year }),
+                language: this.config.language,
+                region: this.config.preferredRatingRegion,
+              })
+            : await this.provider.searchTV({
+                title: cleanedTitle,
+                ...(collection.year === null ? {} : { year: collection.year }),
+                language: this.config.language,
+                region: this.config.preferredRatingRegion,
+              })
+        const cleanedParsed: ParsedCollectionTitle = {
+          title: cleanedTitle,
+          normalizedTitle: normalizeTitle(cleanedTitle),
+          ...(collection.year === null ? {} : { year: collection.year }),
+        }
+        const merged = [...candidates, ...cleanedCandidates]
+        const cleanedResult = matchMetadata(cleanedParsed, merged)
+        if (cleanedResult.status === 'matched') {
+          candidates = merged
+          result = cleanedResult
+        }
+      }
     }
     const candidateRecords = this.toCandidateRecords(result.candidates)
 
