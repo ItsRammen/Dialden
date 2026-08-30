@@ -141,7 +141,14 @@
           </div>
         </div>
 
-        <header id="playerHeader" class="player-header player-chrome">
+        <div class="player-dock player-chrome">
+        <div id="playerInfo" class="player-info">
+          <p id="playerCollection" class="eyebrow">Now playing</p>
+          <h2 id="playerTitle">Tuning in…</h2>
+          <p id="playerEpisode" class="player-info__episode"></p>
+          <div class="player-info__meta"><span id="programTimes">--:-- – --:--</span><span id="nextTitle">Next: —</span></div>
+        </div>
+        <header id="playerHeader" class="player-header">
           <div class="player-channel">
             <div class="player-channel__identity">
               <span id="playerChannelNumber" class="player-channel__number">CH 101</span>
@@ -154,13 +161,7 @@
           </div>
           <div class="player-header__right"><time id="playerClock" class="player-clock">--:--</time></div>
         </header>
-
-        <div id="playerInfo" class="player-info player-chrome">
-          <p id="playerCollection" class="eyebrow">Now playing</p>
-          <h2 id="playerTitle">Tuning in…</h2>
-          <p id="playerEpisode" class="player-info__episode"></p>
-          <div class="timeline" role="progressbar" aria-label="Program progress" aria-valuemin="0" aria-valuemax="100"><div id="timelineFill" class="timeline__fill"></div></div>
-          <div class="player-info__meta"><span id="programTimes">--:-- – --:--</span><span id="nextTitle">Next: —</span></div>
+        <div class="timeline" role="progressbar" aria-label="Program progress" aria-valuemin="0" aria-valuemax="100"><div id="timelineFill" class="timeline__fill"></div></div>
         </div>
 
         <div id="offAirPanel" class="off-air hidden">

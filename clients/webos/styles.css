@@ -362,7 +362,20 @@ body::after {
   transition: background-color 130ms ease, border-color 130ms ease, transform 130ms ease;
 }
 .channel-card__number { font-family: var(--display); font-size: 32px; font-weight: 600; letter-spacing: 0.04em; color: var(--orange); width: 108px; }
-.channel-card__logo { width: 52px; height: 52px; margin-right: 16px; object-fit: contain; }
+.channel-card__logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  min-width: 52px;
+  margin-right: 16px;
+  overflow: hidden;
+  font-family: var(--display);
+  font-size: 20px;
+  color: var(--muted);
+}
+.channel-card__logo img { max-width: 100%; max-height: 100%; object-fit: contain; }
 .channel-card__copy { flex: 1 1 auto; min-width: 0; }
 .channel-card__topline { font-size: 24px; font-weight: 600; }
 .channel-card__program { font-size: 18px; color: var(--muted); }
@@ -393,14 +406,15 @@ body::after {
 .channel-preview__logo-plate {
   width: 128px;
   height: 128px;
+  min-width: 128px;
   margin-right: 28px;
-  background: var(--surface-raised);
-  border: 3px solid var(--line-hot);
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
 }
-.channel-preview__logo { max-width: 104px; max-height: 104px; object-fit: contain; }
+.channel-preview__logo { max-width: 100%; max-height: 100%; object-fit: contain; }
+.channel-preview__logo-plate img { max-width: 100%; max-height: 100%; object-fit: contain; }
 .channel-preview__monogram { font-family: var(--display); font-size: 46px; font-weight: 600; letter-spacing: 0.06em; color: var(--orange); }
 .channel-preview__channel .section-heading { font-size: 46px; }
 .channel-preview__channel #channelPreviewNumber { font-family: var(--mono); font-size: 19px; letter-spacing: 0.22em; color: var(--muted); }
@@ -442,13 +456,17 @@ body::after {
 .player-chrome { transition: opacity 200ms ease; }
 .player-screen.chrome-hidden .player-chrome { opacity: 0; pointer-events: none; }
 
-/* The bar broadcasters settled on: number in a solid block, station, now/next. */
-.player-header {
+/* The bar broadcasters settled on: number in a solid block, station, now/next,
+   with the programme's progress along its foot. One dock keeps the progress
+   attached to the bar instead of floating above it. */
+.player-dock {
   position: absolute;
   right: 64px;
-  bottom: 72px;
+  bottom: 64px;
   left: 64px;
   z-index: 20;
+}
+.player-header {
   display: flex;
   align-items: stretch;
   background: rgba(11, 7, 5, 0.88);
@@ -462,8 +480,9 @@ body::after {
   background: var(--orange);
   color: #1c1006;
 }
-.player-channel__plate { display: flex; align-items: center; justify-content: center; width: 96px; border-right: 2px solid var(--line); }
-.player-channel-logo { max-width: 62px; max-height: 62px; object-fit: contain; }
+.player-channel__plate { display: flex; align-items: center; justify-content: center; width: 96px; min-width: 96px; overflow: hidden; border-right: 2px solid var(--line); }
+.player-channel-logo { max-width: 72px; max-height: 62px; object-fit: contain; }
+.player-channel__plate img { max-width: 100%; max-height: 100%; object-fit: contain; }
 .player-channel__monogram { font-family: var(--display); font-size: 34px; font-weight: 600; letter-spacing: 0.06em; color: var(--orange); }
 .player-channel__number { font-family: var(--display); font-size: 54px; font-weight: 600; letter-spacing: 0.04em; line-height: 1; }
 .player-channel > div:last-child { padding: 18px 30px; min-width: 0; }
@@ -486,7 +505,7 @@ body::after {
 .player-header__right { display: flex; align-items: center; padding: 0 30px; margin-left: auto; border-left: 2px solid var(--line); }
 .player-clock { font-family: var(--mono); font-size: 34px; letter-spacing: 0.1em; }
 
-.player-info { position: absolute; right: 64px; bottom: 232px; left: 64px; z-index: 20; max-width: 1180px; }
+.player-info { background: rgba(11, 7, 5, 0.88); padding: 26px 30px 22px; max-width: 1180px; }
 .player-info .eyebrow { color: var(--aqua); }
 #playerTitle { font-family: var(--display); font-size: 58px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; margin: 6px 0 8px; line-height: 1.05; }
 .player-info__episode { font-size: 24px; color: var(--muted); margin: 0 0 18px; }
@@ -495,6 +514,7 @@ body::after {
 .player-screen.guide-open .player-info { opacity: 0; pointer-events: none; }
 
 .timeline { height: 8px; background: var(--line); }
+.player-dock .timeline { height: 8px; }
 .timeline__fill { height: 100%; background: var(--orange); }
 
 .player-hints { position: absolute; right: 64px; bottom: 24px; z-index: 20; display: flex; align-items: center; }
@@ -552,7 +572,7 @@ body::after {
 .overlay { position: absolute; top: 0; right: 0; bottom: 0; left: 0; z-index: 60; display: none; background: rgba(11, 7, 5, 0.965); }
 .overlay.is-open { display: block; }
 
-.guide-shell { position: absolute; top: 0; right: 0; bottom: 0; left: 0; }
+.guide-shell { flex: 1 1 auto; display: flex; flex-direction: column; overflow: hidden; }
 .guide-panel { position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: flex; flex-direction: column; }
 .guide-panel__header { display: flex; align-items: center; padding: 34px 64px 24px; border-bottom: 4px solid var(--orange); }
 .guide-panel__header h2 { font-family: var(--display); font-size: 44px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; margin: 4px 0 0; }
