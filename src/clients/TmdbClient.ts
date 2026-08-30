@@ -108,7 +108,6 @@ export interface ITmdbClient {
     options: {
       readonly year?: number
       readonly language: string
-      readonly region: string
       readonly signal?: AbortSignal
     }
   ): Promise<TmdbSearchResponse<TmdbMovieSearchResult>>
@@ -206,12 +205,20 @@ export class TmdbClient implements ITmdbClient {
     return this.request('/configuration', {}, signal)
   }
 
+  /**
+   * No `region` is sent, deliberately.
+   *
+   * TMDB localises the `release_date` it returns to the region asked for, so
+   * requesting US dates reports a film by its American release rather than
+   * its original one -- 2019 for a Japanese film of 2007. Media files are
+   * named for the original release, and that is the year TMDB itself shows,
+   * so the primary release date is the one to match against.
+   */
   searchMovie(
     query: string,
     options: {
       readonly year?: number
       readonly language: string
-      readonly region: string
       readonly signal?: AbortSignal
     }
   ): Promise<TmdbSearchResponse<TmdbMovieSearchResult>> {
@@ -221,7 +228,6 @@ export class TmdbClient implements ITmdbClient {
         query,
         include_adult: 'false',
         language: options.language,
-        region: options.region,
         page: '1',
         primary_release_year: options.year,
       },

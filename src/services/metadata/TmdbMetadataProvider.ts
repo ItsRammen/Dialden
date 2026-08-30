@@ -74,7 +74,6 @@ export class TmdbMetadataProvider implements MetadataProvider {
       const response = await client.searchMovie(input.title, {
         year: input.year,
         language: input.language,
-        region: input.region,
         signal: input.signal,
       })
       if (!Array.isArray(response.results)) throw invalidResponse()

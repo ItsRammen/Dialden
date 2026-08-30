@@ -672,7 +672,6 @@ export class MetadataEnrichmentService {
       title: collection.parsedTitle,
       ...(collection.year === null ? {} : { year: collection.year }),
       language: this.config.language,
-      region: this.config.preferredRatingRegion,
     }
     let candidates =
       collection.libraryKind === 'movie'
@@ -699,7 +698,6 @@ export class MetadataEnrichmentService {
       const fallbackInput = {
         title: collection.parsedTitle,
         language: this.config.language,
-        region: this.config.preferredRatingRegion,
       }
       const fallbackCandidates =
         collection.libraryKind === 'movie'
@@ -723,14 +721,12 @@ export class MetadataEnrichmentService {
                 title: cleanedTitle,
                 ...(collection.year === null ? {} : { year: collection.year }),
                 language: this.config.language,
-                region: this.config.preferredRatingRegion,
-              })
+                      })
             : await this.provider.searchTV({
                 title: cleanedTitle,
                 ...(collection.year === null ? {} : { year: collection.year }),
                 language: this.config.language,
-                region: this.config.preferredRatingRegion,
-              })
+                      })
         const cleanedParsed: ParsedCollectionTitle = {
           title: cleanedTitle,
           normalizedTitle: normalizeTitle(cleanedTitle),

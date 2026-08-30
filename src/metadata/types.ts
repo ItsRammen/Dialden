@@ -12,7 +12,11 @@ export interface MetadataSearchInput {
   readonly title: string
   readonly year?: number
   readonly language: string
-  readonly region: string
+  /**
+   * Deliberately absent: a search region makes TMDB report a film by that
+   * country's release date instead of its original one. The rating region is
+   * a separate setting and belongs only to certification lookups.
+   */
   readonly signal?: AbortSignal
 }
 

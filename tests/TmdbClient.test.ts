@@ -25,7 +25,6 @@ describe('TMDB v3 HTTP client', () => {
     await client.searchMovie('Soul & Friends', {
       year: 2020,
       language: 'en-US',
-      region: 'US',
     })
     await client.searchTV('Bluey', { year: 2018, language: 'en-US' })
 
@@ -33,7 +32,8 @@ describe('TMDB v3 HTTP client', () => {
     expect(movie?.pathname).toBe('/3/search/movie')
     expect(movie?.searchParams.get('query')).toBe('Soul & Friends')
     expect(movie?.searchParams.get('primary_release_year')).toBe('2020')
-    expect(movie?.searchParams.get('region')).toBe('US')
+    // No region: it would localise release_date away from the original.
+    expect(movie?.searchParams.get('region')).toBeNull()
     expect(movie?.searchParams.get('include_adult')).toBe('false')
     expect(movie?.searchParams.get('api_key')).toBe('top-secret')
 
