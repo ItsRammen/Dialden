@@ -252,9 +252,12 @@ export class ReviewRunner {
       }
     }
 
+    /* A single candidate is still worth asking about: "A Tale of Mari & 3
+       Puppies" against "A Tale of Mari and Three Puppies" is a question with
+       an answer, and it is exactly the sort the deterministic matcher scores
+       just under its own threshold. Only an empty list has nothing to ask. */
     const actionable = queue.filter((collection) => {
-      // One candidate or none is not a choice; there is nothing to adjudicate.
-      if (candidatesOf(collection).length >= 2) return true
+      if (candidatesOf(collection).length >= 1) return true
       left++
       return false
     })

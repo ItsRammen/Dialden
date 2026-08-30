@@ -143,3 +143,59 @@ describe('strict metadata title matching', () => {
     expect(result.candidates).toHaveLength(1)
   })
 })
+
+describe('number words and digits', () => {
+  test('folds a spelled-out number to its digit', () => {
+    // The case from the library: 45% match confidence on an obvious pair.
+    expect(normalizeTitle('A Tale of Mari & 3 Puppies')).toBe(
+      normalizeTitle('A Tale of Mari and Three Puppies')
+    )
+  })
+
+  test('handles the common stylisations', () => {
+    expect(normalizeTitle("Ocean's Eleven")).toBe(normalizeTitle("Ocean's 11"))
+    expect(normalizeTitle('Toy Story 3')).toBe(normalizeTitle('Toy Story Three'))
+    expect(normalizeTitle('The Magnificent Seven')).toBe(
+      normalizeTitle('The Magnificent 7')
+    )
+  })
+
+  test('leaves ordinals alone', () => {
+    /* Folding "sixth" to "6" would break this pair, because "6th" survives
+       punctuation stripping intact and could never fold back to meet it. */
+    expect(normalizeTitle('The Sixth Sense')).not.toBe(
+      normalizeTitle('The 6th Sense')
+    )
+    expect(normalizeTitle('The Sixth Sense')).toBe(
+      normalizeTitle('the sixth sense')
+    )
+  })
+
+  test('only folds whole words', () => {
+    expect(normalizeTitle('Onegin')).toBe('onegin')
+    expect(normalizeTitle('Tennessee')).toBe('tennessee')
+    expect(normalizeTitle('Threesome')).toBe('threesome')
+  })
+
+  test('lifts an obvious pair over the plausibility floor', () => {
+    const parsed = parseCollectionTitle('A Tale of Mari & 3 Puppies (2007)')
+    const result = matchMetadata(parsed, [
+      candidate('111', 'A Tale of Mari and Three Puppies', 2019),
+    ])
+
+    // A twelve-year gap still needs a person or the assistant to confirm,
+    // but it is no longer reported as having no reliable match at all.
+    expect(result.status).toBe('ambiguous')
+    expect(result.candidates[0]?.score ?? 0).toBeGreaterThan(0.45)
+  })
+
+  test('matches outright once the year agrees', () => {
+    const parsed = parseCollectionTitle('A Tale of Mari & 3 Puppies (2007)')
+    const result = matchMetadata(parsed, [
+      candidate('111', 'A Tale of Mari and Three Puppies', 2007),
+    ])
+
+    expect(result.status).toBe('matched')
+    expect(result.candidate?.externalId).toBe('111')
+  })
+})

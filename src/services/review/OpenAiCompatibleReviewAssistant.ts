@@ -111,7 +111,16 @@ export class OpenAiCompatibleReviewAssistant implements ReviewAssistant {
             'Choose only from the numbered candidates supplied. Never invent an id. ' +
             'If two candidates are plausible and you cannot tell them apart — sequels ' +
             'and separately released parts especially — return null with low confidence ' +
-            'rather than guessing.',
+            'rather than guessing. ' +
+            'Titles are often written differently for the same work: "&" for "and", ' +
+            'digits for number words, a subtitle present on one side only, or a ' +
+            'translated release title. Those differences alone are not evidence of a ' +
+            'different work. A release year that differs by a few years is also weak ' +
+            'evidence on its own, because catalogues carry re-releases and regional ' +
+            'entries — but a different story, cast or era is decisive. ' +
+            'When only one candidate is supplied the task is verification, not choice: ' +
+            'it being the only option is not evidence that it is right, so return null ' +
+            'unless it genuinely refers to the same work.',
         },
         { role: 'user', content: renderDisambiguationPrompt(request) },
       ],
@@ -290,7 +299,9 @@ function renderDisambiguationPrompt(request: DisambiguationRequest): string {
     request.year === undefined ? null : `Library year: ${request.year}`,
     `Kind: ${request.mediaType === 'movie' ? 'film' : 'television series'}`,
     '',
-    'Candidates:',
+    request.candidates.length === 1
+      ? 'One candidate. Confirm it only if it is the same work; otherwise return null.'
+      : 'Candidates:',
     ...request.candidates.map((candidate, index) => {
       const parts = [
         `${index + 1}. id=${candidate.externalId}`,

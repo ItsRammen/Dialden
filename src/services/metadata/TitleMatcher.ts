@@ -99,8 +99,44 @@ export function cleanCollectionTitle(value: string): string | null {
   return cleaned
 }
 
+/**
+ * Cardinals only. Ordinals are deliberately absent: folding "sixth" to "6"
+ * would stop "The Sixth Sense" matching "The 6th Sense", because "6th"
+ * survives punctuation stripping intact and would never fold back.
+ */
+const CARDINAL_WORDS: ReadonlyMap<string, string> = new Map([
+  ['zero', '0'],
+  ['one', '1'],
+  ['two', '2'],
+  ['three', '3'],
+  ['four', '4'],
+  ['five', '5'],
+  ['six', '6'],
+  ['seven', '7'],
+  ['eight', '8'],
+  ['nine', '9'],
+  ['ten', '10'],
+  ['eleven', '11'],
+  ['twelve', '12'],
+  ['thirteen', '13'],
+  ['fourteen', '14'],
+  ['fifteen', '15'],
+  ['sixteen', '16'],
+  ['seventeen', '17'],
+  ['eighteen', '18'],
+  ['nineteen', '19'],
+  ['twenty', '20'],
+  ['thirty', '30'],
+  ['forty', '40'],
+  ['fifty', '50'],
+  ['sixty', '60'],
+  ['seventy', '70'],
+  ['eighty', '80'],
+  ['ninety', '90'],
+])
+
 export function normalizeTitle(value: string): string {
-  return value
+  const cleaned = value
     .normalize('NFKD')
     .replace(/\p{M}+/gu, '')
     .toLocaleLowerCase('en-US')
@@ -109,6 +145,15 @@ export function normalizeTitle(value: string): string {
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim()
     .replace(/\s+/g, ' ')
+
+  /* Both sides of a comparison run through here, so folding number words to
+     digits is symmetric: "3 Puppies" and "Three Puppies" converge rather than
+     scoring as a near miss. */
+  if (!cleaned) return cleaned
+  return cleaned
+    .split(' ')
+    .map((word) => CARDINAL_WORDS.get(word) ?? word)
+    .join(' ')
 }
 
 export function rankMetadataCandidates(

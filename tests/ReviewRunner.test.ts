@@ -232,7 +232,10 @@ describe('automated review runner', () => {
     expect(wet.overrides).toHaveLength(2)
   })
 
-  test('asks the assistant only where there is a genuine choice', async () => {
+  test('asks about a lone candidate as well as a choice between several', async () => {
+    /* "A Tale of Mari & 3 Puppies" against the single candidate "A Tale of
+       Mari and Three Puppies" is a real question. Only an empty candidate
+       list has nothing to ask about. */
     const h = harness(
       [
         collection({ id: 1, metadataCandidates: [] }),
@@ -246,9 +249,13 @@ describe('automated review runner', () => {
         }),
       ],
       {
-        disambiguate: async () => ({
+        disambiguate: async (request) => ({
           status: 'accepted',
-          value: { externalId: '10', confidence: 0.9, reason: 'Year matches' },
+          value: {
+            externalId: request.candidates[0]?.externalId ?? null,
+            confidence: 0.9,
+            reason: 'Same work',
+          },
         }),
       }
     )
@@ -258,12 +265,32 @@ describe('automated review runner', () => {
       blockMissing
     )
 
-    // One candidate is not a choice, and none is not either.
-    expect(h.calls).toBe(1)
-    expect(report.assistant.attempted).toBe(1)
-    expect(report.matched).toBe(1)
-    expect(h.matches).toEqual([{ id: 3, externalId: '10' }])
-    expect(report.leftForYou).toBe(2)
+    expect(h.calls).toBe(2)
+    expect(report.assistant.attempted).toBe(2)
+    expect(report.matched).toBe(2)
+    expect(h.matches).toEqual([
+      { id: 2, externalId: '1' },
+      { id: 3, externalId: '10' },
+    ])
+    // Only the collection with no candidates at all is left alone.
+    expect(report.leftForYou).toBe(1)
+  })
+
+  test('a collection with no candidates is never sent', async () => {
+    const h = harness([collection({ id: 1, metadataCandidates: [] })], {
+      disambiguate: async () => ({
+        status: 'accepted',
+        value: { externalId: 'invented', confidence: 1, reason: 'no' },
+      }),
+    })
+
+    const report = await h.runner.run(
+      { dryRun: false, limit: 100, callBudget: 10, maxConcurrency: 1 },
+      blockMissing
+    )
+
+    expect(h.calls).toBe(0)
+    expect(report.leftForYou).toBe(1)
   })
 
   test('an abstention leaves the collection queued', async () => {
