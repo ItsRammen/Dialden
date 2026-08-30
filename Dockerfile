@@ -28,6 +28,12 @@ USER root
 
 ARG JELLYFIN_FFMPEG_PACKAGE
 
+# fontconfig and one real font are here for ffmpeg's drawtext filter, which
+# renders the station bumpers. drawtext initialises fontconfig even when it is
+# handed an explicit fontfile, so both the library and a face must exist or the
+# filter fails before drawing anything. DejaVu is the fallback; a station that
+# ships its own TTF is used in preference to it.
+#
 # Jellyfin's pinned FFmpeg build includes its Intel media-driver and oneVPL /
 # MediaSDK runtime stack on amd64, while retaining arm64 support for the normal
 # software path. ToastTV invokes the binaries directly; it does not embed or
@@ -36,6 +42,8 @@ RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
+        fontconfig \
+        fonts-dejavu-core \
         gnupg \
         tzdata \
         util-linux \
