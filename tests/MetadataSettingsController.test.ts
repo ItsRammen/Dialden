@@ -286,3 +286,93 @@ describe('metadata settings controller', () => {
     expect(calls).toEqual(['policy', 'review'])
   })
 })
+
+/**
+ * A connection check whose only output is a redirect tells the operator
+ * nothing, which is what these cover: the route must answer with a fragment
+ * the page can drop in place.
+ */
+describe('review assistant settings routes', () => {
+  function storeWith(config: Record<string, unknown>) {
+    const values = new Map<string, string>([
+      ['review_assistant_configuration_v1', JSON.stringify({ version: 1, ...config })],
+    ])
+    return {
+      getSetting: async (key: string) => values.get(key) ?? null,
+      setSetting: async (key: string, value: string) => {
+        values.set(key, value)
+      },
+      values,
+    }
+  }
+
+  const bare = {
+    enabled: false,
+    apiKey: null,
+    baseUrl: '',
+    model: 'openai/gpt-4o-mini',
+    requestTimeoutMs: 30_000,
+    maxConcurrency: 2,
+    callBudget: 250,
+    decisionPolicy: {
+      reviewBand: 'manual',
+      missingRating: 'block',
+      unrecognizedRating: 'block',
+      ambiguousMetadata: 'assist',
+      unmatchedMetadata: 'assist',
+    },
+  }
+
+  function appWith(store: ReturnType<typeof storeWith>): Hono {
+    const app = new Hono()
+    app.route(
+      '/',
+      createMetadataSettingsController(service() as never, undefined, store)
+    )
+    return app
+  }
+
+  test('the test route answers with a fragment, never a redirect', async () => {
+    const app = appWith(storeWith(bare))
+
+    const response = await app.request('/settings/metadata/assistant/test', {
+      method: 'POST',
+    })
+    const body = await response.text()
+
+    expect(response.status).toBe(200)
+    expect(body).toContain('metadata-inline-alert')
+    expect(body).toContain('Add an endpoint and API key')
+    // A whole page would carry the layout; a fragment must not.
+    expect(body).not.toContain('<html')
+  })
+
+  test('an unconfigured assistant is a message, not a server error', async () => {
+    const app = appWith(storeWith({ ...bare, baseUrl: 'https://example.test/v1' }))
+
+    const response = await app.request('/settings/metadata/assistant/test', {
+      method: 'POST',
+    })
+
+    expect(response.status).toBe(200)
+    expect(await response.text()).toContain('metadata-inline-alert')
+  })
+
+  test('saving with an empty key field keeps the stored one', async () => {
+    const store = storeWith({ ...bare, apiKey: 'stored-key', baseUrl: 'https://example.test/v1' })
+    const form = new FormData()
+    form.set('apiKey', '')
+    form.set('baseUrl', 'https://example.test/v1')
+    form.set('model', 'some/other-model')
+
+    const response = await appWith(store).request('/settings/metadata/assistant', {
+      method: 'POST',
+      body: form,
+    })
+
+    expect(response.status).toBe(303)
+    const saved = JSON.parse(store.values.get('review_assistant_configuration_v1') as string)
+    expect(saved.apiKey).toBe('stored-key')
+    expect(saved.model).toBe('some/other-model')
+  })
+})

@@ -45,6 +45,20 @@ export function renderMetadataSettings(
   const requestTimeout =
     options.draft?.requestTimeoutMs ?? String(config.requestTimeoutMs)
   const health = metadataHealth(config, state)
+  /* Saving the assistant redirects back here, so land on the tab the operator
+     was actually working in rather than throwing them back to TMDB. */
+  const assistantTab =
+    options.assistant !== undefined &&
+    (options.assistantSaved === true ||
+      options.assistantTestResult !== undefined)
+  const tabs: { id: string; label: string }[] = [
+    { id: 'provider', label: 'The Movie Database' },
+    ...(options.assistant ? [{ id: 'assistant', label: 'Review assistant' }] : []),
+    { id: 'maintenance', label: 'Maintenance' },
+  ]
+  const activeTab = assistantTab ? 'assistant' : 'provider'
+  const panel = (id: string, body: string): string =>
+    `<div class="settings-tabpanel${id === activeTab ? ' is-active' : ''}" id="tabpanel-${id}" role="tabpanel" aria-labelledby="tab-${id}">${body}</div>`
 
   return renderLayout(
     'Metadata settings',
@@ -79,7 +93,18 @@ export function renderMetadataSettings(
         </dl>
       </section>
 
-      <form id="metadata-settings-form" method="post" action="/settings/metadata" class="metadata-settings-form">
+      <div class="settings-tabs" role="tablist" aria-label="Metadata settings sections">
+        ${tabs
+          .map(
+            (tab) =>
+              `<button type="button" class="settings-tab${tab.id === activeTab ? ' is-active' : ''}" id="tab-${tab.id}" role="tab" aria-controls="tabpanel-${tab.id}" aria-selected="${tab.id === activeTab}" data-tab="${tab.id}">${escapeHtml(tab.label)}</button>`
+          )
+          .join('')}
+      </div>
+
+      ${panel(
+        'provider',
+        `<form id="metadata-settings-form" method="post" action="/settings/metadata" class="metadata-settings-form">
         <section class="settings-card metadata-settings-card">
           <div class="card-header metadata-card-heading">
             <div>
@@ -210,9 +235,17 @@ export function renderMetadataSettings(
         </div>
       </form>
 
-      ${renderAssistantCard(options)}
+      <aside class="metadata-settings-note">
+        <strong>About existing environment values</strong>
+        <p><code>TMDB_API_KEY</code>, language, region, and timeout environment values are used only as bootstrap defaults until this page is saved. Saved appdata settings take precedence on later starts.</p>
+      </aside>`
+      )}
 
-      <section class="settings-card metadata-settings-card metadata-maintenance">
+      ${options.assistant ? panel('assistant', renderAssistantCard(options)) : ''}
+
+      ${panel(
+        'maintenance',
+        `<section class="settings-card metadata-settings-card metadata-maintenance">
         <div class="card-header metadata-card-heading">
           <div>
             <p class="metadata-step">Library maintenance</p>
@@ -238,16 +271,27 @@ export function renderMetadataSettings(
           </form>
         </div>
         <p class="hint"><strong>Manual TMDB identities remain locked.</strong> Explicit Parent approve and Parent block choices are never replaced.</p>
-      </section>
+      </section>`
+      )}
 
-      <aside class="metadata-settings-note">
-        <strong>About existing environment values</strong>
-        <p><code>TMDB_API_KEY</code>, language, region, and timeout environment values are used only as bootstrap defaults until this page is saved. Saved appdata settings take precedence on later starts.</p>
-      </aside>
+      ${TAB_SCRIPT}
 
       <p class="metadata-attribution">This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
     </div>`
   )
+}
+
+/** Inline result for the assistant connection check, mirroring TMDB's. */
+export function renderAssistantTestResult(
+  result: 'success' | 'failed',
+  message?: string
+): string {
+  const tone = result === 'success' ? 'success' : 'warning'
+  const fallback =
+    result === 'success'
+      ? 'The provider answered. Save settings to keep any changes.'
+      : 'The provider could not be reached.'
+  return `<div class="metadata-inline-alert ${tone}" role="status">${escapeHtml(message ?? fallback)}</div>`
 }
 
 export function renderMetadataTestResult(
@@ -302,6 +346,37 @@ function renderPageAlert(options: MetadataSettingsRenderOptions): string {
  * The key is write-only: it is never rendered back, and an empty field keeps
  * whatever is stored, mirroring how the TMDB key above behaves.
  */
+/**
+ * Every panel is served visible and the script hides the inactive ones on load.
+ * Done the other way round, a client whose scripting failed would be left with
+ * two thirds of the settings page unreachable rather than merely unstyled.
+ */
+const TAB_SCRIPT = `<script>
+(function () {
+  var bar = document.querySelector('.settings-tabs')
+  if (!bar) return
+  var tabs = [].slice.call(bar.querySelectorAll('.settings-tab'))
+  if (!tabs.length) return
+  function select(id) {
+    tabs.forEach(function (tab) {
+      var on = tab.getAttribute('data-tab') === id
+      tab.classList.toggle('is-active', on)
+      tab.setAttribute('aria-selected', String(on))
+      var body = document.getElementById('tabpanel-' + tab.getAttribute('data-tab'))
+      if (!body) return
+      body.classList.toggle('is-active', on)
+      body.hidden = !on
+    })
+  }
+  bar.addEventListener('click', function (event) {
+    var tab = event.target.closest ? event.target.closest('.settings-tab') : null
+    if (tab) select(tab.getAttribute('data-tab'))
+  })
+  var opening = bar.querySelector('.settings-tab.is-active') || tabs[0]
+  select(opening.getAttribute('data-tab'))
+})()
+</script>`
+
 function renderAssistantCard(options: MetadataSettingsRenderOptions): string {
   const assistant = options.assistant
   if (!assistant) return ''
@@ -353,11 +428,9 @@ function renderAssistantCard(options: MetadataSettingsRenderOptions): string {
             : ''
         }
         ${
-          options.assistantTestResult === 'success'
-            ? '<p class="metadata-alert success">The provider answered.</p>'
-            : options.assistantTestResult === 'failed'
-              ? `<p class="metadata-alert error">${escapeHtml(options.assistantTestMessage ?? 'The provider could not be reached.')}</p>`
-              : ''
+          options.assistantTestResult === 'failed'
+            ? `<p class="metadata-alert error">${escapeHtml(options.assistantTestMessage ?? 'The provider could not be reached.')}</p>`
+            : ''
         }
 
         <label class="metadata-remove-key">
@@ -398,9 +471,20 @@ function renderAssistantCard(options: MetadataSettingsRenderOptions): string {
         ${treatment('ambiguousMetadata', 'More than one plausible title', policy.ambiguousMetadata, 'The case an assistant is best at: choosing between candidates already found.', true)}
         ${treatment('unmatchedMetadata', 'No reliable title match', policy.unmatchedMetadata, 'Nothing matched well enough to rate.', true)}
 
-        <div class="button-row">
-          <button type="submit" class="button button--primary">Save assistant settings</button>
-          <button type="submit" class="button button--quiet" formaction="/settings/metadata/assistant/test" formnovalidate>Test connection</button>
+        <div id="assistant-test-result" class="metadata-test-result" aria-live="polite"></div>
+
+        <div class="metadata-form-actions">
+          <button class="btn btn-primary" type="submit">Save assistant settings</button>
+          <button class="btn btn-secondary"
+                  type="submit"
+                  formaction="/settings/metadata/assistant/test"
+                  formnovalidate
+                  hx-post="/settings/metadata/assistant/test"
+                  hx-target="#assistant-test-result"
+                  hx-swap="innerHTML"
+                  hx-disabled-elt="this">
+            Test connection
+          </button>
         </div>
       </section>
     </form>

@@ -124,3 +124,78 @@ describe('review assistant card on the metadata settings page', () => {
     expect(html).toContain('unauthorized')
   })
 })
+
+describe('metadata settings tabs', () => {
+  test('separates the provider from the assistant', () => {
+    const html = renderMetadataSettings(metadataConfig, state, { assistant: configured })
+
+    expect(html).toContain('data-tab="provider"')
+    expect(html).toContain('data-tab="assistant"')
+    expect(html).toContain('data-tab="maintenance"')
+  })
+
+  test('offers no assistant tab where there is no assistant', () => {
+    const html = renderMetadataSettings(metadataConfig, state)
+
+    expect(html).toContain('data-tab="provider"')
+    expect(html).not.toContain('data-tab="assistant"')
+  })
+
+  test('each tab controls exactly one panel', () => {
+    const html = renderMetadataSettings(metadataConfig, state, { assistant: configured })
+
+    for (const id of ['provider', 'assistant', 'maintenance']) {
+      expect(html).toContain(`aria-controls="tabpanel-${id}"`)
+      expect(html).toContain(`id="tabpanel-${id}"`)
+    }
+  })
+
+  test('opens on the provider tab', () => {
+    const html = renderMetadataSettings(metadataConfig, state, { assistant: configured })
+
+    expect(html).toContain('class="settings-tabpanel is-active" id="tabpanel-provider"')
+    expect(html).toContain('class="settings-tabpanel" id="tabpanel-assistant"')
+  })
+
+  test('returns to the assistant tab after saving it', () => {
+    // The save redirects; landing back on TMDB would lose the operator's place.
+    const html = renderMetadataSettings(metadataConfig, state, {
+      assistant: configured,
+      assistantSaved: true,
+    })
+
+    expect(html).toContain('class="settings-tabpanel is-active" id="tabpanel-assistant"')
+    expect(html).toContain('class="settings-tabpanel" id="tabpanel-provider"')
+  })
+
+  test('serves every panel visible so a scripting failure is not a dead page', () => {
+    // The script hides the inactive panels on load. If the server hid them,
+    // a client without working JS would lose two thirds of this page.
+    const html = renderMetadataSettings(metadataConfig, state, { assistant: configured })
+
+    expect(html).not.toContain('role="tabpanel" aria-labelledby="tab-assistant" hidden')
+    expect(html).not.toContain('hidden>')
+    expect(html).toContain('TMDB v3 API key')
+    expect(html).toContain('Review assistant')
+    expect(html).toContain('Re-evaluate library decisions')
+  })
+})
+
+describe('assistant connection test', () => {
+  test('reports inline rather than reloading the page', () => {
+    const html = renderMetadataSettings(metadataConfig, state, { assistant: configured })
+
+    expect(html).toContain('id="assistant-test-result"')
+    expect(html).toContain('hx-post="/settings/metadata/assistant/test"')
+    expect(html).toContain('hx-target="#assistant-test-result"')
+  })
+
+  test('uses the same buttons as the rest of the page', () => {
+    // `button--primary` and `button-row` have no styles anywhere in the CSS.
+    const html = renderMetadataSettings(metadataConfig, state, { assistant: configured })
+
+    expect(html).not.toContain('button--primary')
+    expect(html).not.toContain('button--quiet')
+    expect(html).not.toContain('class="button-row"')
+  })
+})

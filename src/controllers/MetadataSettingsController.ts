@@ -15,6 +15,7 @@ import { OpenAiCompatibleReviewAssistant } from '../services/review/OpenAiCompat
 import type { AutoDecisionPolicy } from '../services/review/autoDecision'
 import { MetadataProviderError } from '../metadata/types'
 import {
+  renderAssistantTestResult,
   renderMetadataSettings,
   renderMetadataTestResult,
   type MetadataSettingsDraft,
@@ -104,33 +105,39 @@ export function createMetadataSettingsController(
     return c.redirect('/settings/metadata?assistantSaved=1', 303)
   })
 
+  /* Answers with a fragment rather than a redirect: a connection check whose
+     only output is a page reload tells you nothing. */
   controller.post('/settings/metadata/assistant/test', async (c) => {
-    if (!assistantStore) return c.redirect('/settings/metadata', 303)
+    if (!assistantStore) {
+      return c.html(renderAssistantTestResult('failed', 'The assistant is not available.'))
+    }
     const config = await loadPersistedReviewAssistantConfig(assistantStore)
     const assistant = new OpenAiCompatibleReviewAssistant({
       ...config,
-      // Test what is stored even when the operator has not switched it on yet.
+      // Test what is stored even when it has not been switched on yet.
       enabled: Boolean(config.apiKey && config.baseUrl),
     })
     if (!assistant.configured) {
-      return c.redirect(
-        '/settings/metadata?assistantTest=failed&assistantMessage=' +
-          encodeURIComponent('Add an endpoint and API key first.'),
-        303
+      return c.html(
+        renderAssistantTestResult(
+          'failed',
+          'Add an endpoint and API key, save, then test.'
+        )
       )
     }
     try {
       await assistant.testConnection()
-      return c.redirect('/settings/metadata?assistantTest=success', 303)
+      return c.html(
+        renderAssistantTestResult('success', `${config.model} answered.`)
+      )
     } catch (error) {
-      const message =
-        error instanceof MetadataProviderError
-          ? `${error.message} (${error.code})`
-          : 'The provider could not be reached.'
-      return c.redirect(
-        '/settings/metadata?assistantTest=failed&assistantMessage=' +
-          encodeURIComponent(message),
-        303
+      return c.html(
+        renderAssistantTestResult(
+          'failed',
+          error instanceof MetadataProviderError
+            ? `${error.message} (${error.code})`
+            : 'The provider could not be reached.'
+        )
       )
     }
   })
