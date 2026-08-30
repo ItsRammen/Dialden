@@ -548,9 +548,31 @@ function technicalModel(
   }
 }
 
-function metadataReason(collection: MediaCollection): string | undefined {
+/**
+ * Why a collection is still waiting, in the terms a person can act on.
+ *
+ * "Ambiguous" is reached two ways: several candidates that all fit, or a
+ * single one that fits but not confidently enough to apply on its own. Saying
+ * "more than one plausible title" for the second case is simply untrue when
+ * the page below it shows exactly one, and it hides the thing worth knowing —
+ * which is usually that the years disagree.
+ */
+export function metadataReason(collection: MediaCollection): string | undefined {
   if (collection.metadataStatus === 'pending') return 'Waiting for background matching.'
-  if (collection.metadataStatus === 'ambiguous') return 'More than one plausible title was found.'
+  if (collection.metadataStatus === 'ambiguous') {
+    const candidates = collection.metadataCandidates ?? []
+    if (candidates.length > 1) return 'More than one plausible title was found.'
+    const only = candidates[0]
+    if (!only) return 'No candidate was confident enough to apply automatically.'
+    if (
+      collection.year !== null &&
+      only.year !== undefined &&
+      only.year !== collection.year
+    ) {
+      return `The title matches, but the candidate's release year (${only.year}) is not this collection's (${collection.year}), so it was not applied automatically. A shelved or re-released film can differ legitimately.`
+    }
+    return 'One plausible title was found, but not confidently enough to apply automatically.'
+  }
   if (collection.metadataStatus === 'unmatched') return 'No reliable title match was found.'
   if (collection.metadataStatus === 'not_configured') return 'TMDB is not configured on the server.'
   if (collection.ratingStatus === 'ambiguous') return 'Conflicting certifications were returned for the selected region.'
