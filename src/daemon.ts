@@ -340,7 +340,10 @@ export class ToastTVDaemon {
       this.repository,
       metadataProvider,
       this.metadataConfig,
-      metadataProfile
+      metadataProfile,
+      undefined,
+      // Records runtime tie-breaks so they revert like any other automatic call.
+      this.repository
     )
     const invalidatedRatings =
       await this.metadataService.synchronizeRatingRegions()

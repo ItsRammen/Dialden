@@ -12,6 +12,11 @@ import {
   type MetadataProvider,
 } from '../../metadata/types'
 import type { IMediaRepository } from '../../repositories/IMediaRepository'
+import {
+  collectionRuntimeMinutes,
+  resolveByRuntime,
+} from './runtimeMatch'
+import type { ReviewDecisionStore } from '../review/auditTypes'
 
 /* Runtime lookups cost one request each, so only the best-ranked few are
    asked about; beyond that the extra calls buy nothing a reviewer would use. */
@@ -79,7 +84,9 @@ export class MetadataEnrichmentService {
     private provider: MetadataProvider,
     private config: MetadataRuntimeConfig,
     private readonly profile: RatingPolicyProfile | null = DEFAULT_KIDS_7_POLICY,
-    private readonly providerFactory: MetadataProviderFactory = createTmdbProvider
+    private readonly providerFactory: MetadataProviderFactory = createTmdbProvider,
+    /** Absent in tests; without it a runtime match simply is not recorded. */
+    private readonly audit?: ReviewDecisionStore
   ) {
     if (!provider.configured) {
       this.state = {
@@ -746,6 +753,9 @@ export class MetadataEnrichmentService {
           )
 
     if (result.status !== 'matched' || !result.candidate) {
+      const byRuntime = await this.matchOnRuntime(collection, candidateRecords)
+      if (byRuntime) return 'matched'
+
       await this.repository.updateCollectionMetadata(collection.id, {
         provider: this.provider.id,
         externalId: null,
@@ -922,6 +932,65 @@ export class MetadataEnrichmentService {
    * best-ranked candidates are asked about. A failure is not fatal -- the
    * candidate simply keeps no runtime and the review carries on.
    */
+  /**
+   * Last resort before a collection is queued for review: if the length of
+   * the file identifies exactly one of the tied candidates, take it.
+   *
+   * This is the only place automation chooses between titles that ordinary
+   * matching could not, so it is recorded in the audit trail like any other
+   * automatic decision and reverts with the rest of them.
+   */
+  private async matchOnRuntime(
+    collection: MediaCollection,
+    candidates: readonly MetadataCandidateRecord[]
+  ): Promise<boolean> {
+    let fileRuntime: number | undefined
+    try {
+      const media = await this.repository.getCollectionMedia(collection.id)
+      fileRuntime = collectionRuntimeMinutes(
+        media.map((item) => item.durationSeconds)
+      )
+    } catch {
+      return false
+    }
+
+    const resolved = resolveByRuntime(candidates, fileRuntime)
+    if (!resolved) return false
+
+    try {
+      await this.hydrateMatch(
+        collection,
+        resolved.candidate.externalId,
+        'matched',
+        resolved.candidate.confidence,
+        candidates,
+        false
+      )
+    } catch {
+      // A provider failure here just means the collection stays for review.
+      return false
+    }
+
+    await this.audit
+      ?.recordReviewDecision({
+        runId: `runtime-${new Date().toISOString().slice(0, 10)}`,
+        collectionId: collection.id,
+        action: 'match',
+        source: 'policy',
+        reason: 'metadata_ambiguous',
+        detail: `File runs ${fileRuntime} min; ${resolved.candidate.title} is listed at ${resolved.candidate.runtimeMinutes} min (${resolved.deltaMinutes} min apart). Every other tied candidate was further off.`,
+        model: null,
+        promptVersion: null,
+        confidence: resolved.candidate.confidence,
+        previousOverride: collection.parentOverride,
+        previousExternalId: collection.metadataExternalId,
+        previousMetadataStatus: collection.metadataStatus,
+      })
+      .catch(() => {})
+
+    return true
+  }
+
   private async withRuntimes(
     collection: MediaCollection,
     candidates: MetadataCandidateRecord[]
