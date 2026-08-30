@@ -15,7 +15,7 @@ describe('LG webOS package assets', () => {
     const manifest = JSON.parse(readFileSync(join(root, 'appinfo.json'), 'utf8'))
     expect(manifest).toMatchObject({
       id: 'com.itsrammen.app.toasttv',
-      version: '0.6.3',
+      version: '0.6.4',
       type: 'web',
       main: 'index.html',
       title: 'ToastTV',
@@ -131,4 +131,81 @@ describe('LG webOS package assets', () => {
     expect(styles).toMatch(/\.catalog-day \{[^}]*transition: background-color 130ms ease/)
   })
 
+})
+
+describe('the stylesheet knows every class the client sets', () => {
+  /**
+   * The guide shipped with its "on air" row invisible for exactly this
+   * reason: app.js set is-now while the stylesheet had a rule for
+   * is-current, and nothing connected the two. A class with no rule is
+   * silent, so it needs a test rather than a reading.
+   */
+  const emitted = (): Set<string> => {
+    const app = readFileSync(join(root, 'app.js'), 'utf8')
+    const markup = readFileSync(join(root, 'index.html'), 'utf8')
+    const found = new Set<string>()
+    for (const match of app.matchAll(
+      /classList\.(?:add|remove|toggle|contains)\(\s*'([a-z][\w-]*)'/g
+    )) {
+      if (match[1]) found.add(match[1])
+    }
+    for (const match of app.matchAll(/className\s*=\s*'([a-z][\w -]*)'/g)) {
+      for (const name of (match[1] ?? '').split(/\s+/)) if (name) found.add(name)
+    }
+    for (const match of markup.matchAll(/class="([^"]+)"/g)) {
+      for (const name of (match[1] ?? '').split(/\s+/)) if (name) found.add(name)
+    }
+    return found
+  }
+
+  const styled = (): Set<string> => {
+    const styles = readFileSync(join(root, 'styles.css'), 'utf8')
+    const found = new Set<string>()
+    for (const match of styles.matchAll(/\.([a-zA-Z][\w-]*)/g)) {
+      if (match[1]) found.add(match[1])
+    }
+    return found
+  }
+
+  test('no class is set that the stylesheet has never heard of', () => {
+    // `hidden` and `is-active` are behavioural and styled by attribute or
+    // by the screen machinery rather than by their own rule.
+    const allowed = new Set(['hidden', 'is-active', 'is-tuning', 'guide-panel--catalog'])
+    const rules = styled()
+    const orphans = [...emitted()].filter(
+      (name) => !rules.has(name) && !allowed.has(name)
+    )
+
+    expect(orphans).toEqual([])
+  })
+
+  test('the programme on air is lit by the class the client actually sets', () => {
+    const app = readFileSync(join(root, 'app.js'), 'utf8')
+    const styles = readFileSync(join(root, 'styles.css'), 'utf8')
+
+    expect(app).toContain("'guide-item' + (isNow ? ' is-now' : '')")
+    expect(styles).toContain('.guide-item.is-now {')
+    expect(styles).toContain('.guide-item.is-now .guide-item__time')
+  })
+
+  test('a guide row styles its own title rather than inheriting a default', () => {
+    // The title rendered at the browser's h3 size, smaller than the
+    // timestamp beside it, because nothing named it.
+    const app = readFileSync(join(root, 'app.js'), 'utf8')
+    const styles = readFileSync(join(root, 'styles.css'), 'utf8')
+
+    expect(app).toContain("title.className = 'guide-item__title'")
+    expect(app).toContain("collection.className = 'guide-item__meta'")
+    expect(styles).toContain('.guide-item__title {')
+    expect(styles).toContain('.guide-item__meta {')
+  })
+
+  test('the hints row is not sat on by the content above it', () => {
+    /* The hints are 38px tall at 24px from the foot, so anything ending
+       lower than about 62px from the bottom lands on top of them. */
+    const styles = readFileSync(join(root, 'styles.css'), 'utf8')
+
+    expect(styles).toMatch(/\.player-dock \{[^}]*bottom: 76px/)
+    expect(styles).toContain('padding: 28px 40px 76px')
+  })
 })

@@ -7,7 +7,7 @@
   var STORAGE_CLIENT_NAME = 'toasttv.clientName.v1';
   var STORAGE_SESSION_OWNER = 'toasttv.sessionOwner.v1';
   var STORAGE_SESSION_OWNER_EPOCH = 'toasttv.sessionOwnerEpoch.v1';
-  var CLIENT_VERSION = '0.6.3';
+  var CLIENT_VERSION = '0.6.4';
   var DEFAULT_SERVER = 'http://TOWER:1993';
   var POLL_INTERVAL_MS = 30000;
   var CHANNEL_REFRESH_INTERVAL_MS = 15000;
@@ -3997,9 +3997,12 @@
       time.className = 'guide-item__time';
       time.textContent = formatTime(program.scheduledStart);
       var details = document.createElement('span');
+      details.className = 'guide-item__body';
       var title = document.createElement('h3');
+      title.className = 'guide-item__title';
       title.textContent = program.title;
       var collection = document.createElement('p');
+      collection.className = 'guide-item__meta';
       collection.textContent = isNow
         ? 'On now · ' + (programEpisodeText(program) || program.collectionTitle || 'Live')
         : (programEpisodeText(program) || program.collectionTitle || 'Scheduled') + ' · Watch channel live';
