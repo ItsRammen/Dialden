@@ -7,7 +7,7 @@
   var STORAGE_CLIENT_NAME = 'toasttv.clientName.v1';
   var STORAGE_SESSION_OWNER = 'toasttv.sessionOwner.v1';
   var STORAGE_SESSION_OWNER_EPOCH = 'toasttv.sessionOwnerEpoch.v1';
-  var CLIENT_VERSION = '0.6.4';
+  var CLIENT_VERSION = '0.6.5';
   var DEFAULT_SERVER = 'http://TOWER:1993';
   var POLL_INTERVAL_MS = 30000;
   var CHANNEL_REFRESH_INTERVAL_MS = 15000;
@@ -3660,7 +3660,7 @@
       var channel = channels[index];
       var chip = document.createElement('button');
       chip.type = 'button';
-      chip.className = 'catalog-channel' + (channel.id === state.catalog.channelId ? ' is-active' : '');
+      chip.className = 'catalog-channel' + (channel.id === state.catalog.channelId ? ' is-current' : '');
       chip.setAttribute('data-focusable', '');
       chip.setAttribute('data-catalog-channel', channel.id);
       var number = document.createElement('span');
@@ -3688,7 +3688,7 @@
       var chip = document.createElement('button');
       chip.type = 'button';
       chip.className = 'catalog-day' +
-        (index === state.catalog.dayIndex ? ' is-active' : '') +
+        (index === state.catalog.dayIndex ? ' is-current' : '') +
         (index === 0 ? ' is-today' : '');
       chip.setAttribute('data-focusable', '');
       chip.setAttribute('data-catalog-day', String(index));
@@ -3729,7 +3729,7 @@
     var chipIndex;
     for (chipIndex = 0; chipIndex < channelChips.length; chipIndex += 1) {
       channelChips[chipIndex].classList.toggle(
-        'is-active',
+        'is-current',
         channelChips[chipIndex].getAttribute('data-catalog-channel') === channelId
       );
     }
@@ -3747,7 +3747,7 @@
     var chipIndex;
     for (chipIndex = 0; chipIndex < dayChips.length; chipIndex += 1) {
       var chipDay = Number(dayChips[chipIndex].getAttribute('data-catalog-day'));
-      dayChips[chipIndex].classList.toggle('is-active', chipDay === dayIndex);
+      dayChips[chipIndex].classList.toggle('is-current', chipDay === dayIndex);
     }
     loadCatalogDay();
   }
@@ -4459,14 +4459,14 @@
   function focusNode(node) {
     if (!node || typeof node.focus !== 'function') return;
     var guideStart = elements.guideList.contains(node) ? elements.guideList.scrollTop : null;
-    var railStart = elements.catalogRail.contains(node) ? elements.catalogRail.scrollLeft : null;
+    var railStart = elements.catalogRail.contains(node) ? elements.catalogRail.scrollTop : null;
     var focused = document.querySelectorAll('.is-focused');
     var index;
     for (index = 0; index < focused.length; index += 1) focused[index].classList.remove('is-focused');
     node.classList.add('is-focused');
     try { node.focus(); } catch (ignore) {}
     if (guideStart !== null) elements.guideList.scrollTop = guideStart;
-    if (railStart !== null) elements.catalogRail.scrollLeft = railStart;
+    if (railStart !== null) elements.catalogRail.scrollTop = railStart;
     if (elements.channelGrid.contains(node)) {
       var channelTop = node.offsetTop;
       var channelBottom = channelTop + node.offsetHeight;
@@ -4483,17 +4483,16 @@
         animateGuideScroll(elements.guideList, bottom - elements.guideList.clientHeight, false);
       }
     }
-    /* The channel rail is a horizontal row, so it is measured across rather
-       than down. Reading offsetTop here meant every chip reported the same
-       position, no condition ever fired, and the rail never moved -- which
-       left every channel past the screen edge unreachable. */
+    /* The channel rail is a column beside the schedule, so it scrolls down
+       like the programme list. It was briefly a horizontal strip, which is
+       why this once measured across. */
     if (elements.catalogRail.contains(node)) {
-      var railLeft = node.offsetLeft;
-      var railRight = railLeft + node.offsetWidth;
-      if (railLeft < elements.catalogRail.scrollLeft) {
-        animateGuideScroll(elements.catalogRail, railLeft, true);
-      } else if (railRight > elements.catalogRail.scrollLeft + elements.catalogRail.clientWidth) {
-        animateGuideScroll(elements.catalogRail, railRight - elements.catalogRail.clientWidth, true);
+      var railTop = node.offsetTop;
+      var railBottom = railTop + node.offsetHeight;
+      if (railTop < elements.catalogRail.scrollTop) {
+        animateGuideScroll(elements.catalogRail, railTop, false);
+      } else if (railBottom > elements.catalogRail.scrollTop + elements.catalogRail.clientHeight) {
+        animateGuideScroll(elements.catalogRail, railBottom - elements.catalogRail.clientHeight, false);
       }
     }
     if (elements.catalogDays.contains(node)) {

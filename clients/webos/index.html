@@ -135,10 +135,12 @@
         <canvas id="tuningFreezeFrame" class="tuning-freeze-frame" aria-hidden="true"></canvas>
         <div id="playerBackdrop" class="player-backdrop">
           <div class="player-backdrop__brand"><img src="assets/logo.png" alt=""><span>ToastTV</span></div>
-          <div id="tuningPanel" class="tuning-panel" role="status" aria-live="polite">
-            <span class="tuning-spinner" aria-hidden="true"></span>
-            <div><p id="tuningChannelName">Tuning channel</p><small id="tuningMessage">Preparing the live broadcast…</small></div>
-          </div>
+        </div>
+        <!-- Outside the backdrop deliberately: the backdrop is hidden as soon
+             as there is a picture, and this has to be able to speak over one. -->
+        <div id="tuningPanel" class="tuning-panel" role="status" aria-live="polite">
+          <span class="tuning-spinner" aria-hidden="true"></span>
+          <div><p id="tuningChannelName">Tuning channel</p><small id="tuningMessage">Preparing the live broadcast…</small></div>
         </div>
 
         <div class="player-dock player-chrome">

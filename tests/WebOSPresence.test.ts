@@ -103,7 +103,7 @@ describe('LG webOS presence telemetry', () => {
       script.indexOf('function shiftCatalogDay')
     )
     expect(setCatalogDay).not.toContain('renderCatalogDays()')
-    expect(setCatalogDay).toContain("classList.toggle('is-active'")
+    expect(setCatalogDay).toContain("classList.toggle('is-current'")
     expect(script).toContain('shiftCatalogDay(code === 39 ? 1 : -1)')
     expect(script).toContain('shiftCatalogChannel(code === 33 || code === 427 ? 1 : -1)')
     // Selecting a program closes the overlay and tunes live from either view.
@@ -1363,30 +1363,53 @@ describe('the channel rail scrolls along its own axis', () => {
     'utf8'
   )
 
-  test('is measured across, never down', () => {
-    /* The rail is a horizontal flex row. Measuring it with offsetTop meant
-       every chip reported the same position, no scroll condition ever fired,
-       and channels past the screen edge could not be reached. */
+  test('is measured down, matching the column it now is', () => {
+    /* The rail was briefly a horizontal strip, and measuring a row with
+       offsetTop meant every chip reported the same position so it never
+       scrolled at all. It is a column beside the schedule now, so the axis
+       follows it back. The day strip below stays horizontal. */
     const focusNode = script.slice(
       script.indexOf('function focusNode('),
       script.indexOf('function animateGuideScroll(')
     )
-    // Only the rail block: the grid and the list above it are columns and
-    // legitimately measure downward.
     const rail = focusNode.slice(
       focusNode.indexOf('if (elements.catalogRail.contains(node)) {'),
       focusNode.indexOf('if (elements.catalogDays.contains(node)) {')
     )
+    const days = focusNode.slice(
+      focusNode.indexOf('if (elements.catalogDays.contains(node)) {')
+    )
 
-    expect(rail).toContain('offsetLeft')
-    expect(rail).toContain('clientWidth')
-    expect(rail).not.toContain('offsetTop')
-    expect(rail).not.toContain('clientHeight')
+    expect(rail).toContain('offsetTop')
+    expect(rail).toContain('clientHeight')
+    expect(rail).not.toContain('offsetLeft')
+    // The day chips really are a row, and must stay measured across.
+    expect(days).toContain('offsetLeft')
+    expect(days).toContain('clientWidth')
   })
 
-  test('the rail scroll position is preserved on the horizontal axis', () => {
-    expect(script).toContain('elements.catalogRail.scrollLeft = railStart')
-    expect(script).not.toContain('elements.catalogRail.scrollTop = railStart')
+  test('the rail scroll position is preserved on the vertical axis', () => {
+    expect(script).toContain('elements.catalogRail.scrollTop = railStart')
+    expect(script).not.toContain('elements.catalogRail.scrollLeft = railStart')
+  })
+
+  test('the rail and the schedule sit side by side', () => {
+    const styles = readFileSync(
+      join(import.meta.dir, '..', 'clients', 'webos', 'styles.css'),
+      'utf8'
+    )
+
+    // A strip of chips could show six of a hundred channels.
+    expect(styles).toContain('.guide-shell { flex: 1 1 auto; display: flex; flex-direction: row;')
+    expect(styles).toMatch(/\.catalog-rail \{[^}]*overflow-y: auto/)
+    expect(styles).toMatch(/\.catalog-rail \{[^}]*border-right/)
+  })
+
+  test('the channel you are looking at is lit by the class the client sets', () => {
+    /* The rail marked the selection is-active while the stylesheet lit
+       is-current, so the guide never showed which channel it was on. */
+    expect(script).toContain("' is-current' : ''")
+    expect(script).not.toContain("' is-active' : ''")
   })
 
   test('the animation moves the axis it was asked for', () => {

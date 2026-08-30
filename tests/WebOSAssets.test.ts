@@ -15,7 +15,7 @@ describe('LG webOS package assets', () => {
     const manifest = JSON.parse(readFileSync(join(root, 'appinfo.json'), 'utf8'))
     expect(manifest).toMatchObject({
       id: 'com.itsrammen.app.toasttv',
-      version: '0.6.4',
+      version: '0.6.5',
       type: 'web',
       main: 'index.html',
       title: 'ToastTV',
@@ -147,6 +147,14 @@ describe('the stylesheet knows every class the client sets', () => {
     for (const match of app.matchAll(
       /classList\.(?:add|remove|toggle|contains)\(\s*'([a-z][\w-]*)'/g
     )) {
+      if (match[1]) found.add(match[1])
+    }
+    /* Classes are frequently built by concatenation, as in
+       'catalog-day' + (selected ? ' is-current' : ''), so every quoted
+       fragment that looks like one counts rather than only whole
+       assignments. Three selection classes hid behind exactly that shape
+       and lit nothing at all. */
+    for (const match of app.matchAll(/'\s?((?:is-|has-)[\w-]+)'/g)) {
       if (match[1]) found.add(match[1])
     }
     for (const match of app.matchAll(/className\s*=\s*'([a-z][\w -]*)'/g)) {
