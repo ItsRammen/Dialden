@@ -15,7 +15,7 @@ describe('LG webOS package assets', () => {
     const manifest = JSON.parse(readFileSync(join(root, 'appinfo.json'), 'utf8'))
     expect(manifest).toMatchObject({
       id: 'com.itsrammen.app.toasttv',
-      version: '0.6.1',
+      version: '0.6.2',
       type: 'web',
       main: 'index.html',
       title: 'ToastTV',
@@ -73,14 +73,32 @@ describe('LG webOS package assets', () => {
     )
   })
 
-  test('uses a TV-readable EPG scrollbar and animated remote focus', () => {
+  test('shows no scrollbars anywhere in the guide', () => {
+    /* These were once styled to be visible, as a reading aid. On the set they
+       read as browser furniture; position is carried by the lit current row
+       and the focus ring instead. Every scrolling surface in the overlay is
+       covered, not just the programme list. */
     const styles = readFileSync(join(root, 'styles.css'), 'utf8')
 
-    expect(styles).toContain('.guide-list::-webkit-scrollbar { width: 12px; }')
-    expect(styles).toContain('.guide-list::-webkit-scrollbar-track')
-    expect(styles).toContain('.guide-list::-webkit-scrollbar-thumb')
-    expect(styles).toContain('min-height: 58px')
-    expect(styles).toContain('.guide-list::-webkit-scrollbar-button')
+    expect(styles).not.toMatch(/::-webkit-scrollbar { width: (?!0)d/)
+    expect(styles).not.toMatch(/::-webkit-scrollbar-button { height: (?!0)d/)
+    for (const surface of ['.guide-list', '.catalog-rail', '.catalog-days']) {
+      expect(styles).toContain(`${surface}::-webkit-scrollbar`)
+    }
+  })
+
+  test('keeps the guide and dock legible without filling the screen', () => {
+    const styles = readFileSync(join(root, 'styles.css'), 'utf8')
+
+    // Rows were 58px and the title 58px; both crowded a 1080 line panel.
+    expect(styles).toContain('min-height: 41px')
+    expect(styles).toMatch(/#playerTitle {[^}]*font-size: 41px/)
+    expect(styles).not.toMatch(/#playerTitle {[^}]*font-size: 58px/)
+  })
+
+  test('animates remote focus', () => {
+    const styles = readFileSync(join(root, 'styles.css'), 'utf8')
+
     expect(styles).toContain('transition: background-color 130ms ease')
     expect(styles).toContain('transform: translateX(4px)')
     expect(styles).toContain('.channel-preview__upcoming p.hidden { display: block !important; visibility: hidden; }')

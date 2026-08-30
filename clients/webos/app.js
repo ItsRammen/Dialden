@@ -7,7 +7,7 @@
   var STORAGE_CLIENT_NAME = 'toasttv.clientName.v1';
   var STORAGE_SESSION_OWNER = 'toasttv.sessionOwner.v1';
   var STORAGE_SESSION_OWNER_EPOCH = 'toasttv.sessionOwnerEpoch.v1';
-  var CLIENT_VERSION = '0.6.1';
+  var CLIENT_VERSION = '0.6.2';
   var DEFAULT_SERVER = 'http://TOWER:1993';
   var POLL_INTERVAL_MS = 30000;
   var CHANNEL_REFRESH_INTERVAL_MS = 15000;
@@ -4446,14 +4446,14 @@
   function focusNode(node) {
     if (!node || typeof node.focus !== 'function') return;
     var guideStart = elements.guideList.contains(node) ? elements.guideList.scrollTop : null;
-    var railStart = elements.catalogRail.contains(node) ? elements.catalogRail.scrollTop : null;
+    var railStart = elements.catalogRail.contains(node) ? elements.catalogRail.scrollLeft : null;
     var focused = document.querySelectorAll('.is-focused');
     var index;
     for (index = 0; index < focused.length; index += 1) focused[index].classList.remove('is-focused');
     node.classList.add('is-focused');
     try { node.focus(); } catch (ignore) {}
     if (guideStart !== null) elements.guideList.scrollTop = guideStart;
-    if (railStart !== null) elements.catalogRail.scrollTop = railStart;
+    if (railStart !== null) elements.catalogRail.scrollLeft = railStart;
     if (elements.channelGrid.contains(node)) {
       var channelTop = node.offsetTop;
       var channelBottom = channelTop + node.offsetHeight;
@@ -4470,12 +4470,17 @@
         animateGuideScroll(elements.guideList, bottom - elements.guideList.clientHeight, false);
       }
     }
+    /* The channel rail is a horizontal row, so it is measured across rather
+       than down. Reading offsetTop here meant every chip reported the same
+       position, no condition ever fired, and the rail never moved -- which
+       left every channel past the screen edge unreachable. */
     if (elements.catalogRail.contains(node)) {
-      var railTop = node.offsetTop;
-      var railBottom = railTop + node.offsetHeight;
-      if (railTop < elements.catalogRail.scrollTop) animateGuideScroll(elements.catalogRail, railTop, true);
-      else if (railBottom > elements.catalogRail.scrollTop + elements.catalogRail.clientHeight) {
-        animateGuideScroll(elements.catalogRail, railBottom - elements.catalogRail.clientHeight, true);
+      var railLeft = node.offsetLeft;
+      var railRight = railLeft + node.offsetWidth;
+      if (railLeft < elements.catalogRail.scrollLeft) {
+        animateGuideScroll(elements.catalogRail, railLeft, true);
+      } else if (railRight > elements.catalogRail.scrollLeft + elements.catalogRail.clientWidth) {
+        animateGuideScroll(elements.catalogRail, railRight - elements.catalogRail.clientWidth, true);
       }
     }
     if (elements.catalogDays.contains(node)) {
@@ -4488,16 +4493,20 @@
     }
   }
 
+  /** `isRail` selects the horizontal axis; everything else scrolls down. */
   function animateGuideScroll(container, target, isRail) {
     if (!container) return;
-    var maximum = Math.max(0, container.scrollHeight - container.clientHeight);
+    var maximum = isRail
+      ? Math.max(0, container.scrollWidth - container.clientWidth)
+      : Math.max(0, container.scrollHeight - container.clientHeight);
     var destination = Math.max(0, Math.min(maximum, target));
-    var start = container.scrollTop;
+    var start = isRail ? container.scrollLeft : container.scrollTop;
     var distance = destination - start;
     var activeFrame = isRail ? catalogRailScrollFrame : guideScrollFrame;
     if (activeFrame && window.cancelAnimationFrame) window.cancelAnimationFrame(activeFrame);
     if (!window.requestAnimationFrame || Math.abs(distance) < 2) {
-      container.scrollTop = destination;
+      if (isRail) container.scrollLeft = destination;
+      else container.scrollTop = destination;
       return;
     }
     var startedAt = null;
@@ -4505,7 +4514,9 @@
       if (startedAt === null) startedAt = timestamp;
       var progress = Math.min(1, (timestamp - startedAt) / 150);
       var eased = 1 - Math.pow(1 - progress, 3);
-      container.scrollTop = Math.round(start + distance * eased);
+      var position = Math.round(start + distance * eased);
+      if (isRail) container.scrollLeft = position;
+      else container.scrollTop = position;
       if (progress < 1) {
         var frame = window.requestAnimationFrame(step);
         if (isRail) catalogRailScrollFrame = frame;

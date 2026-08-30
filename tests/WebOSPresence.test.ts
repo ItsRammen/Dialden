@@ -1356,3 +1356,47 @@ describe('LG webOS presence telemetry', () => {
     expect(script).toContain('window.cancelAnimationFrame(guideScrollFrame)')
   })
 })
+
+describe('the channel rail scrolls along its own axis', () => {
+  const script = readFileSync(
+    join(import.meta.dir, '..', 'clients', 'webos', 'app.js'),
+    'utf8'
+  )
+
+  test('is measured across, never down', () => {
+    /* The rail is a horizontal flex row. Measuring it with offsetTop meant
+       every chip reported the same position, no scroll condition ever fired,
+       and channels past the screen edge could not be reached. */
+    const focusNode = script.slice(
+      script.indexOf('function focusNode('),
+      script.indexOf('function animateGuideScroll(')
+    )
+    // Only the rail block: the grid and the list above it are columns and
+    // legitimately measure downward.
+    const rail = focusNode.slice(
+      focusNode.indexOf('if (elements.catalogRail.contains(node)) {'),
+      focusNode.indexOf('if (elements.catalogDays.contains(node)) {')
+    )
+
+    expect(rail).toContain('offsetLeft')
+    expect(rail).toContain('clientWidth')
+    expect(rail).not.toContain('offsetTop')
+    expect(rail).not.toContain('clientHeight')
+  })
+
+  test('the rail scroll position is preserved on the horizontal axis', () => {
+    expect(script).toContain('elements.catalogRail.scrollLeft = railStart')
+    expect(script).not.toContain('elements.catalogRail.scrollTop = railStart')
+  })
+
+  test('the animation moves the axis it was asked for', () => {
+    const animate = script.slice(
+      script.indexOf('function animateGuideScroll('),
+      script.indexOf('function closestFocusable(')
+    )
+
+    expect(animate).toContain('container.scrollWidth - container.clientWidth')
+    expect(animate).toContain('isRail ? container.scrollLeft : container.scrollTop')
+    expect(animate).toContain('if (isRail) container.scrollLeft = position')
+  })
+})
