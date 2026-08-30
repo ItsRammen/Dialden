@@ -47,6 +47,8 @@ export interface MetadataCandidateRecord {
   readonly confidence: number
 }
 
+import type { AudienceBand } from './policy/audienceBands'
+
 export interface MediaCollection {
   readonly id: number
   readonly rootId: string
@@ -73,6 +75,12 @@ export interface MediaCollection {
   readonly studios?: readonly string[]
   readonly certification: string | null
   readonly certificationRegion: string | null
+  /**
+   * The youngest audience the certification suits, derived rather than
+   * stored: it is a pure function of the certification, so deriving it on
+   * read means it can never disagree with the rating it came from.
+   */
+  readonly audienceBand: AudienceBand | null
   readonly ratingStatus: MetadataRatingStatus
   readonly matchConfidence: number | null
   readonly metadataCandidates: readonly MetadataCandidateRecord[]

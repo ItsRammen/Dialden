@@ -10,6 +10,7 @@ import type {
   ReviewDecisionDraft,
   ReviewDecisionRecord,
 } from '../services/review/auditTypes'
+import { audienceBandFor } from '../policy/audienceBands'
 import type {
   MediaItem,
   MediaType,
@@ -1717,6 +1718,7 @@ export class MediaRepository implements IMediaRepository {
       studios: this.parseStringArray(row.studios_json),
       certification: this.nullableString(row.certification),
       certificationRegion: this.nullableString(row.certification_region),
+      audienceBand: audienceBandFor(this.nullableString(row.certification)),
       ratingStatus: this.normalizeRatingStatus(row.rating_status),
       matchConfidence: this.nullableNumber(row.match_confidence),
       metadataCandidates: this.parseCandidates(row.metadata_candidates_json),

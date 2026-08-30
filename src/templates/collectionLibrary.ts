@@ -35,6 +35,8 @@ export interface CollectionMetadataViewModel {
   readonly externalId?: string | number
   readonly certification?: string
   readonly certificationRegion?: string
+  /** The rung the certification puts this on, in plain words. */
+  readonly audienceLabel?: string
   readonly reason?: string
 }
 
@@ -289,6 +291,11 @@ function renderMetadata(metadata: CollectionMetadataViewModel): string {
         <div><dt>Status</dt><dd>${METADATA_LABEL[metadata.status]}</dd></div>
         <div><dt>Match</dt><dd>${matchParts.length > 0 ? matchParts.join(' · ') : 'No confirmed match'}</dd></div>
         <div><dt>Certification</dt><dd>${certification}</dd></div>
+        <div><dt>Audience</dt><dd>${
+          metadata.audienceLabel
+            ? escapeHtml(metadata.audienceLabel)
+            : 'Not established'
+        }</dd></div>
       </dl>
       ${metadata.reason ? `<p><strong>Metadata reason:</strong> ${escapeHtml(metadata.reason)}</p>` : ''}
     </div>

@@ -14,6 +14,7 @@ import {
   parseEpisodeDisplayTitle,
   parseEpisodeRange,
 } from '../domain/CollectionIdentity'
+import { audienceBandLabel } from '../policy/audienceBands'
 import type {
   LibrarySummary,
   MediaCollection,
@@ -504,6 +505,9 @@ function metadataModel(collection: MediaCollection) {
     matchedTitle: collection.metadataTitle ?? undefined,
     externalId: collection.metadataExternalId ?? undefined,
     certification: collection.certification ?? undefined,
+    ...(collection.audienceBand
+      ? { audienceLabel: audienceBandLabel(collection.audienceBand) }
+      : {}),
     certificationRegion: collection.certificationRegion ?? undefined,
     reason: collection.metadataError ?? metadataReason(collection),
   }

@@ -44,6 +44,7 @@ function collection(
     studios: [],
     certification: 'TV-Y7',
     certificationRegion: 'US',
+    audienceBand: null,
     ratingStatus: 'resolved',
     matchConfidence: 1,
     metadataCandidates: [],
