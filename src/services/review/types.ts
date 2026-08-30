@@ -15,6 +15,8 @@ export interface AssistantCandidate {
   readonly title: string
   readonly year?: number
   readonly overview?: string
+  /** Minutes, per the provider. Checkable against the file on disk. */
+  readonly runtimeMinutes?: number
 }
 
 export interface DisambiguationRequest {
@@ -22,6 +24,12 @@ export interface DisambiguationRequest {
   readonly parsedTitle: string
   readonly year?: number
   readonly mediaType: 'movie' | 'tv'
+  /**
+   * How long the file actually is, in minutes. The one fact here that comes
+   * from the library rather than the catalogue, and so the only one that can
+   * settle a tie between two records with the same title and year.
+   */
+  readonly fileRuntimeMinutes?: number
   /** Never empty: with nothing to choose between there is nothing to ask. */
   readonly candidates: readonly AssistantCandidate[]
 }

@@ -49,6 +49,8 @@ export interface TmdbMovieDetails extends TmdbMovieSearchResult {
   readonly backdrop_path?: unknown
   readonly genres?: unknown
   readonly production_companies?: unknown
+  /** Minutes. Absent from search results; only detail responses carry it. */
+  readonly runtime?: unknown
 }
 
 export interface TmdbTVDetails extends TmdbTVSearchResult {
@@ -56,6 +58,8 @@ export interface TmdbTVDetails extends TmdbTVSearchResult {
   readonly genres?: unknown
   readonly networks?: unknown
   readonly production_companies?: unknown
+  /** Minutes per episode, as a list; TMDB rarely carries more than one. */
+  readonly episode_run_time?: unknown
 }
 
 export interface TmdbTVEpisode {

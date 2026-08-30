@@ -79,6 +79,8 @@ export interface ReviewRunnerDeps {
       offset?: number
     }): Promise<MediaCollection[]>
     getCollection(id: number): Promise<MediaCollection | null>
+    /** Measured length of the collection's media, when it is known. */
+    getRuntimeMinutes?(id: number): Promise<number | undefined>
     setOverride(id: number, decision: OverrideDecision): Promise<boolean>
   }
   readonly metadata: {
@@ -197,6 +199,16 @@ export class ReviewRunner {
     }
   }
 
+  /** A missing or failing runtime lookup must not abandon the collection. */
+  private async runtimeOf(id: number): Promise<number | undefined> {
+    if (!this.deps.library.getRuntimeMinutes) return undefined
+    try {
+      return await this.deps.library.getRuntimeMinutes(id)
+    } catch {
+      return undefined
+    }
+  }
+
   private get assistantAvailable(): boolean {
     return this.deps.assistant?.configured === true
   }
@@ -285,6 +297,7 @@ export class ReviewRunner {
         attempted++
 
         const candidates = candidatesOf(collection)
+        const fileRuntime = await this.runtimeOf(collection.id)
         let outcome
         try {
           outcome = await assistant.disambiguate(
@@ -293,10 +306,16 @@ export class ReviewRunner {
               parsedTitle: collection.parsedTitle,
               ...(collection.year === null ? {} : { year: collection.year }),
               mediaType: collection.libraryKind === 'movie' ? 'movie' : 'tv',
+              ...(fileRuntime === undefined
+                ? {}
+                : { fileRuntimeMinutes: fileRuntime }),
               candidates: candidates.map((candidate) => ({
                 externalId: candidate.externalId,
                 title: candidate.title,
                 ...(candidate.year === undefined ? {} : { year: candidate.year }),
+                ...(candidate.runtimeMinutes === undefined
+                  ? {}
+                  : { runtimeMinutes: candidate.runtimeMinutes }),
                 ...(candidate.overview === undefined
                   ? {}
                   : { overview: candidate.overview }),

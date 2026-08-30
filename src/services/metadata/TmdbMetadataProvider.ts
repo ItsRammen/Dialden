@@ -290,10 +290,28 @@ function mapMovieDetails(raw: TmdbMovieDetails): ProviderTitleDetails {
   return {
     ...candidate,
     ...optionalString('backdropPath', raw.backdrop_path),
+    ...runtimeMinutes(raw.runtime),
     genres: mapGenres(raw.genres),
     networks: [],
     studios: mapNames(raw.production_companies),
   }
+}
+
+/** TMDB reports 0 for unknown, which is not a runtime. */
+function runtimeMinutes(value: unknown): { runtimeMinutes?: number } {
+  const minutes = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(minutes) && minutes > 0
+    ? { runtimeMinutes: Math.round(minutes) }
+    : {}
+}
+
+function episodeRuntimeMinutes(value: unknown): { runtimeMinutes?: number } {
+  if (!Array.isArray(value)) return {}
+  for (const entry of value) {
+    const mapped = runtimeMinutes(entry)
+    if (mapped.runtimeMinutes !== undefined) return mapped
+  }
+  return {}
 }
 
 function mapTVDetails(raw: TmdbTVDetails): ProviderTitleDetails {
@@ -302,6 +320,7 @@ function mapTVDetails(raw: TmdbTVDetails): ProviderTitleDetails {
   return {
     ...candidate,
     ...optionalString('backdropPath', raw.backdrop_path),
+    ...episodeRuntimeMinutes(raw.episode_run_time),
     genres: mapGenres(raw.genres),
     networks: mapNames(raw.networks),
     studios: mapNames(raw.production_companies),

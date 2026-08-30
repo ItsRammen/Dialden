@@ -30,6 +30,13 @@ export interface MetadataCandidate {
 
 export interface ProviderTitleDetails extends MetadataCandidate {
   readonly backdropPath?: string
+  /**
+   * Minutes. For a film this is the whole feature; for a series it is one
+   * episode. It is the strongest signal available for telling apart two
+   * records that share a title and a year, because it can be checked against
+   * the file on disk.
+   */
+  readonly runtimeMinutes?: number
   readonly genres: readonly string[]
   readonly networks?: readonly string[]
   readonly studios?: readonly string[]

@@ -501,3 +501,90 @@ describe('automated review runner', () => {
     expect(h.overrides).toHaveLength(0)
   })
 })
+
+describe('file runtime reaches the assistant', () => {
+  test('a failing runtime lookup does not abandon the collection', async () => {
+    // The runtime is a bonus signal; losing it must not lose the review.
+    const audit = new FakeAudit()
+    const seen: { fileRuntimeMinutes?: number }[] = []
+    const runner = new ReviewRunner({
+      library: {
+        getReviewQueue: async () => [
+          collection({
+            id: 1,
+            metadataCandidates: [candidate('1', 'A'), candidate('2', 'B')],
+          }),
+        ],
+        getCollection: async () => null,
+        getRuntimeMinutes: async () => {
+          throw new Error('probe unavailable')
+        },
+        setOverride: async () => true,
+      },
+      metadata: { confirmMatch: async (id) => collection({ id }) },
+      audit,
+      assistant: {
+        id: 'fake',
+        configured: true,
+        testConnection: async () => {},
+        disambiguate: async (request) => {
+          seen.push(request)
+          return {
+            status: 'accepted',
+            value: { externalId: '1', confidence: 0.9, reason: 'ok' },
+          }
+        },
+        assessSuitability: async () => ({ status: 'rejected', reason: 'unused' }),
+      },
+      newRunId: () => 'run-1',
+    })
+
+    const report = await runner.run(
+      { dryRun: false, limit: 10, callBudget: 5, maxConcurrency: 1 },
+      blockMissing
+    )
+
+    expect(report.matched).toBe(1)
+    expect(seen[0]?.fileRuntimeMinutes).toBeUndefined()
+  })
+
+  test('passes the measured runtime through when it is available', async () => {
+    const seen: { fileRuntimeMinutes?: number }[] = []
+    const runner = new ReviewRunner({
+      library: {
+        getReviewQueue: async () => [
+          collection({
+            id: 1,
+            metadataCandidates: [candidate('1', 'A'), candidate('2', 'B')],
+          }),
+        ],
+        getCollection: async () => null,
+        getRuntimeMinutes: async () => 108,
+        setOverride: async () => true,
+      },
+      metadata: { confirmMatch: async (id) => collection({ id }) },
+      audit: new FakeAudit(),
+      assistant: {
+        id: 'fake',
+        configured: true,
+        testConnection: async () => {},
+        disambiguate: async (request) => {
+          seen.push(request)
+          return {
+            status: 'accepted',
+            value: { externalId: '1', confidence: 0.9, reason: 'ok' },
+          }
+        },
+        assessSuitability: async () => ({ status: 'rejected', reason: 'unused' }),
+      },
+      newRunId: () => 'run-1',
+    })
+
+    await runner.run(
+      { dryRun: false, limit: 10, callBudget: 5, maxConcurrency: 1 },
+      blockMissing
+    )
+
+    expect(seen[0]?.fileRuntimeMinutes).toBe(108)
+  })
+})

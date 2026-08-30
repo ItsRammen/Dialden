@@ -120,7 +120,14 @@ export class OpenAiCompatibleReviewAssistant implements ReviewAssistant {
             'entries — but a different story, cast or era is decisive. ' +
             'When only one candidate is supplied the task is verification, not choice: ' +
             'it being the only option is not evidence that it is right, so return null ' +
-            'unless it genuinely refers to the same work.',
+            'unless it genuinely refers to the same work. ' +
+            'When the file runtime is given, it is the strongest evidence available, ' +
+            'because it is measured from the file itself rather than taken from a ' +
+            'catalogue. A candidate whose runtime is within a few minutes is strongly ' +
+            'supported; one that differs by more than about fifteen per cent is very ' +
+            'unlikely to be the same cut, and a candidate roughly half or double the ' +
+            'length is almost certainly a different work such as an abridged edition, ' +
+            'a featurette, or a making-of.',
         },
         { role: 'user', content: renderDisambiguationPrompt(request) },
       ],
@@ -298,6 +305,9 @@ function renderDisambiguationPrompt(request: DisambiguationRequest): string {
     `Library title: ${request.parsedTitle}`,
     request.year === undefined ? null : `Library year: ${request.year}`,
     `Kind: ${request.mediaType === 'movie' ? 'film' : 'television series'}`,
+    request.fileRuntimeMinutes === undefined
+      ? null
+      : `Measured file runtime: ${request.fileRuntimeMinutes} minutes`,
     '',
     request.candidates.length === 1
       ? 'One candidate. Confirm it only if it is the same work; otherwise return null.'
@@ -307,6 +317,9 @@ function renderDisambiguationPrompt(request: DisambiguationRequest): string {
         `${index + 1}. id=${candidate.externalId}`,
         `title=${candidate.title}`,
         candidate.year === undefined ? null : `year=${candidate.year}`,
+        candidate.runtimeMinutes === undefined
+          ? null
+          : `runtime=${candidate.runtimeMinutes}min`,
         candidate.overview ? `overview=${truncate(candidate.overview, 400)}` : null,
       ].filter((part): part is string => part !== null)
       return parts.join(' | ')

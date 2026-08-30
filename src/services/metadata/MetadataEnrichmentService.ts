@@ -12,6 +12,10 @@ import {
   type MetadataProvider,
 } from '../../metadata/types'
 import type { IMediaRepository } from '../../repositories/IMediaRepository'
+
+/* Runtime lookups cost one request each, so only the best-ranked few are
+   asked about; beyond that the extra calls buy nothing a reviewer would use. */
+const RUNTIME_LOOKUP_LIMIT = 5
 import type {
   MediaCollection,
   MetadataCandidateRecord,
@@ -733,7 +737,13 @@ export class MetadataEnrichmentService {
         }
       }
     }
-    const candidateRecords = this.toCandidateRecords(result.candidates)
+    const candidateRecords =
+      result.status === 'matched'
+        ? this.toCandidateRecords(result.candidates)
+        : await this.withRuntimes(
+            collection,
+            this.toCandidateRecords(result.candidates)
+          )
 
     if (result.status !== 'matched' || !result.candidate) {
       await this.repository.updateCollectionMetadata(collection.id, {
@@ -901,6 +911,51 @@ export class MetadataEnrichmentService {
       // Preserve the original provider failure. Health is already degraded
       // even if persisting the row-level diagnostic also fails.
     }
+  }
+
+  /**
+   * Fills in runtimes for the candidates of a collection nobody could match.
+   *
+   * Search results carry no runtime, so this costs one detail request per
+   * candidate. It is therefore spent only where it can change the answer: a
+   * collection that is already matched is left alone, and only the few
+   * best-ranked candidates are asked about. A failure is not fatal -- the
+   * candidate simply keeps no runtime and the review carries on.
+   */
+  private async withRuntimes(
+    collection: MediaCollection,
+    candidates: MetadataCandidateRecord[]
+  ): Promise<MetadataCandidateRecord[]> {
+    if (candidates.length < 2) return candidates
+    const enriched: MetadataCandidateRecord[] = []
+    for (const [index, candidate] of candidates.entries()) {
+      if (index >= RUNTIME_LOOKUP_LIMIT || candidate.runtimeMinutes !== undefined) {
+        enriched.push(candidate)
+        continue
+      }
+      try {
+        const details =
+          candidate.mediaType === 'movie'
+            ? await this.provider.getMovie(candidate.externalId, {
+                language: this.config.language,
+              })
+            : await this.provider.getTV(candidate.externalId, {
+                language: this.config.language,
+              })
+        enriched.push({
+          ...candidate,
+          ...(details.runtimeMinutes === undefined
+            ? {}
+            : { runtimeMinutes: details.runtimeMinutes }),
+          ...(candidate.overview || !details.overview
+            ? {}
+            : { overview: details.overview.slice(0, 600) }),
+        })
+      } catch {
+        enriched.push(candidate)
+      }
+    }
+    return enriched
   }
 
   private toCandidateRecords(

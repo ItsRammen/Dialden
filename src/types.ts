@@ -42,6 +42,8 @@ export interface MetadataCandidateRecord {
    */
   readonly overview?: string
   readonly popularity?: number
+  /** Minutes, when the provider was asked for detail. Compared to the file. */
+  readonly runtimeMinutes?: number
   readonly confidence: number
 }
 

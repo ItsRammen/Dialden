@@ -103,6 +103,7 @@ export interface CollectionMetadataCandidateViewModel {
   readonly overview?: string
   readonly posterUrl?: string
   readonly referenceUrl?: string
+  readonly runtimeLabel?: string
   readonly confirmAction: string
 }
 
@@ -539,7 +540,11 @@ export function renderCollectionDetail(
                     }
                     <div class="collection-candidate-body">
                       <strong>${escapeHtml(candidate.title)}</strong>${candidate.year ? ` <span>${year(candidate.year)}</span>` : ''}
-                      <small>${Math.round(candidate.confidence * 100)}% match confidence · ${
+                      <small>${Math.round(candidate.confidence * 100)}% match confidence${
+                        candidate.runtimeLabel
+                          ? ` · ${escapeHtml(candidate.runtimeLabel)}`
+                          : ''
+                      } · ${
                         candidate.referenceUrl
                           ? `<a href="${escapeHtml(candidate.referenceUrl)}" target="_blank" rel="noopener noreferrer">TMDB ${escapeHtml(candidate.externalId)}</a>`
                           : `TMDB ${escapeHtml(candidate.externalId)}`

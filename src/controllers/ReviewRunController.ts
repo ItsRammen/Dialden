@@ -28,7 +28,10 @@ export interface ReviewRunControllerDeps {
     }): Promise<MediaCollection[]>
     getDetail(
       id: number
-    ): Promise<{ collection: MediaCollection } | null>
+    ): Promise<{
+      collection: MediaCollection
+      files?: readonly { durationSeconds?: number }[]
+    } | null>
     setOverride(id: number, decision: OverrideDecision): Promise<boolean>
   }
   readonly metadata: {
@@ -53,6 +56,19 @@ export function createReviewRunController(deps: ReviewRunControllerDeps): Hono {
     getReviewQueue: deps.library.getReviewQueue.bind(deps.library),
     getCollection: async (id: number): Promise<MediaCollection | null> =>
       (await deps.library.getDetail(id))?.collection ?? null,
+    /* A film is one file, so its length is the file's. A series is many, so
+       the comparable figure is one episode -- the median, which a single
+       double-length special cannot drag around. */
+    getRuntimeMinutes: async (id: number): Promise<number | undefined> => {
+      const detail = await deps.library.getDetail(id)
+      const durations = (detail?.files ?? [])
+        .map((file) => file.durationSeconds)
+        .filter((seconds): seconds is number => typeof seconds === 'number' && seconds > 0)
+        .sort((left, right) => left - right)
+      if (durations.length === 0) return undefined
+      const middle = durations[Math.floor(durations.length / 2)]
+      return middle === undefined ? undefined : Math.round(middle / 60)
+    },
     setOverride: deps.library.setOverride.bind(deps.library),
   }
 

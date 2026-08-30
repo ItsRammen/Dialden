@@ -422,6 +422,9 @@ function collectionDetailModel(
       ...(posterUrl(candidate.posterPath ?? null)
         ? { posterUrl: posterUrl(candidate.posterPath ?? null) as string }
         : {}),
+      ...(candidate.runtimeMinutes === undefined
+        ? {}
+        : { runtimeLabel: `${candidate.runtimeMinutes} min` }),
       ...(/^[1-9]\d*$/u.test(candidate.externalId)
         ? {
             referenceUrl: `https://www.themoviedb.org/${
