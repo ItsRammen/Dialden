@@ -60,14 +60,80 @@ export interface EffectiveDecision {
   readonly source: EffectiveDecisionSource
 }
 
+/**
+ * Certifications this profile understands, across the regions the metadata
+ * settings actually query: the United States, the United Kingdom, Ireland,
+ * Australia and Canada.
+ *
+ * Ratings are compared as bare strings, which works because the systems
+ * largely agree on spelling where they agree on meaning -- "G" and "PG" mean
+ * the same thing in all five. Where a band has no equivalent it is listed
+ * once under the strictest reading available.
+ *
+ * Anything absent from all three lists is reported as unrecognised and goes
+ * to a parent, so an unfamiliar band is never silently allowed. The lists
+ * therefore only ever need to grow, and growing them is what turns a review
+ * into a decision.
+ */
 export const DEFAULT_KIDS_7_POLICY = {
   id: 'kids-7',
   name: 'Kids 7',
   age: 7,
   rules: {
-    allow: ['G', 'TV-Y', 'TV-Y7', 'TV-G'],
-    review: ['PG', 'TV-PG'],
-    block: ['PG-13', 'TV-14', 'R', 'TV-MA', 'NC-17'],
+    allow: [
+      // United States
+      'G',
+      'TV-Y',
+      'TV-Y7',
+      'TV-G',
+      /* United Kingdom. BBFC "U" is defined as suitable for audiences aged
+         four and over, which is the same promise the US "G" makes, and "UC"
+         was its more explicitly child-directed predecessor. */
+      'U',
+      'UC',
+    ],
+    review: [
+      'PG',
+      'TV-PG',
+      /* Y7 content flagged for fantasy violence. Treated as a step above
+         plain TV-Y7 rather than equal to it. */
+      'TV-Y7-FV',
+    ],
+    block: [
+      // United States
+      'PG-13',
+      'TV-14',
+      'R',
+      'TV-MA',
+      'NC-17',
+      // United Kingdom, BBFC
+      '12',
+      '12A',
+      '15',
+      '18',
+      'R18',
+      // Ireland, IFCO
+      '15A',
+      '16',
+      /* Australia, ACB. TMDB carries these both closed up and spaced, and
+         normalisation keeps a single interior space rather than guessing, so
+         both spellings are listed. */
+      'M',
+      'MA',
+      'MA15+',
+      'MA 15+',
+      'R18+',
+      'R 18+',
+      'X18+',
+      'X 18+',
+      // Canada, including the Quebec bands
+      '14A',
+      '18A',
+      'A',
+      '13+',
+      '16+',
+      '18+',
+    ],
   },
 } as const satisfies RatingPolicyProfile
 
