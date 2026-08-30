@@ -61,24 +61,21 @@ export function renderMetadataSettings(
     `<div class="settings-tabpanel${id === activeTab ? ' is-active' : ''}" id="tabpanel-${id}" role="tabpanel" aria-labelledby="tab-${id}">${body}</div>`
 
   return renderLayout(
-    'Metadata settings',
+    'Metadata and review',
     `<div class="settings metadata-settings">
       <a class="settings-back-link" href="/settings">← Settings</a>
 
       <header class="metadata-settings-header">
         <div>
           <p class="metadata-eyebrow">Library enrichment</p>
-          <h1>Metadata provider</h1>
-          <p class="metadata-lede">Connect TMDB once, then ToastTV can match shows and movies and resolve regional content ratings in the background.</p>
-        </div>
-        <div class="metadata-provider-mark" aria-label="The Movie Database">
-          <img src="/tmdb-logo.svg" width="92" height="66" alt="TMDB">
+          <h1>Metadata and review</h1>
+          <p class="metadata-lede">Where titles are identified, how the outstanding queue gets decided, and how to re-run either over the library.</p>
         </div>
       </header>
 
       ${renderPageAlert(options)}
 
-      <section class="metadata-status-panel" aria-label="Metadata provider status">
+      <section class="metadata-status-panel" aria-label="TMDB provider status">
         <div>
           <span class="metadata-status-dot metadata-status-${health.tone}" aria-hidden="true"></span>
           <div>
@@ -276,7 +273,12 @@ export function renderMetadataSettings(
 
       ${TAB_SCRIPT}
 
-      <p class="metadata-attribution">This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
+      <div class="metadata-attribution">
+        <div class="metadata-provider-mark" aria-label="The Movie Database">
+          <img src="/tmdb-logo.svg" width="92" height="66" alt="TMDB">
+        </div>
+        <p>This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
+      </div>
     </div>`
   )
 }
@@ -401,7 +403,7 @@ export function renderMetadataTestResult(
 
 function renderPageAlert(options: MetadataSettingsRenderOptions): string {
   const messages: string[] = []
-  if (options.saved) messages.push('Metadata settings saved in appdata.')
+  if (options.saved) messages.push('Provider settings saved in appdata.')
   if (options.maintenanceStarted === 'policy') {
     messages.push('Cached policy re-evaluation started. No TMDB requests are required.')
   }

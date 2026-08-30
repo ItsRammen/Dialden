@@ -114,7 +114,7 @@ export class HeadlessDashboardService {
       metadata.providerHealth === 'connected' &&
       !metadataDegraded
     const metadataStatusMessage = !metadataConfig.configured
-      ? 'Add a TMDB API key in Metadata settings to enable automatic collection matching.'
+      ? 'Add a TMDB API key under Metadata and review to enable automatic collection matching.'
       : metadataDegraded
         ? metadata.providerMessage ??
           'One or more metadata records failed and need attention.'

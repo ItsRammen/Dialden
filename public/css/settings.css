@@ -1757,3 +1757,19 @@ input[type="range"]::-webkit-slider-thumb {
 .review-run-action--approve { color: var(--accent-success); }
 .review-run-action--block { color: var(--toast-pink); }
 .review-run-action--match { color: var(--accent-secondary); }
+
+/* Provider attribution, now carrying the mark that used to head the page. */
+.metadata-attribution {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.metadata-attribution p {
+  margin: 0;
+}
+
+.metadata-attribution .metadata-provider-mark {
+  width: 96px;
+  min-height: 68px;
+}

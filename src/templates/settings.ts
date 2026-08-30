@@ -225,11 +225,11 @@ export function renderSettings(props: SettingsProps): string {
 
           <section class="settings-card">
             <div class="card-header">
-              <div><p class="settings-card-kicker">Title matching</p><h3>Metadata provider</h3></div>
+              <div><p class="settings-card-kicker">Matching and approvals</p><h3>Metadata and review</h3></div>
             </div>
-            <p class="settings-card-copy">Configure TMDB matching, language, and preferred certification regions.</p>
+            <p class="settings-card-copy">TMDB matching and certification regions, the optional review assistant, and re-running either over the library.</p>
             <div class="settings-card-actions">
-              <a class="btn btn-secondary" href="/settings/metadata">Open metadata settings</a>
+              <a class="btn btn-secondary" href="/settings/metadata">Open metadata and review</a>
             </div>
           </section>
           </div>
