@@ -437,7 +437,8 @@ export async function createServer(
             )
           )
       )
-    }
+    },
+    daemon.getRepository()
   )
   const clientPresenceController = createClientPresenceController({
     presence: clientPresenceService,

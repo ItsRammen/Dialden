@@ -3,6 +3,7 @@ import type {
   PublicMetadataConfig,
 } from '../config/metadata'
 import type { MetadataJobState } from '../types'
+import type { PublicReviewAssistantConfig } from '../config/reviewAssistant'
 import { renderLayout } from './layout'
 import { escapeHtml } from './utils'
 
@@ -15,6 +16,11 @@ export interface MetadataSettingsDraft {
 }
 
 export interface MetadataSettingsRenderOptions {
+  /** Omitted when the assistant module is unavailable; the card is then hidden. */
+  readonly assistant?: PublicReviewAssistantConfig
+  readonly assistantSaved?: boolean
+  readonly assistantTestResult?: 'success' | 'failed'
+  readonly assistantTestMessage?: string
   readonly saved?: boolean
   readonly testResult?: 'success' | 'failed'
   readonly maintenanceStarted?: 'policy' | 'review' | 'full'
@@ -204,6 +210,8 @@ export function renderMetadataSettings(
         </div>
       </form>
 
+      ${renderAssistantCard(options)}
+
       <section class="settings-card metadata-settings-card metadata-maintenance">
         <div class="card-header metadata-card-heading">
           <div>
@@ -286,6 +294,117 @@ function renderPageAlert(options: MetadataSettingsRenderOptions): string {
       ? 'warning'
       : 'success'
   return `<div class="metadata-page-alert ${tone}" role="status">${messages.map(escapeHtml).join(' ')}</div>`
+}
+
+/**
+ * Optional second opinion on what policy could not settle.
+ *
+ * The key is write-only: it is never rendered back, and an empty field keeps
+ * whatever is stored, mirroring how the TMDB key above behaves.
+ */
+function renderAssistantCard(options: MetadataSettingsRenderOptions): string {
+  const assistant = options.assistant
+  if (!assistant) return ''
+  const policy = assistant.decisionPolicy
+  const treatment = (
+    name: string,
+    label: string,
+    selected: string,
+    hint: string,
+    withAssist: boolean
+  ): string => {
+    const choices: [string, string][] = [
+      ['manual', 'Leave for me'],
+      ['approve', 'Approve automatically'],
+      ['block', 'Block automatically'],
+      ...(withAssist ? ([['assist', 'Ask the assistant']] as [string, string][]) : []),
+    ]
+    return `<div class="form-group">
+      <label for="${name}">${label}</label>
+      <select id="${name}" name="${name}">
+        ${choices
+          .map(
+            ([value, text]) =>
+              `<option value="${value}" ${selected === value ? 'selected' : ''}>${text}</option>`
+          )
+          .join('')}
+      </select>
+      <span class="hint">${hint}</span>
+    </div>`
+  }
+
+  return `
+    <form id="assistant-settings-form" method="post" action="/settings/metadata/assistant" class="metadata-settings-form">
+      <section class="settings-card metadata-settings-card">
+        <div class="card-header metadata-card-heading">
+          <div>
+            <p class="metadata-step">Optional</p>
+            <h2>Review assistant</h2>
+          </div>
+          <span class="metadata-key-state ${assistant.configured ? 'configured' : 'missing'}">${
+            assistant.enabled ? 'Active' : assistant.configured ? 'Configured, off' : 'Not configured'
+          }</span>
+        </div>
+        <p class="metadata-lede">Policy decides everything it can on its own. An assistant is only asked about what it could not settle — usually a title with more than one plausible match. Titles, years, overviews and genres are sent to the provider; file paths never are.</p>
+
+        ${
+          options.assistantSaved
+            ? '<p class="metadata-alert success">Review assistant settings saved.</p>'
+            : ''
+        }
+        ${
+          options.assistantTestResult === 'success'
+            ? '<p class="metadata-alert success">The provider answered.</p>'
+            : options.assistantTestResult === 'failed'
+              ? `<p class="metadata-alert error">${escapeHtml(options.assistantTestMessage ?? 'The provider could not be reached.')}</p>`
+              : ''
+        }
+
+        <label class="metadata-remove-key">
+          <input type="checkbox" name="enabled" value="true" ${assistant.enabled ? 'checked' : ''}>
+          <span>Use the assistant for cases policy cannot settle</span>
+        </label>
+
+        <div class="form-group">
+          <label for="assistantBaseUrl">Provider endpoint</label>
+          <input type="url" id="assistantBaseUrl" name="baseUrl" value="${escapeHtml(assistant.baseUrl)}" spellcheck="false" placeholder="https://openrouter.ai/api/v1">
+          <span class="hint">Any OpenAI-compatible endpoint. A trailing <code>/chat/completions</code> is trimmed for you.</span>
+        </div>
+
+        <div class="form-group">
+          <label for="assistantModel">Model</label>
+          <input type="text" id="assistantModel" name="model" value="${escapeHtml(assistant.model)}" spellcheck="false">
+        </div>
+
+        <div class="form-group">
+          <label for="assistantApiKey">API key</label>
+          <input type="password" id="assistantApiKey" name="apiKey" value="" autocomplete="new-password" spellcheck="false" placeholder="${assistant.configured ? 'Leave blank to keep the current key' : 'Paste the provider API key'}">
+          <span class="hint">Stored server-side in ToastTV appdata. It is never sent back to this page.</span>
+        </div>
+
+        ${
+          assistant.configured
+            ? `<label class="metadata-remove-key">
+                <input type="checkbox" name="removeApiKey" value="true">
+                <span>Remove the current API key</span>
+              </label>`
+            : ''
+        }
+
+        <h3>What to do with each outstanding case</h3>
+        ${treatment('reviewBand', 'Certification in the review band', policy.reviewBand, 'Ratings your profile nominates for a parent to judge, such as PG.', false)}
+        ${treatment('missingRating', 'No certification anywhere', policy.missingRating, 'Matched, but no rating in any configured region.', false)}
+        ${treatment('unrecognizedRating', 'Unrecognised certification', policy.unrecognizedRating, 'A rating the profile has no rule for.', false)}
+        ${treatment('ambiguousMetadata', 'More than one plausible title', policy.ambiguousMetadata, 'The case an assistant is best at: choosing between candidates already found.', true)}
+        ${treatment('unmatchedMetadata', 'No reliable title match', policy.unmatchedMetadata, 'Nothing matched well enough to rate.', true)}
+
+        <div class="button-row">
+          <button type="submit" class="button button--primary">Save assistant settings</button>
+          <button type="submit" class="button button--quiet" formaction="/settings/metadata/assistant/test" formnovalidate>Test connection</button>
+        </div>
+      </section>
+    </form>
+  `
 }
 
 function renderFieldError(

@@ -5,6 +5,16 @@ import {
 } from '../config/metadata'
 import type { MetadataEnrichmentService } from '../services/metadata/MetadataEnrichmentService'
 import {
+  loadPersistedReviewAssistantConfig,
+  persistReviewAssistantConfig,
+  toPublicReviewAssistantConfig,
+  type PublicReviewAssistantConfig,
+  type ReviewAssistantSettingStore,
+} from '../config/reviewAssistant'
+import { OpenAiCompatibleReviewAssistant } from '../services/review/OpenAiCompatibleReviewAssistant'
+import type { AutoDecisionPolicy } from '../services/review/autoDecision'
+import { MetadataProviderError } from '../metadata/types'
+import {
   renderMetadataSettings,
   renderMetadataTestResult,
   type MetadataSettingsDraft,
@@ -24,20 +34,105 @@ type MetadataSettingsService = Pick<
 
 export function createMetadataSettingsController(
   metadata: MetadataSettingsService,
-  onLibraryReevaluated?: () => Promise<void> | void
+  onLibraryReevaluated?: () => Promise<void> | void,
+  /** Absent in tests and any deployment without the assistant module. */
+  assistantStore?: ReviewAssistantSettingStore
 ) {
   const controller = new Hono()
 
-  controller.get('/settings/metadata', (c) => {
+  const assistantConfig = async (): Promise<
+    PublicReviewAssistantConfig | undefined
+  > => {
+    if (!assistantStore) return undefined
+    return toPublicReviewAssistantConfig(
+      await loadPersistedReviewAssistantConfig(assistantStore)
+    )
+  }
+
+  controller.get('/settings/metadata', async (c) => {
     const result = c.req.query('test')
+    const assistantTest = c.req.query('assistantTest')
     return c.html(
       renderMetadataSettings(metadata.getPublicConfig(), metadata.getState(), {
         saved: c.req.query('saved') === '1',
         maintenanceStarted: maintenanceQuery(c.req.query('maintenance')),
         testResult:
           result === 'success' || result === 'failed' ? result : undefined,
+        assistant: await assistantConfig(),
+        assistantSaved: c.req.query('assistantSaved') === '1',
+        ...(assistantTest === 'success' || assistantTest === 'failed'
+          ? { assistantTestResult: assistantTest }
+          : {}),
+        ...(c.req.query('assistantMessage')
+          ? { assistantTestMessage: c.req.query('assistantMessage') as string }
+          : {}),
       })
     )
+  })
+
+  /* An empty key field keeps whatever is stored, matching how the TMDB key
+     above behaves, so saving the decision table never disturbs credentials. */
+  controller.post('/settings/metadata/assistant', async (c) => {
+    if (!assistantStore) return c.redirect('/settings/metadata', 303)
+    const body = await c.req.parseBody()
+    const current = await loadPersistedReviewAssistantConfig(assistantStore)
+
+    const submittedKey = readText(body['apiKey'])
+    const removeKey = body['removeApiKey'] === 'true'
+    const apiKey = removeKey ? null : submittedKey || current.apiKey
+
+    const baseUrl = normalizeBaseUrl(readText(body['baseUrl']) || current.baseUrl)
+    if (baseUrl === null) {
+      return c.redirect(
+        '/settings/metadata?assistantTest=failed&assistantMessage=' +
+          encodeURIComponent('The provider endpoint must be a valid http or https URL.'),
+        303
+      )
+    }
+
+    const model = readText(body['model']) || current.model
+    const decisionPolicy = readPolicy(body, current.decisionPolicy)
+
+    await persistReviewAssistantConfig(assistantStore, {
+      ...current,
+      apiKey,
+      baseUrl,
+      model,
+      decisionPolicy,
+      enabled: body['enabled'] === 'true' && Boolean(apiKey && baseUrl),
+    })
+    return c.redirect('/settings/metadata?assistantSaved=1', 303)
+  })
+
+  controller.post('/settings/metadata/assistant/test', async (c) => {
+    if (!assistantStore) return c.redirect('/settings/metadata', 303)
+    const config = await loadPersistedReviewAssistantConfig(assistantStore)
+    const assistant = new OpenAiCompatibleReviewAssistant({
+      ...config,
+      // Test what is stored even when the operator has not switched it on yet.
+      enabled: Boolean(config.apiKey && config.baseUrl),
+    })
+    if (!assistant.configured) {
+      return c.redirect(
+        '/settings/metadata?assistantTest=failed&assistantMessage=' +
+          encodeURIComponent('Add an endpoint and API key first.'),
+        303
+      )
+    }
+    try {
+      await assistant.testConnection()
+      return c.redirect('/settings/metadata?assistantTest=success', 303)
+    } catch (error) {
+      const message =
+        error instanceof MetadataProviderError
+          ? `${error.message} (${error.code})`
+          : 'The provider could not be reached.'
+      return c.redirect(
+        '/settings/metadata?assistantTest=failed&assistantMessage=' +
+          encodeURIComponent(message),
+        303
+      )
+    }
   })
 
   controller.post('/settings/metadata', async (c) => {
@@ -204,4 +299,40 @@ function textField(
 ): string | undefined {
   const value = body[field]
   return typeof value === 'string' ? value : undefined
+}
+
+function readText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function normalizeBaseUrl(value: string): string | null {
+  const candidate = value.trim().replace(/\/+$/u, '').replace(/\/chat\/completions$/iu, '')
+  if (!candidate) return ''
+  try {
+    const url = new URL(candidate)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
+  } catch {
+    return null
+  }
+  return candidate
+}
+
+/** Unknown values keep the stored treatment rather than silently loosening it. */
+function readPolicy(
+  body: Record<string, unknown>,
+  current: AutoDecisionPolicy
+): AutoDecisionPolicy {
+  const plain = ['approve', 'block', 'manual']
+  const withAssist = [...plain, 'assist']
+  const pick = <T extends string>(key: string, allowed: string[], fallback: T): T => {
+    const raw = readText(body[key])
+    return allowed.includes(raw) ? (raw as T) : fallback
+  }
+  return {
+    reviewBand: pick('reviewBand', plain, current.reviewBand),
+    missingRating: pick('missingRating', plain, current.missingRating),
+    unrecognizedRating: pick('unrecognizedRating', plain, current.unrecognizedRating),
+    ambiguousMetadata: pick('ambiguousMetadata', withAssist, current.ambiguousMetadata),
+    unmatchedMetadata: pick('unmatchedMetadata', withAssist, current.unmatchedMetadata),
+  }
 }
