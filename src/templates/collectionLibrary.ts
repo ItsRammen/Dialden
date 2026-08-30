@@ -99,6 +99,10 @@ export interface CollectionMetadataCandidateViewModel {
   readonly title: string
   readonly year?: number
   readonly confidence: number
+  /** What separates candidates that share a title and a year. */
+  readonly overview?: string
+  readonly posterUrl?: string
+  readonly referenceUrl?: string
   readonly confirmAction: string
 }
 
@@ -523,8 +527,29 @@ export function renderCollectionDetail(
                 .map((candidate) => {
                   const action = safeInternalHref(candidate.confirmAction)
                   if (!action) return ''
+                  /* Three records can share a title and a year -- "Aladdin"
+                     1992 returns the Disney film alongside two others. Without
+                     the poster, the summary and the id, the rows read as
+                     identical and there is nothing to choose between. */
                   return `<li>
-                    <div><strong>${escapeHtml(candidate.title)}</strong>${candidate.year ? ` <span>${year(candidate.year)}</span>` : ''}<small>${Math.round(candidate.confidence * 100)}% match confidence</small></div>
+                    ${
+                      candidate.posterUrl
+                        ? `<img class="collection-candidate-poster" src="${escapeHtml(candidate.posterUrl)}" alt="" loading="lazy" width="46" height="69">`
+                        : '<span class="collection-candidate-poster collection-candidate-poster--empty" aria-hidden="true"></span>'
+                    }
+                    <div class="collection-candidate-body">
+                      <strong>${escapeHtml(candidate.title)}</strong>${candidate.year ? ` <span>${year(candidate.year)}</span>` : ''}
+                      <small>${Math.round(candidate.confidence * 100)}% match confidence · ${
+                        candidate.referenceUrl
+                          ? `<a href="${escapeHtml(candidate.referenceUrl)}" target="_blank" rel="noopener noreferrer">TMDB ${escapeHtml(candidate.externalId)}</a>`
+                          : `TMDB ${escapeHtml(candidate.externalId)}`
+                      }</small>
+                      ${
+                        candidate.overview
+                          ? `<p class="collection-candidate-overview">${escapeHtml(candidate.overview)}</p>`
+                          : ''
+                      }
+                    </div>
                     <form method="post" action="${action}">
                       <input type="hidden" name="externalId" value="${escapeHtml(candidate.externalId)}">
                       <button class="collection-action collection-action-match" type="submit">Confirm</button>

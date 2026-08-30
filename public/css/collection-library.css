@@ -721,3 +721,40 @@
     animation-iteration-count: 1 !important;
   }
 }
+
+/* Candidate chooser: poster, summary, then the confirm button.
+   Records that share a title and a year are only distinguishable by
+   the poster, the summary and the id, so all three are shown. */
+
+.collection-match-review li {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.collection-candidate-poster {
+  width: 46px;
+  height: 69px;
+  border-radius: 4px;
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.collection-candidate-poster--empty {
+  display: block;
+}
+
+.collection-candidate-body {
+  min-width: 0;
+}
+
+.collection-candidate-overview {
+  margin: 0.35rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.collection-match-review .collection-candidate-body a {
+  color: inherit;
+  text-decoration: underline;
+}

@@ -416,6 +416,19 @@ function collectionDetailModel(
       title: candidate.title,
       ...(candidate.year === undefined ? {} : { year: candidate.year }),
       confidence: candidate.confidence,
+      ...(candidate.overview
+        ? { overview: truncateOverview(candidate.overview) }
+        : {}),
+      ...(posterUrl(candidate.posterPath ?? null)
+        ? { posterUrl: posterUrl(candidate.posterPath ?? null) as string }
+        : {}),
+      ...(/^[1-9]\d*$/u.test(candidate.externalId)
+        ? {
+            referenceUrl: `https://www.themoviedb.org/${
+              candidate.mediaType === 'tv' ? 'tv' : 'movie'
+            }/${candidate.externalId}`,
+          }
+        : {}),
       confirmAction: `/library/collections/${collection.id}/metadata-match`,
     })),
     manualMatchAction: `/library/collections/${collection.id}/metadata-match`,
@@ -648,4 +661,10 @@ function safeReturnPath(value: string): string {
   return /^\/library(?:[/?].*)?$/.test(value) && !value.startsWith('//')
     ? value
     : '/library'
+}
+
+/** Enough to tell two same-titled records apart, without a wall of text. */
+function truncateOverview(value: string): string {
+  const clean = value.replace(/\s+/gu, ' ').trim()
+  return clean.length <= 220 ? clean : `${clean.slice(0, 219)}\u2026`
 }
