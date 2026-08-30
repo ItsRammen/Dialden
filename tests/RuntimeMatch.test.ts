@@ -188,3 +188,90 @@ describe('confirming a lone near-miss with the runtime', () => {
     expect(resolveByRuntime([autumn(), rival], 111, 1998)).toBeNull()
   })
 })
+
+describe('only genuine ties are weighed', () => {
+  const at = (
+    externalId: string,
+    confidence: number,
+    runtimeMinutes?: number,
+    year = 2010
+  ): MetadataCandidateRecord => ({
+    provider: 'tmdb',
+    externalId,
+    mediaType: 'movie',
+    title: 'Title',
+    year,
+    confidence,
+    ...(runtimeMinutes === undefined ? {} : { runtimeMinutes }),
+  })
+
+  test('a lesser title with no runtime cannot block a decision', () => {
+    /* Collection 389 as the library holds it. "The Mad Hatter" is a
+       featurette scoring 0.779 with no runtime recorded. Counting it as a
+       rival abandoned a comparison the three tied records could settle. */
+    const resolved = resolveByRuntime(
+      [
+        at('12155', 1, 108),
+        at('135361', 1, 57),
+        at('423971', 1, 99),
+        at('57008', 0.833, 90),
+        at('683578', 0.79, 5),
+        at('683579', 0.779),
+      ],
+      109,
+      2010
+    )
+
+    expect(resolved?.candidate.externalId).toBe('12155')
+  })
+
+  test('a lesser title with a close runtime cannot win either', () => {
+    // The featurette runs 108 minutes here. It still is not the film.
+    const resolved = resolveByRuntime(
+      [at('12155', 1, 40), at('135361', 1, 57), at('683579', 0.779, 108)],
+      109,
+      2010
+    )
+
+    expect(resolved).toBeNull()
+  })
+
+  test('a true tie with an unknown runtime is still refused', () => {
+    /* Collection 379: three records all titled Absolution, all 2024, one
+       with no runtime at all. That is genuinely undecidable here. */
+    const resolved = resolveByRuntime(
+      [
+        at('974453', 1, 112, 2024),
+        at('1242249', 1, 3, 2024),
+        at('1380432', 1, undefined, 2024),
+        at('1284646', 0.812, 9, 2024),
+      ],
+      112,
+      2024
+    )
+
+    expect(resolved).toBeNull()
+  })
+
+  test('a lone candidate needs clear air behind it', () => {
+    // Two near-equal candidates are a tie, and a tie is judged on runtime
+    // alone rather than given to the leader.
+    const resolved = resolveByRuntime(
+      [at('1', 0.79, 112, 1998), at('2', 0.72, 40, 1998)],
+      111,
+      1998
+    )
+
+    expect(resolved).toBeNull()
+  })
+
+  test('the autumn near-miss still resolves', () => {
+    const resolved = resolveByRuntime(
+      [at('10239', 0.7857, 112, 1998), at('17031', 0.1173, 91, 2008)],
+      111,
+      1998
+    )
+
+    expect(resolved?.candidate.externalId).toBe('10239')
+  })
+})

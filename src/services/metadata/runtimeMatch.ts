@@ -40,11 +40,22 @@ export const RUNTIME_MATCH_TOLERANCE_MINUTES = 3
 export const RUNTIME_RIVAL_MARGIN_MINUTES = 10
 
 /**
- * How far below the leader a candidate can score and still be worth ruling
- * out. Anything further back is noise -- a title that happens to share a
- * word -- and demanding it be checked would block every real decision.
+ * How close to the leader a candidate must score to count as tied with it.
+ *
+ * Only genuine ties belong in the comparison. A wider net drags in titles
+ * that merely resemble the leader -- "Alien: Absolution" beside "Absolution",
+ * a making-of beside the film -- and since such entries frequently carry no
+ * runtime at all, they abandon the comparison for a rivalry that was never
+ * real.
  */
-export const CONTENDER_SCORE_MARGIN = 0.25
+export const CONTENDER_SCORE_EPSILON = 0.02
+
+/**
+ * How far ahead of everything else a lone candidate must be. Without a tie
+ * to adjudicate, the runtime is corroborating a near miss, and that is only
+ * honest if nothing else was close to being the answer.
+ */
+export const LONE_CANDIDATE_LEAD_MARGIN = 0.25
 
 /**
  * How well a lone candidate must match by title before its runtime is allowed
@@ -94,6 +105,14 @@ export function resolveByRuntime(
     const only = contenders[0]
     if (!only) return null
     if (only.confidence < LONE_CANDIDATE_MIN_CONFIDENCE) return null
+    // Nothing else may be near enough to have been the answer instead.
+    const runnerUp = Math.max(
+      0,
+      ...candidates
+        .filter((candidate) => candidate.externalId !== only.externalId)
+        .map((candidate) => candidate.confidence)
+    )
+    if (only.confidence - runnerUp < LONE_CANDIDATE_LEAD_MARGIN) return null
     if (
       collectionYear === undefined ||
       collectionYear === null ||
@@ -131,9 +150,9 @@ export function resolveByRuntime(
 }
 
 /**
- * The candidates close enough to the leader to be worth weighing. A title
- * that merely shares a word scores far back and is excluded, so it can
- * neither win on a coincidental runtime nor block a decision by lacking one.
+ * The candidates genuinely tied with the leader. Anything scoring measurably
+ * below it is a different title, so it neither wins on a coincidental runtime
+ * nor blocks a decision by having none recorded.
  */
 function contending(
   candidates: readonly MetadataCandidateRecord[]
@@ -141,7 +160,7 @@ function contending(
   if (candidates.length === 0) return []
   const best = Math.max(...candidates.map((candidate) => candidate.confidence))
   return candidates.filter(
-    (candidate) => candidate.confidence >= best - CONTENDER_SCORE_MARGIN
+    (candidate) => candidate.confidence >= best - CONTENDER_SCORE_EPSILON
   )
 }
 
