@@ -35,6 +35,7 @@ import { join } from 'node:path'
 import { HeadlessDashboardService } from './services/HeadlessDashboardService'
 import { renderHeadlessDashboard } from './templates/headlessDashboard'
 import { createMetadataSettingsController } from './controllers/MetadataSettingsController'
+import { createReviewAssistantController } from './controllers/ReviewAssistantController'
 import { ClientPresenceService } from './services/ClientPresenceService'
 import { ChannelQualityTierService } from './services/ChannelQualityTierService'
 import { LineupSessionService } from './services/LineupSessionService'
@@ -413,6 +414,11 @@ export async function createServer(
     updateAvailable: () => updateService.getUpdateInfo()?.updateAvailable,
   })
   const artworkController = createArtworkController(artworkService)
+  /* The assistant is optional: with nothing configured these routes simply
+     report it as off, and deterministic policy carries on unchanged. */
+  const reviewAssistantController = createReviewAssistantController({
+    store: daemon.getRepository(),
+  })
   const metadataSettingsController = createMetadataSettingsController(
     metadataService,
     async () => {
@@ -469,6 +475,7 @@ export async function createServer(
   )
 
   // Mount all controllers at root
+  app.route('/', reviewAssistantController)
   app.route('/', playbackController)
   app.route('/', libraryController)
   app.route('/', settingsController)
