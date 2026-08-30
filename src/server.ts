@@ -36,6 +36,7 @@ import { HeadlessDashboardService } from './services/HeadlessDashboardService'
 import { renderHeadlessDashboard } from './templates/headlessDashboard'
 import { createMetadataSettingsController } from './controllers/MetadataSettingsController'
 import { createReviewAssistantController } from './controllers/ReviewAssistantController'
+import { createReviewRunController } from './controllers/ReviewRunController'
 import { ClientPresenceService } from './services/ClientPresenceService'
 import { ChannelQualityTierService } from './services/ChannelQualityTierService'
 import { LineupSessionService } from './services/LineupSessionService'
@@ -419,6 +420,20 @@ export async function createServer(
   const reviewAssistantController = createReviewAssistantController({
     store: daemon.getRepository(),
   })
+  /* Automated review shares the library's own write paths, so a decision it
+     makes is indistinguishable from the same decision made by hand -- except
+     in the audit trail, which is what makes a run reversible. */
+  const reviewRunController = createReviewRunController({
+    library: collectionLibraryService,
+    metadata: metadataService,
+    audit: daemon.getRepository(),
+    assistantStore: daemon.getRepository(),
+    refreshSchedules: async () => {
+      channelService.invalidateScheduleCatalog()
+      await daemon.getEngine().refreshCache(true)
+      await playbackService.reconcilePrequeue()
+    },
+  })
   const metadataSettingsController = createMetadataSettingsController(
     metadataService,
     async () => {
@@ -477,6 +492,7 @@ export async function createServer(
 
   // Mount all controllers at root
   app.route('/', reviewAssistantController)
+  app.route('/', reviewRunController)
   app.route('/', playbackController)
   app.route('/', libraryController)
   app.route('/', settingsController)

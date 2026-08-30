@@ -281,6 +281,97 @@ export function renderMetadataSettings(
   )
 }
 
+/**
+ * Inline summary of a run. A preview and an applied run render identically
+ * apart from the heading, because they are the same walk over the same queue.
+ */
+export function renderReviewRunReport(report: {
+  dryRun: boolean
+  scanned: number
+  skippedParentDecided: number
+  approved: number
+  blocked: number
+  matched: number
+  leftForYou: number
+  assistant: {
+    available: boolean
+    attempted: number
+    applied: number
+    declined: number
+    failed: number
+    budgetExhausted: boolean
+  }
+  samples: readonly {
+    collectionId: number
+    title: string
+    action: string
+    source: string
+    detail: string
+    confidence?: number
+  }[]
+  errors: readonly { collectionId: number; message: string }[]
+}): string {
+  const rows: [string, number][] = [
+    ['Looked at', report.scanned],
+    ['Approved', report.approved],
+    ['Blocked', report.blocked],
+    ['Matched by the assistant', report.matched],
+    ['Left for you', report.leftForYou],
+    ['Already decided by you', report.skippedParentDecided],
+  ]
+
+  const notes: string[] = []
+  if (!report.assistant.available) {
+    notes.push(
+      'The assistant is off, so titles with more than one plausible match were left alone.'
+    )
+  }
+  if (report.assistant.declined > 0) {
+    notes.push(
+      `The assistant was not confident enough on ${report.assistant.declined} of ${report.assistant.attempted}.`
+    )
+  }
+  if (report.assistant.failed > 0) {
+    notes.push(`${report.assistant.failed} provider calls failed.`)
+  }
+  if (report.assistant.budgetExhausted) {
+    notes.push('The call budget ran out before the queue did; run again to continue.')
+  }
+
+  return `
+    <div class="metadata-inline-alert ${report.dryRun ? 'info' : 'success'}" role="status">
+      <strong>${report.dryRun ? 'Preview only — nothing was changed.' : 'Applied.'}</strong>
+    </div>
+    <dl class="review-run-summary">
+      ${rows
+        .map(
+          ([label, value]) =>
+            `<div><dt>${escapeHtml(label)}</dt><dd>${value.toLocaleString('en-US')}</dd></div>`
+        )
+        .join('')}
+    </dl>
+    ${notes.length ? `<p class="hint">${notes.map(escapeHtml).join(' ')}</p>` : ''}
+    ${
+      report.samples.length
+        ? `<ul class="review-run-samples">${report.samples
+            .slice(0, 12)
+            .map(
+              (sample) =>
+                `<li><span class="review-run-action review-run-action--${escapeHtml(sample.action)}">${escapeHtml(sample.action)}</span> <strong>${escapeHtml(sample.title)}</strong><span>${escapeHtml(sample.detail)}</span></li>`
+            )
+            .join('')}</ul>`
+        : ''
+    }
+    ${
+      report.errors.length
+        ? `<p class="metadata-inline-alert warning" role="status">${escapeHtml(
+            `${report.errors.length} collections could not be processed: ${report.errors[0]?.message ?? ''}`
+          )}</p>`
+        : ''
+    }
+  `
+}
+
 /** Inline result for the assistant connection check, mirroring TMDB's. */
 export function renderAssistantTestResult(
   result: 'success' | 'failed',
@@ -488,6 +579,39 @@ function renderAssistantCard(options: MetadataSettingsRenderOptions): string {
         </div>
       </section>
     </form>
+
+    <section class="settings-card metadata-settings-card">
+      <div class="card-header metadata-card-heading">
+        <div>
+          <p class="metadata-step">Run</p>
+          <h2>Review the outstanding queue</h2>
+        </div>
+      </div>
+      <p class="metadata-lede">A run never starts on its own. Preview first: it walks exactly the same path and writes nothing, so what it reports is what applying would do. Everything a run changes is recorded and can be undone together.</p>
+
+      <div id="assistant-run-result" class="metadata-test-result" aria-live="polite"></div>
+
+      <div class="metadata-form-actions">
+        <button class="btn btn-primary"
+                type="button"
+                hx-post="/settings/metadata/assistant/run?dryRun=true"
+                hx-target="#assistant-run-result"
+                hx-swap="innerHTML"
+                hx-disabled-elt="this">
+          Preview a run
+        </button>
+        <button class="btn btn-secondary"
+                type="button"
+                hx-post="/settings/metadata/assistant/run?dryRun=false"
+                hx-confirm="Apply automated decisions to the outstanding queue? Everything applied can be undone from this page."
+                hx-target="#assistant-run-result"
+                hx-swap="innerHTML"
+                hx-disabled-elt="this">
+          Apply decisions
+        </button>
+      </div>
+      <p class="hint">Titles a parent has already approved or blocked are never revisited.</p>
+    </section>
   `
 }
 

@@ -36,6 +36,12 @@ export interface MetadataCandidateRecord {
   readonly originalTitle?: string
   readonly year?: number
   readonly posterPath?: string
+  /**
+   * Kept so a later reviewer — a person or the assistant — can tell two
+   * same-titled candidates apart without re-querying the provider.
+   */
+  readonly overview?: string
+  readonly popularity?: number
   readonly confidence: number
 }
 

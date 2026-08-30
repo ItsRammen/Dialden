@@ -7,6 +7,10 @@
 
 import { Database } from 'bun:sqlite'
 import type {
+  ReviewDecisionDraft,
+  ReviewDecisionRecord,
+} from '../services/review/auditTypes'
+import type {
   MediaItem,
   MediaType,
   Compatibility,
@@ -444,6 +448,7 @@ export class MediaRepository implements IMediaRepository {
 
     this.migrateStationFacets()
     this.migrateEpisodeMetadata()
+    this.migrateReviewDecisions()
 
     this.sanitizeAndGuardCollectionOverrides()
 
@@ -538,6 +543,147 @@ export class MediaRepository implements IMediaRepository {
       this.db!.prepare(
         `INSERT INTO schema_migrations (version) VALUES (3)`
       ).run()
+    })()
+  }
+
+  /**
+   * The automated-review audit trail. Rows are never updated in place beyond
+   * being marked reverted, so the history of what automation did stays intact
+   * even after a revert.
+   */
+  private migrateReviewDecisions(): void {
+    if (!this.db) throw new Error('Repository not initialized')
+    const migration = this.db
+      .prepare('SELECT version FROM schema_migrations WHERE version = 4')
+      .get() as { version: number } | null
+    if (migration) return
+    this.db.transaction(() => {
+      this.db!.exec(`
+        CREATE TABLE IF NOT EXISTS review_decisions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          run_id TEXT NOT NULL,
+          collection_id INTEGER NOT NULL,
+          action TEXT NOT NULL,
+          source TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          detail TEXT NOT NULL DEFAULT '',
+          model TEXT,
+          prompt_version TEXT,
+          confidence REAL,
+          previous_override TEXT,
+          previous_external_id TEXT,
+          previous_metadata_status TEXT,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          reverted_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_review_decisions_run
+          ON review_decisions (run_id);
+        CREATE INDEX IF NOT EXISTS idx_review_decisions_collection
+          ON review_decisions (collection_id);
+      `)
+      this.db!.prepare(
+        `INSERT INTO schema_migrations (version) VALUES (4)`
+      ).run()
+    })()
+  }
+
+  async recordReviewDecision(draft: ReviewDecisionDraft): Promise<number> {
+    if (!this.db) throw new Error('Repository not initialized')
+    const result = this.db
+      .prepare(`
+        INSERT INTO review_decisions (
+          run_id, collection_id, action, source, reason, detail,
+          model, prompt_version, confidence,
+          previous_override, previous_external_id, previous_metadata_status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        draft.runId,
+        draft.collectionId,
+        draft.action,
+        draft.source,
+        draft.reason,
+        draft.detail,
+        draft.model,
+        draft.promptVersion,
+        draft.confidence,
+        draft.previousOverride,
+        draft.previousExternalId,
+        draft.previousMetadataStatus
+      )
+    return Number(result.lastInsertRowid)
+  }
+
+  async listReviewDecisions(
+    options: {
+      runId?: string
+      collectionId?: number
+      includeReverted?: boolean
+      limit?: number
+    } = {}
+  ): Promise<ReviewDecisionRecord[]> {
+    if (!this.db) throw new Error('Repository not initialized')
+    const clauses: string[] = []
+    const params: (string | number)[] = []
+    if (options.runId !== undefined) {
+      clauses.push('run_id = ?')
+      params.push(options.runId)
+    }
+    if (options.collectionId !== undefined) {
+      clauses.push('collection_id = ?')
+      params.push(options.collectionId)
+    }
+    if (options.includeReverted !== true) clauses.push('reverted_at IS NULL')
+    const limit = Math.min(Math.max(options.limit ?? 200, 1), 1000)
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM review_decisions
+         ${clauses.length ? 'WHERE ' + clauses.join(' AND ') : ''}
+         ORDER BY id DESC LIMIT ${limit}`
+      )
+      .all(...params) as Record<string, unknown>[]
+    return rows.map(toReviewDecisionRecord)
+  }
+
+  async listReviewRuns(
+    limit = 20
+  ): Promise<
+    { runId: string; startedAt: string; decisions: number; reverted: number }[]
+  > {
+    if (!this.db) throw new Error('Repository not initialized')
+    const rows = this.db
+      .prepare(
+        `SELECT run_id,
+                MIN(created_at) AS started_at,
+                COUNT(*) AS decisions,
+                SUM(CASE WHEN reverted_at IS NULL THEN 0 ELSE 1 END) AS reverted
+         FROM review_decisions
+         GROUP BY run_id
+         ORDER BY MIN(id) DESC
+         LIMIT ${Math.min(Math.max(limit, 1), 200)}`
+      )
+      .all() as Record<string, unknown>[]
+    return rows.map((row) => ({
+      runId: String(row['run_id']),
+      startedAt: String(row['started_at']),
+      decisions: Number(row['decisions']),
+      reverted: Number(row['reverted']),
+    }))
+  }
+
+  async markReviewDecisionsReverted(ids: readonly number[]): Promise<number> {
+    if (!this.db) throw new Error('Repository not initialized')
+    const clean = [...new Set(ids)].filter(
+      (id) => Number.isSafeInteger(id) && id > 0
+    )
+    if (clean.length === 0) return 0
+    return this.db.transaction(() => {
+      const statement = this.db!.prepare(
+        'UPDATE review_decisions SET reverted_at = CURRENT_TIMESTAMP WHERE id = ? AND reverted_at IS NULL'
+      )
+      let updated = 0
+      for (const id of clean) updated += statement.run(id).changes
+      return updated
     })()
   }
 
@@ -2008,5 +2154,36 @@ export class MediaRepository implements IMediaRepository {
     this.db
       .prepare('UPDATE media SET has_audio = ?, audio_codec = ? WHERE id = ?')
       .run(hasAudio ? 1 : 0, audioCodec, id)
+  }
+}
+
+function toReviewDecisionRecord(
+  row: Record<string, unknown>
+): ReviewDecisionRecord {
+  const override = row['previous_override']
+  return {
+    id: Number(row['id']),
+    runId: String(row['run_id']),
+    collectionId: Number(row['collection_id']),
+    action: String(row['action']) as ReviewDecisionRecord['action'],
+    source: String(row['source']) as ReviewDecisionRecord['source'],
+    reason: String(row['reason']),
+    detail: String(row['detail'] ?? ''),
+    model: row['model'] === null ? null : String(row['model']),
+    promptVersion:
+      row['prompt_version'] === null ? null : String(row['prompt_version']),
+    confidence: row['confidence'] === null ? null : Number(row['confidence']),
+    previousOverride:
+      override === 'allow' || override === 'block' ? override : null,
+    previousExternalId:
+      row['previous_external_id'] === null
+        ? null
+        : String(row['previous_external_id']),
+    previousMetadataStatus:
+      row['previous_metadata_status'] === null
+        ? null
+        : String(row['previous_metadata_status']),
+    createdAt: String(row['created_at']),
+    revertedAt: row['reverted_at'] === null ? null : String(row['reverted_at']),
   }
 }

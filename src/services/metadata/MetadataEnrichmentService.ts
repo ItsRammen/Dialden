@@ -914,6 +914,16 @@ export class MetadataEnrichmentService {
       ...(candidate.originalTitle ? { originalTitle: candidate.originalTitle } : {}),
       ...(candidate.year === undefined ? {} : { year: candidate.year }),
       ...(candidate.posterPath ? { posterPath: candidate.posterPath } : {}),
+      /* Overviews are the only thing that separates a remake from its
+         original, so they are stored rather than re-fetched at review time.
+         Trimmed because eight of them per collection is otherwise a lot of
+         database for text nobody reads in full. */
+      ...(candidate.overview
+        ? { overview: candidate.overview.slice(0, 600) }
+        : {}),
+      ...(candidate.popularity === undefined
+        ? {}
+        : { popularity: candidate.popularity }),
       confidence: score,
     }))
   }
