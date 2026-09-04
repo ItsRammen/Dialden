@@ -14,6 +14,19 @@ function functionSource(script: string, name: string, nextName: string): string 
 }
 
 describe('LG webOS presence telemetry', () => {
+  test('prefers English browser audio tracks without replacing the original fallback', () => {
+    const script = readFileSync(
+      join(import.meta.dir, '..', 'clients', 'webos', 'app.js'),
+      'utf8'
+    )
+
+    expect(script).toContain('selectPreferredAudioTrack(event.currentTarget)')
+    expect(script).toContain('function selectPreferredAudioTrack(video)')
+    expect(script).toContain("primary === 'en' || primary === 'eng'")
+    expect(script).toContain('if (english < 0) return;')
+    expect(script).toContain('tracks[index].enabled = index === english')
+  })
+
   test('uses a stable local identity and sends only the public heartbeat fields', () => {
     const script = readFileSync(
       join(import.meta.dir, '..', 'clients', 'webos', 'app.js'),

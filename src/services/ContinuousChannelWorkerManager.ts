@@ -14,6 +14,8 @@ export interface ChannelTimelinePosition {
   readonly sourceDurationSeconds?: number
   /** Set false for silent media so the pipeline synthesizes normalized audio. */
   readonly hasAudio?: boolean
+  /** Zero-based audio-stream ordinal selected from the source container. */
+  readonly audioStreamIndex?: number
   /**
    * 'hw' marks a source the hardware decoder is known to handle. Currently
    * dormant: per-input QSV decode produced exit-218 failures under lineup

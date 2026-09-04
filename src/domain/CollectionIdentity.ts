@@ -40,7 +40,11 @@ export interface EpisodeRange {
 }
 
 const TERMINAL_YEAR = /^(.*?)\s*\(((?:18|19|20|21)\d{2})\)\s*$/
-const EPISODE_TOKEN = /\bS(\d{1,3})E(\d{1,4})(?:(?:\s*[-+]\s*E?|E)(\d{1,4}))?\b/i
+// Release managers do not agree on episode-token spacing. Treat S03E08,
+// S03 E08, and S03 - E08 as the same identity so provider metadata can still
+// be joined to the file instead of leaving the guide to display its basename.
+const EPISODE_TOKEN =
+  /\bS(\d{1,3})[\s._-]*E(\d{1,4})(?:(?:\s*[-+]\s*E?|E)(\d{1,4}))?\b/i
 const SEASON_DIRECTORY = /^Season[\s._-]*(\d{1,3})$/i
 
 /**

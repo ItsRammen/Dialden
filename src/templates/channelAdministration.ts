@@ -59,6 +59,7 @@ export function renderChannelAdministration(
           <p>Manage channel availability, automated lineups, schedules, and app branding.</p>
         </div>
         <div class="channel-admin-hero-actions">
+          <a class="channel-admin-link" href="#channel-improvements">Channel improvements</a>
           <a class="channel-admin-link channel-admin-create" href="/channels?builder=create#station-builder">Create station</a>
         </div>
       </header>
@@ -88,6 +89,8 @@ export function renderChannelAdministration(
             : '<p class="channel-admin-empty">No channels are configured yet. Create one to start broadcasting.</p>'
         }
       </section>
+
+      ${renderChannelImprovements(snapshot.channels, options.automation)}
 
       ${
         options.automation && options.automationOpen && !options.brandingId
@@ -145,6 +148,118 @@ export function renderChannelAdministration(
       }
     </div>`
   )
+}
+
+function renderChannelImprovements(
+  channels: readonly LibraryChannelPolicy[],
+  catalog?: StationAutomationCatalog
+): string {
+  const automated = channels.filter((channel) => channel.automation)
+  if (!catalog) {
+    return `<section class="channel-improvements" id="channel-improvements" aria-labelledby="channel-improvements-title">
+      <header class="channel-improvements-heading"><div><p class="channel-admin-eyebrow">Library opportunities</p><h2 id="channel-improvements-title">Channel improvements</h2><p>Current lineups and curated additions will appear here when the playable catalog is available.</p></div></header>
+    </section>`
+  }
+  if (automated.length === 0) {
+    return `<section class="channel-improvements" id="channel-improvements" aria-labelledby="channel-improvements-title">
+      <header class="channel-improvements-heading"><div><p class="channel-admin-eyebrow">Library opportunities</p><h2 id="channel-improvements-title">Channel improvements</h2><p>Create an Auto channel to see its current playable lineup and curated show suggestions here.</p></div></header>
+    </section>`
+  }
+
+  const collectionsByReference = new Map(
+    catalog.collections.map((collection) => [
+      collectionReferenceKey(collection),
+      collection,
+    ])
+  )
+  const collectionsById = new Map(
+    catalog.collections.map((collection) => [collection.id, collection])
+  )
+  const profiles = new Map(
+    (catalog.networkProfiles ?? []).map((profile) => [profile.id, profile])
+  )
+
+  return `<section class="channel-improvements" id="channel-improvements" aria-labelledby="channel-improvements-title">
+    <header class="channel-improvements-heading">
+      <div><p class="channel-admin-eyebrow">Library opportunities</p><h2 id="channel-improvements-title">Channel improvements</h2><p>See what each channel can play today and which curated additions would strengthen its lineup.</p></div>
+    </header>
+    <div class="channel-improvement-grid">
+      ${automated.map((channel) => {
+        const references = channel.automation?.collectionRefs ?? []
+        const profile = channel.automation?.networkId
+          ? profiles.get(channel.automation.networkId)
+          : undefined
+        const startYear = channel.automation?.eraStartYear ?? profile?.availableStartYear
+        const endYear = channel.automation?.eraEndYear ?? profile?.availableEndYear
+        const followsProfile = channel.automation?.selectionMode === 'automatic'
+        const profileMatches = followsProfile && profile
+          ? profile.matches.filter((match) =>
+              startYear === undefined || endYear === undefined
+                ? true
+                : erasOverlap(
+                    match.airStartYear,
+                    match.airEndYear,
+                    startYear,
+                    endYear
+                  )
+            )
+          : []
+        const available = (followsProfile
+          ? profileMatches.map((match) => collectionsById.get(match.collectionId))
+          : references.map((reference) =>
+              collectionsByReference.get(collectionReferenceKey(reference))
+            ))
+          .filter((collection): collection is StationAutomationCatalog['collections'][number] => Boolean(collection))
+          .sort((left, right) => left.displayTitle.localeCompare(right.displayTitle))
+        const unavailableCount = followsProfile
+          ? 0
+          : references.length - available.length
+        const suggestions = profile?.missingSuggestions.filter((suggestion) =>
+          startYear === undefined || endYear === undefined
+            ? true
+            : erasOverlap(
+                suggestion.airStartYear,
+                suggestion.airEndYear,
+                startYear,
+                endYear
+              )
+        ) ?? []
+        const era = startYear !== undefined && endYear !== undefined
+          ? ` · ${startYear}–${endYear}`
+          : ''
+        return `<article class="channel-improvement-card">
+          <header><div><h3>${escapeHtml(channel.name)}</h3><p>${profile ? `${escapeHtml(profile.name)}${era}` : 'Custom automated lineup'}</p></div><a href="/channels?builder=${encodeURIComponent(channel.id)}#station-builder">Review lineup</a></header>
+          <div class="channel-improvement-columns">
+            <section aria-labelledby="available-${escapeHtml(channel.id)}">
+              <h4 id="available-${escapeHtml(channel.id)}">Available now <span>${available.length}</span></h4>
+              ${available.length > 0
+                ? `<ul>${available.map((collection) => `<li><strong>${escapeHtml(collection.displayTitle)}</strong><small>${escapeHtml(collection.libraryKind.toUpperCase())} · ${countLabel(collection.eligibleFiles, 'playable file')}</small></li>`).join('')}</ul>`
+                : profile
+                  ? '<p class="channel-improvement-empty">No channel title is currently playable.</p>'
+                  : '<p class="channel-improvement-empty">Open Review lineup to inspect this custom channel’s saved selections.</p>'}
+              ${unavailableCount > 0 ? `<p class="channel-improvement-warning">${countLabel(unavailableCount, 'saved title')} temporarily unavailable</p>` : ''}
+            </section>
+            <section aria-labelledby="suggested-${escapeHtml(channel.id)}">
+              <h4 id="suggested-${escapeHtml(channel.id)}">Suggested additions <span>${suggestions.length}</span></h4>
+              ${profile
+                ? suggestions.length > 0
+                  ? `<ul>${suggestions.map((suggestion) => `<li><strong>${escapeHtml(suggestion.title)}</strong><small>${escapeHtml(suggestion.libraryKind.toUpperCase())} · carried ${suggestion.airStartYear}–${suggestion.airEndYear}</small></li>`).join('')}</ul>`
+                  : '<p class="channel-improvement-empty">Your library covers every curated title for this era.</p>'
+                : '<p class="channel-improvement-empty">Custom channels have no network-specific recommendation profile.</p>'}
+            </section>
+          </div>
+        </article>`
+      }).join('')}
+    </div>
+  </section>`
+}
+
+function collectionReferenceKey(value: {
+  readonly rootId: string
+  readonly libraryKind: string
+  readonly identityKey: string
+}): string {
+  return JSON.stringify([value.rootId, value.libraryKind, value.identityKey])
 }
 
 function renderManualEditor(

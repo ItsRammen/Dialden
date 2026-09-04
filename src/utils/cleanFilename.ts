@@ -31,6 +31,14 @@ export function cleanMediaTitle(value: string): string {
     ''
   )
 
+  // The same release metadata is also commonly wrapped in parentheses.
+  // Permit a trailing release index (for example `(1080p - WEB-DL)-91`), but
+  // require a technical token so real subtitles such as `(Part One)` remain.
+  title = title.replace(
+    /\s*\((?=[^)]*(?:sdtv|hdtv|webrip|web[ ._-]?dl|blu[ ._-]?ray|b[dr]rip|dvdrip|remux|av1|hevc|x26[45]|h\.?26[45]|aac|ddp?|\d{3,4}[pi]|(?:8|10)bit))[^)]+\)(?:[\s._-]*\d{1,4})?\s*$/i,
+    ''
+  )
+
   // Some libraries omit brackets and append a release-quality block directly
   // to the episode title (for example, `Title-WEB-DL-1080p`). Require the
   // suffix to begin with an unambiguous source or resolution token, then

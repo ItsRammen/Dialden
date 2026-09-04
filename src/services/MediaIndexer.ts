@@ -560,6 +560,42 @@ export class MediaIndexer {
     if (itemsToUpsert.length > 0) {
       await this.repository.upsertBatch(itemsToUpsert)
 
+      // A rescan can discover episode coordinates that an older parser did
+      // not understand (or add another episode to an already matched show).
+      // Queue only those existing TMDB identities for refresh; the detached
+      // metadata worker will fetch the relevant season and attach canonical
+      // episode names after scan completion.
+      const episodeRefreshes = new Map<number, (typeof descriptors)[number]>()
+      for (const descriptor of descriptors) {
+        const { collection, identity, existing } = descriptor
+        if (
+          root.kind !== 'tv' ||
+          !collection?.metadataExternalId ||
+          collection.metadataStatus === 'pending' ||
+          identity?.seasonNumber == null ||
+          identity.episodeNumber == null
+        ) {
+          continue
+        }
+        if (
+          !existing ||
+          existing.collectionId !== collection.id ||
+          existing.seasonNumber !== identity.seasonNumber ||
+          existing.episodeNumber !== identity.episodeNumber
+        ) {
+          episodeRefreshes.set(collection.id, descriptor)
+        }
+      }
+      for (const { collection } of episodeRefreshes.values()) {
+        if (!collection?.metadataExternalId) continue
+        await this.repository.updateCollectionMetadata(collection.id, {
+          provider: collection.metadataProvider ?? 'tmdb',
+          externalId: collection.metadataExternalId,
+          status: 'pending',
+          error: null,
+        })
+      }
+
       if (typeof this.repository.reconcileCollections === 'function') {
         await this.repository.reconcileCollections(
           root.id,

@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import { FfmpegContinuousHlsPipelineFactory } from '../src/services/FfmpegContinuousHlsPipelineFactory'
+import {
+  FfmpegContinuousHlsPipelineFactory,
+  preferredAudioStreamIndex,
+} from '../src/services/FfmpegContinuousHlsPipelineFactory'
 import type { ChannelPipelineRequest } from '../src/services/ContinuousChannelWorkerManager'
 
 function deferred<T>() {
@@ -27,6 +30,52 @@ const request = (): ChannelPipelineRequest => ({
 })
 
 describe('FfmpegContinuousHlsPipelineFactory', () => {
+  test('prefers English audio and otherwise follows original/default metadata', () => {
+    expect(
+      preferredAudioStreamIndex([
+        { language: 'jpn', default: true },
+        { language: 'eng' },
+      ])
+    ).toBe(1)
+    expect(
+      preferredAudioStreamIndex([
+        { language: 'eng' },
+        { language: 'en-US', default: true },
+      ])
+    ).toBe(1)
+    expect(
+      preferredAudioStreamIndex([
+        { language: 'fra', default: true },
+        { language: 'jpn', original: true },
+      ])
+    ).toBe(1)
+    expect(
+      preferredAudioStreamIndex([
+        { language: 'fra' },
+        { language: 'jpn', default: true },
+      ])
+    ).toBe(1)
+    expect(preferredAudioStreamIndex([{ language: 'jpn' }])).toBe(0)
+    expect(preferredAudioStreamIndex([])).toBeNull()
+  })
+
+  test('maps the selected audio-stream ordinal into the filter graph', () => {
+    const value = request()
+    const sequence = value.sequence.map((item, index) => ({
+      ...item,
+      hasAudio: true,
+      audioStreamIndex: index === 0 ? 1 : 0,
+    }))
+    const command = new FfmpegContinuousHlsPipelineFactory().command({
+      ...value,
+      position: sequence[0]!,
+      sequence,
+    })
+    const graph = command[command.indexOf('-filter_complex') + 1] ?? ''
+    expect(graph).toContain('[0:a:1]aformat=')
+    expect(graph).toContain('[1:a:0]aformat=')
+  })
+
   test('keeps QSV-hinted inputs in system memory for the software concat graph', () => {
     const value = request()
     const first = { ...value.sequence[0]!, decodeHint: 'hw' as const }

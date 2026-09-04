@@ -22,6 +22,35 @@ export interface ChannelProcessSpawner {
 
 export interface ChannelAudioProbe {
   hasAudio(sourcePath: string): Promise<boolean>
+  /** Prefer language-aware selection when the probe supports it. */
+  selectAudioStream?(sourcePath: string): Promise<number | null>
+}
+
+export interface ProbedAudioStream {
+  readonly language?: string
+  readonly default?: boolean
+  readonly original?: boolean
+}
+
+/** English wins; otherwise respect original/default container intent. */
+export function preferredAudioStreamIndex(
+  streams: readonly ProbedAudioStream[]
+): number | null {
+  if (streams.length === 0) return null
+  const english = streams
+    .map((stream, index) => ({ stream, index }))
+    .filter(({ stream }) => isEnglish(stream.language))
+  if (english.length > 0) {
+    return (
+      english.find(({ stream }) => stream.default === true)?.index ??
+      english.find(({ stream }) => stream.original === true)?.index ??
+      english[0]!.index
+    )
+  }
+  const original = streams.findIndex((stream) => stream.original === true)
+  if (original >= 0) return original
+  const defaultStream = streams.findIndex((stream) => stream.default === true)
+  return defaultStream >= 0 ? defaultStream : 0
 }
 
 const AUDIO_PROBE_CACHE_TTL_MS = 10 * 60_000
@@ -94,17 +123,45 @@ class FfprobeChannelAudioProbe implements ChannelAudioProbe {
   constructor(private readonly ffprobePath: string) {}
 
   async hasAudio(sourcePath: string): Promise<boolean> {
+    return (await this.selectAudioStream(sourcePath)) !== null
+  }
+
+  async selectAudioStream(sourcePath: string): Promise<number | null> {
     const child = Bun.spawn(
       [
-        this.ffprobePath, '-v', 'error', '-select_streams', 'a:0',
-        '-show_entries', 'stream=index', '-of', 'csv=p=0', sourcePath,
+        this.ffprobePath, '-v', 'error', '-select_streams', 'a',
+        '-show_entries', 'stream=index:stream_tags=language:stream_disposition=default,original',
+        '-of', 'json', sourcePath,
       ],
       { stdout: 'pipe', stderr: 'ignore' }
     )
     const output = await new Response(child.stdout).text()
     const code = await child.exited
     if (code !== 0) throw new Error(`ffprobe failed for ${sourcePath} with code ${code}`)
-    return output.trim().length > 0
+    let data: unknown
+    try {
+      data = JSON.parse(output)
+    } catch {
+      throw new Error(`ffprobe returned invalid audio metadata for ${sourcePath}`)
+    }
+    const streams =
+      data && typeof data === 'object' && Array.isArray((data as { streams?: unknown }).streams)
+        ? (data as {
+            streams: Array<{
+              tags?: { language?: unknown }
+              disposition?: { default?: unknown; original?: unknown }
+            }>
+          }).streams
+        : []
+    return preferredAudioStreamIndex(
+      streams.map((stream) => ({
+        ...(typeof stream.tags?.language === 'string'
+          ? { language: stream.tags.language }
+          : {}),
+        default: stream.disposition?.default === 1,
+        original: stream.disposition?.original === 1,
+      }))
+    )
   }
 }
 
@@ -117,7 +174,10 @@ export class FfmpegContinuousHlsPipelineFactory implements ChannelPipelineFactor
   private lastStartNumber = 0
   private readonly audioProbeCache = new Map<
     string,
-    { expiresAt: number; promise: Promise<boolean> }
+    {
+      expiresAt: number
+      promise: Promise<{ hasAudio: boolean; audioStreamIndex: number }>
+    }
   >()
 
   constructor(
@@ -131,13 +191,23 @@ export class FfmpegContinuousHlsPipelineFactory implements ChannelPipelineFactor
   async start(request: ChannelPipelineRequest): Promise<ChannelPipelineHandle> {
     if (request.sequence.length === 0) throw new Error('Continuous HLS pipeline needs at least one source')
     const sequence = await Promise.all(
-      request.sequence.map(async (item) => ({
-        ...item,
-        hasAudio:
-          item.hasAudio === undefined
-            ? await this.probeAudio(item.sourcePath)
-            : item.hasAudio,
-      }))
+      request.sequence.map(async (item) => {
+        let audio = { hasAudio: false, audioStreamIndex: 0 }
+        if (item.hasAudio !== false) {
+          try {
+            audio = await this.probeAudio(item.sourcePath)
+          } catch (error) {
+            if (item.hasAudio !== true) throw error
+            // The indexer's prior probe still establishes that audio exists.
+            // Keep the channel available on a transient language-probe error.
+            audio = { hasAudio: true, audioStreamIndex: 0 }
+          }
+          if (item.hasAudio === true && !audio.hasAudio) {
+            audio = { hasAudio: true, audioStreamIndex: 0 }
+          }
+        }
+        return { ...item, ...audio }
+      })
     )
     const command = this.command({ ...request, sequence, position: sequence[0] ?? request.position })
     const process = this.spawner.spawn(command)
@@ -175,7 +245,11 @@ export class FfmpegContinuousHlsPipelineFactory implements ChannelPipelineFactor
         '-filter_hw_device', 'qs'
       )
     }
-    const streams: Array<{ video: number; audio: number }> = []
+    const streams: Array<{
+      video: number
+      audio: number
+      audioStreamIndex: number
+    }> = []
     let inputIndex = 0
     for (const item of request.sequence) {
       // Decode into system memory. The normalization/concat graph below uses
@@ -189,18 +263,20 @@ export class FfmpegContinuousHlsPipelineFactory implements ChannelPipelineFactor
       args.push('-i', item.sourcePath)
       const video = inputIndex++
       let audio = video
+      let audioStreamIndex = item.audioStreamIndex ?? 0
       if (item.hasAudio === false) {
         if (!item.sourceDurationSeconds || item.sourceDurationSeconds <= 0) {
           throw new Error(`Silent schedule item ${item.scheduleItemId} needs a source duration`)
         }
         args.push('-f', 'lavfi', '-t', decimal(item.sourceDurationSeconds), '-i', 'anullsrc=r=48000:cl=stereo')
         audio = inputIndex++
+        audioStreamIndex = 0
       }
-      streams.push({ video, audio })
+      streams.push({ video, audio, audioStreamIndex })
     }
 
     const chains: string[] = []
-    streams.forEach(({ video, audio }, index) => {
+    streams.forEach(({ video, audio, audioStreamIndex }, index) => {
       const normalizedVideo = `[basev${index}]`
       chains.push(
         `[${video}:v:0]scale=${request.profile.maximumWidth}:${request.profile.maximumHeight}:force_original_aspect_ratio=decrease,` +
@@ -208,7 +284,7 @@ export class FfmpegContinuousHlsPipelineFactory implements ChannelPipelineFactor
           `setsar=1,fps=30,format=yuv420p,setpts=PTS-STARTPTS${normalizedVideo}`
       )
       chains.push(
-        `[${audio}:a:0]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,` +
+        `[${audio}:a:${audioStreamIndex}]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,` +
           `aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS[a${index}]`
       )
       chains.push(`${normalizedVideo}null[v${index}]`)
@@ -275,12 +351,24 @@ export class FfmpegContinuousHlsPipelineFactory implements ChannelPipelineFactor
     return args
   }
 
-  private async probeAudio(sourcePath: string): Promise<boolean> {
+  private async probeAudio(
+    sourcePath: string
+  ): Promise<{ hasAudio: boolean; audioStreamIndex: number }> {
     const now = this.now()
     const cached = this.audioProbeCache.get(sourcePath)
     if (cached && cached.expiresAt > now) return cached.promise
     if (cached) this.audioProbeCache.delete(sourcePath)
-    const pending = this.audioProbe.hasAudio(sourcePath).catch((error) => {
+    const pending = (
+      this.audioProbe.selectAudioStream
+        ? this.audioProbe.selectAudioStream(sourcePath).then((index) => ({
+            hasAudio: index !== null,
+            audioStreamIndex: index ?? 0,
+          }))
+        : this.audioProbe.hasAudio(sourcePath).then((hasAudio) => ({
+            hasAudio,
+            audioStreamIndex: 0,
+          }))
+    ).catch((error) => {
       if (this.audioProbeCache.get(sourcePath)?.promise === pending) {
         this.audioProbeCache.delete(sourcePath)
       }
@@ -297,6 +385,12 @@ export class FfmpegContinuousHlsPipelineFactory implements ChannelPipelineFactor
     }
     return pending
   }
+}
+
+function isEnglish(language: string | undefined): boolean {
+  const normalized = language?.trim().toLowerCase().replace(/_/g, '-') ?? ''
+  const primary = normalized.split('-')[0]
+  return primary === 'en' || primary === 'eng' || normalized === 'english'
 }
 
 function decimal(value: number): string {

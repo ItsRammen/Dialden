@@ -330,6 +330,54 @@ describe('MediaIndexer', () => {
     )
   })
 
+  test('queues matched shows for TMDB episode refresh when a file gains episode coordinates', async () => {
+    const path =
+      '/media/tv/CatDog/Season 03/Catdog - S03 E08-E09 - Remain Seated And Catdog Catcher (1080P - Web-Dl)-91.mkv'
+    const multiRootConfig: MediaConfig = {
+      ...mediaConfig,
+      roots: [{ id: 'tv', directory: '/media/tv', kind: 'tv' }],
+    }
+    fs.listFiles
+      .mockReturnValueOnce([path])
+      .mockReturnValueOnce([])
+    repo.upsertCollections.mockImplementation(async (collections) =>
+      collections.map(
+        (collection) =>
+          ({
+            ...collection,
+            id: 27,
+            effectiveDecision: 'allow',
+            metadataProvider: 'tmdb',
+            metadataExternalId: '606',
+            metadataStatus: 'matched',
+          }) as any
+      )
+    )
+
+    indexer = new MediaIndexer(
+      multiRootConfig,
+      interludeConfig,
+      repo,
+      fs,
+      probe
+    )
+    await indexer.scanAll()
+
+    expect(repo.upsertBatch.mock.calls[0]?.[0]?.[0]).toEqual(
+      expect.objectContaining({
+        seasonNumber: 3,
+        episodeNumber: 8,
+        episodeTitle: 'Remain Seated And Catdog Catcher',
+      })
+    )
+    expect(repo.updateCollectionMetadata).toHaveBeenCalledWith(27, {
+      provider: 'tmdb',
+      externalId: '606',
+      status: 'pending',
+      error: null,
+    })
+  })
+
   test('coalesces per-file progress events while preserving root and terminal state', async () => {
     const files = Array.from(
       { length: 40 },

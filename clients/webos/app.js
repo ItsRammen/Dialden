@@ -301,6 +301,7 @@
   function bindVideoEvents(video) {
     video.addEventListener('loadedmetadata', function (event) {
       if (event.currentTarget !== tuneVideo()) return;
+      selectPreferredAudioTrack(event.currentTarget);
       joinLive();
     }, false);
     video.addEventListener('canplay', function (event) {
@@ -348,6 +349,27 @@
       clearBufferingTimers();
       handleMediaError();
     }, false);
+  }
+
+  function selectPreferredAudioTrack(video) {
+    var tracks = video && video.audioTracks;
+    if (!tracks || typeof tracks.length !== 'number' || tracks.length < 2) return;
+    var english = -1;
+    var index;
+    for (index = 0; index < tracks.length; index += 1) {
+      var language = String(tracks[index].language || '').toLowerCase().replace(/_/g, '-');
+      var primary = language.split('-')[0];
+      if (primary === 'en' || primary === 'eng' || language === 'english') {
+        english = index;
+        break;
+      }
+    }
+    /* If English is absent, do not disturb the container-selected track; it
+       is the only browser-visible signal for the source's original/default. */
+    if (english < 0) return;
+    for (index = 0; index < tracks.length; index += 1) {
+      tracks[index].enabled = index === english;
+    }
   }
 
   function handleVideoWaiting(event) {

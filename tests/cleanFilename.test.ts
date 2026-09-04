@@ -51,4 +51,18 @@ describe('cleanFilename', () => {
     expect(cleanFilename('Room 104.mkv')).toBe('Room 104')
     expect(cleanFilename('Catch-22.mkv')).toBe('Catch-22')
   })
+
+  it('removes parenthesized release metadata and trailing release indexes', () => {
+    expect(cleanFilename('New Girl on The Block (480p h265).mkv')).toBe(
+      'New Girl on The Block'
+    )
+    expect(
+      cleanFilename(
+        'Remain Seated And Catdog Catcher (1080P - Web-Dl)-91.mkv'
+      )
+    ).toBe('Remain Seated And Catdog Catcher')
+    expect(cleanFilename('The Visitor (Part One).mkv')).toBe(
+      'The Visitor (Part One)'
+    )
+  })
 })

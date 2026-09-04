@@ -121,6 +121,26 @@ describe('CollectionIdentity', () => {
     expect(parseEpisodeDisplayTitle(relativePath)).toBe(expected)
   })
 
+  test('parses spaced multi-episode tokens so TMDB titles can be attached', () => {
+    const relativePath =
+      'CatDog/Season 03/Catdog - S03 E08-E09 - Remain Seated And Catdog Catcher (1080P - Web-Dl)-91.mkv'
+
+    expect(
+      deriveCollectionIdentity({ libraryKind: 'tv', relativePath })
+    ).toEqual(
+      expect.objectContaining({
+        seasonNumber: 3,
+        episodeNumber: 8,
+        episodeTitle: 'Remain Seated And Catdog Catcher',
+      })
+    )
+    expect(parseEpisodeRange(relativePath)).toEqual({
+      seasonNumber: 3,
+      episodeNumber: 8,
+      endEpisodeNumber: 9,
+    })
+  })
+
   test('does not reinterpret the numeric title 1923 as a year', () => {
     expect(parseCollectionTitle('1923')).toEqual({ title: '1923', year: null })
     expect(

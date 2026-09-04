@@ -1386,6 +1386,128 @@
   color: var(--text-secondary);
 }
 
+.channel-improvements {
+  padding: clamp(1rem, 3vw, 1.5rem);
+  border: var(--border-cartoon);
+  border-radius: var(--border-radius);
+  background: rgba(15, 52, 96, 0.82);
+  box-shadow: var(--shadow-cartoon);
+}
+
+.channel-improvements-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.channel-improvements-heading h2,
+.channel-improvements-heading p {
+  margin: 0;
+}
+
+.channel-improvements-heading h2 {
+  margin-bottom: 0.35rem;
+}
+
+.channel-improvement-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.channel-improvement-card {
+  padding: 1rem;
+  border: 1px solid rgba(0, 214, 201, 0.35);
+  border-radius: 0.85rem;
+  background: rgba(3, 18, 39, 0.42);
+}
+
+.channel-improvement-card > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 0.9rem;
+  border-bottom: 1px solid rgba(0, 214, 201, 0.25);
+}
+
+.channel-improvement-card h3,
+.channel-improvement-card header p,
+.channel-improvement-card h4 {
+  margin: 0;
+}
+
+.channel-improvement-card header p,
+.channel-improvement-card small,
+.channel-improvement-empty {
+  color: var(--text-secondary);
+}
+
+.channel-improvement-card > header a {
+  color: var(--toast-yellow);
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.channel-improvement-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  padding-top: 1rem;
+}
+
+.channel-improvement-columns h4 {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.channel-improvement-columns h4 span {
+  min-width: 1.7rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(0, 214, 201, 0.12);
+  text-align: center;
+  font-size: 0.8rem;
+}
+
+.channel-improvement-columns ul {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.channel-improvement-columns li {
+  display: grid;
+  gap: 0.1rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 0.7rem;
+  background: rgba(15, 52, 96, 0.62);
+}
+
+.channel-improvement-warning {
+  margin: 0.75rem 0 0;
+  color: var(--toast-yellow);
+  font-size: 0.85rem;
+}
+
+@media (max-width: 720px) {
+  .channel-improvement-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .channel-improvement-card > header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .channel-improvement-card > header a {
+    white-space: normal;
+  }
+}
+
 .channel-builder-mode-panel {
   min-width: 0;
   padding: clamp(0.8rem, 2vw, 1rem);

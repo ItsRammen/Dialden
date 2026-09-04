@@ -189,6 +189,113 @@ describe('channel administration template', () => {
     expect(automatic).toContain('and marathon pattern')
   })
 
+  test('shows current channel availability and suggestions outside Auto lineup', () => {
+    const markup = renderChannelAdministration(
+      {
+        channels: [
+          {
+            id: 'nick-classics',
+            name: 'Nick Classics',
+            enabled: true,
+            timezone: 'UTC',
+            slots: [],
+            automation: {
+              preset: 'network-copy',
+              airtime: 'all-day',
+              networkId: 'nickelodeon',
+              eraStartYear: 1995,
+              eraEndYear: 1999,
+              selectionMode: 'automatic',
+            },
+          },
+        ],
+        manuallyOffAir: [],
+        programmingGroups: [],
+        configurationError: null,
+      },
+      {
+        automation: {
+          collections: [
+            {
+              id: 7,
+              rootId: 'tv',
+              identityKey: 'catdog',
+              collectionTitle: 'CatDog',
+              displayTitle: 'CatDog',
+              libraryKind: 'tv',
+              genres: ['Animation'],
+              networks: ['Nickelodeon'],
+              studios: [],
+              eligibleFiles: 52,
+            },
+          ],
+          genres: [],
+          networks: [],
+          studios: [],
+          presets: [],
+          networkProfiles: [
+            {
+              id: 'nickelodeon',
+              name: 'Nickelodeon',
+              description: 'Nickelodeon copy',
+              audience: 'school-age',
+              availableStartYear: 1979,
+              availableEndYear: 2026,
+              defaultStartYear: 1990,
+              defaultEndYear: 1999,
+              blocks: [],
+              matches: [
+                {
+                  collectionId: 7,
+                  title: 'CatDog',
+                  libraryKind: 'tv',
+                  firstAirYear: 1998,
+                  airStartYear: 1998,
+                  airEndYear: 2005,
+                  blockIds: [],
+                  playbackOrder: 'season-sequential',
+                  score: 100,
+                  eligibilityReason: 'curated-network-lineup',
+                },
+              ],
+              missingSuggestions: [
+                {
+                  title: 'Hey Arnold!',
+                  libraryKind: 'tv',
+                  firstYear: 1996,
+                  airStartYear: 1996,
+                  airEndYear: 2004,
+                  tags: ['animation'],
+                },
+                {
+                  title: 'Modern Nick Show',
+                  libraryKind: 'tv',
+                  firstYear: 2015,
+                  airStartYear: 2015,
+                  airEndYear: 2018,
+                  tags: ['animation'],
+                },
+              ],
+              matchedShows: 1,
+              matchedMovies: 0,
+              movieCadence: 'none',
+              marathonCadence: 'standard',
+            },
+          ],
+          truncated: false,
+        },
+      }
+    )
+
+    expect(markup).toContain('id="channel-improvements"')
+    expect(markup).toContain('Available now <span>1</span>')
+    expect(markup).toContain('<strong>CatDog</strong>')
+    expect(markup).toContain('52 playable files')
+    expect(markup).toContain('Suggested additions <span>1</span>')
+    expect(markup).toContain('<strong>Hey Arnold!</strong>')
+    expect(markup).not.toContain('<strong>Modern Nick Show</strong>')
+  })
+
   test('renders an explicit custom builder with an honest preview and direct creation action', () => {
     const markup = renderChannelAdministration(
       {
