@@ -12,6 +12,27 @@ import { LogoBackgroundStripper } from '../src/services/LogoBackgroundStripper'
 const WIDTH = 64
 const HEIGHT = 64
 
+/*
+ * ffmpeg is a hard runtime requirement of the server and is installed in the
+ * container image, but it is not on a bare GitHub runner -- and whether it is
+ * there varies by ubuntu-latest image, so requiring it made these tests pass
+ * on one runner and fail on the next. The pixel-level cases run wherever
+ * ffmpeg exists; the contract that matters without it -- that an undecodable
+ * upload is stored exactly as it arrived -- is asserted unconditionally.
+ */
+async function ffmpegAvailable(): Promise<boolean> {
+  try {
+    const proc = Bun.spawn(['ffmpeg', '-version'], { stdout: 'ignore', stderr: 'ignore' })
+    await proc.exited
+    return proc.exitCode === 0
+  } catch {
+    return false
+  }
+}
+
+const HAS_FFMPEG = await ffmpegAvailable()
+const pixelTest = test.skipIf(!HAS_FFMPEG)
+
 async function encodePng(pixels: Uint8Array): Promise<Uint8Array> {
   const proc = Bun.spawn(
     [
@@ -76,7 +97,7 @@ function checkerboardWithMark(): Uint8Array {
 }
 
 describe('LogoBackgroundStripper', () => {
-  test('clears a transparency checkerboard that was flattened into the pixels', async () => {
+  pixelTest('clears a transparency checkerboard that was flattened into the pixels', async () => {
     const png = await encodePng(checkerboardWithMark())
     const result = await new LogoBackgroundStripper().strip(png, WIDTH, HEIGHT)
 
@@ -89,7 +110,7 @@ describe('LogoBackgroundStripper', () => {
     expect(alphaAt(pixels, WIDTH / 2, HEIGHT / 2)).toBe(255)
   })
 
-  test('keeps white that is enclosed by the mark, which a colour key would erase', async () => {
+  pixelTest('keeps white that is enclosed by the mark, which a colour key would erase', async () => {
     /* The Nickelodeon logo is exactly this shape: white lettering sitting
        inside an orange splat, the same #FFFFFF as the background around it.
        Only the background reaches the border, so only the background goes. */
@@ -106,7 +127,7 @@ describe('LogoBackgroundStripper', () => {
     expect(alphaAt(out, 0, 0)).toBe(0)
   })
 
-  test('clears a flat white card', async () => {
+  pixelTest('clears a flat white card', async () => {
     const pixels = blank()
     for (let y = 0; y < HEIGHT; y += 1) {
       for (let x = 0; x < WIDTH; x += 1) set(pixels, x, y, 255, 255, 255)
@@ -124,7 +145,7 @@ describe('LogoBackgroundStripper', () => {
     expect(alphaAt(out, 32, 32)).toBe(255)
   })
 
-  test('leaves a logo that already carries real transparency alone', async () => {
+  pixelTest('leaves a logo that already carries real transparency alone', async () => {
     const pixels = checkerboardWithMark()
     pixels[3] = 0
     const png = await encodePng(pixels)
@@ -135,7 +156,7 @@ describe('LogoBackgroundStripper', () => {
     expect(result.bytes).toBe(png)
   })
 
-  test('leaves a logo with a dark or busy border alone', async () => {
+  pixelTest('leaves a logo with a dark or busy border alone', async () => {
     const pixels = blank()
     for (let y = 0; y < HEIGHT; y += 1) {
       for (let x = 0; x < WIDTH; x += 1) set(pixels, x, y, 12, 24, 60)
@@ -148,7 +169,7 @@ describe('LogoBackgroundStripper', () => {
     expect(result.reason).toBe('border is not a painted background')
   })
 
-  test('refuses to consume an image that is background all the way through', async () => {
+  pixelTest('refuses to consume an image that is background all the way through', async () => {
     const pixels = blank()
     for (let y = 0; y < HEIGHT; y += 1) {
       for (let x = 0; x < WIDTH; x += 1) set(pixels, x, y, 255, 255, 255)
@@ -161,7 +182,7 @@ describe('LogoBackgroundStripper', () => {
     expect(result.reason).toBe('background would consume the image')
   })
 
-  test('returns the upload untouched when it cannot be decoded', async () => {
+  test('returns the upload untouched when ffmpeg cannot decode it, or is absent', async () => {
     const bytes = new Uint8Array(24)
     bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
     const result = await new LogoBackgroundStripper().strip(bytes, 64, 64)

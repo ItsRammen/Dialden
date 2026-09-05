@@ -4,6 +4,19 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ChannelLogoStore } from '../src/services/ChannelLogoStore'
 
+/* Building a real PNG needs ffmpeg, which a bare GitHub runner may not have.
+   Only the repair case needs it; keeping the background never reaches it. */
+const HAS_FFMPEG = await (async (): Promise<boolean> => {
+  try {
+    const proc = Bun.spawn(['ffmpeg', '-version'], { stdout: 'ignore', stderr: 'ignore' })
+    await proc.exited
+    return proc.exitCode === 0
+  } catch {
+    return false
+  }
+})()
+const pixelTest = test.skipIf(!HAS_FFMPEG)
+
 describe('ChannelLogoStore', () => {
   test('stores a bounded PNG under the server-controlled channel path', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'toasttv-channel-logo-'))
@@ -89,7 +102,7 @@ describe('ChannelLogoStore', () => {
     return png
   }
 
-  test('repairs a painted-on background by default', async () => {
+  pixelTest('repairs a painted-on background by default', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'toasttv-logo-repair-'))
     try {
       const png = await whiteCardPng()
@@ -110,7 +123,12 @@ describe('ChannelLogoStore', () => {
   test('stores the upload byte for byte when the background is kept', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'toasttv-logo-keep-'))
     try {
-      const png = await whiteCardPng()
+      /* Deliberately not a real image: keeping the background skips the
+         repair entirely, so this must hold with no ffmpeg on the box. */
+      const png = new Uint8Array(24)
+      png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+      new DataView(png.buffer).setUint32(16, 64)
+      new DataView(png.buffer).setUint32(20, 64)
       const store = new ChannelLogoStore(directory)
       const path = await store.save(
         'kids', new File([png], 'kids.png'), undefined, { keepBackground: true }
