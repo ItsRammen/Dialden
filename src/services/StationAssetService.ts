@@ -47,7 +47,7 @@ const KINDS = new Set<StationAssetKind>([
 ])
 
 export function looksLikeStationAssetFilename(filename: string): boolean {
-  return filename.replace(/^.*[\\/]/, '').includes('__')
+  return filename.replace(/^.*[\\/]/, '').match(/__|--/) !== null
 }
 
 export function buildStationAssetFilename(
@@ -99,6 +99,7 @@ function positiveInteger(
 export function parseStationAssetFilename(
   filename: string
 ): StationAssetDescriptor | null {
+  if (filename.includes('--')) return parseNickstoryAssetFilename(filename)
   const basename = filename.replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, '')
   const fields = basename.split('__').map((field) => field.trim().toLowerCase())
   const station = fields[0]
@@ -160,6 +161,44 @@ export function parseStationAssetFilename(
   return result
 }
 
+/** Canonical completed exports from nickstory_toasttv_combined_v5.py. */
+export function parseNickstoryAssetFilename(filename: string): StationAssetDescriptor | null {
+  const fields = filename.replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, '').toLowerCase().split('--')
+  const station = fields.shift()
+  const type = fields.shift()
+  const code = fields.pop()
+  const year = fields.pop()
+  if (!station || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(station) ||
+      !year || !/^(19|20)\d{2}$/.test(year) || !code || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(code)) return null
+  const base = { station: station === 'nickelodeon' ? 'nick' : station }
+  const show = (value: string | undefined): value is string =>
+    !!value && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value) && value !== 'generic' && !value.startsWith('generic-')
+  if (type === 'now-next' && fields.length === 2) {
+    const now = fields[0]?.startsWith('now-') ? fields[0].slice(4) : undefined
+    const next = fields[1]?.startsWith('next-') ? fields[1].slice(5) : undefined
+    return show(now) && show(next) ? { ...base, kind: 'bumper-now-next', now, next } : null
+  }
+  if (fields.length !== 1) return null
+  const value = fields[0]
+  if (type === 'more' && show(value)) return { ...base, kind: 'bumper-more', show: value }
+  if (type === 'up-next' && show(value)) return { ...base, kind: 'bumper-up-next', next: value }
+  // A show-specific or ambiguous ID must never become a network-wide fallback.
+  if (!value || !/^generic(?:-[a-z0-9]+)*$/.test(value)) return null
+  const kinds = { ident: 'ident-general', filler: 'filler-general', standby: 'standby-loop' } as const
+  const kind = type && Object.prototype.hasOwnProperty.call(kinds, type)
+    ? kinds[type as keyof typeof kinds] : undefined
+  return kind ? { ...base, kind } : null
+}
+
+function sameStationShow(left: string | undefined, right: string | undefined): boolean {
+  if (!left || !right) return false
+  // Library collection folders often append a release year; exports do not.
+  const year = /-(?:19|20)\d{2}$/
+  if (year.test(left) && year.test(right)) return left === right
+  const normalize = (value: string) => value.replace(year, '')
+  return normalize(left) === normalize(right)
+}
+
 export function stationShowKey(value: string): string {
   return value
     .normalize('NFKD')
@@ -183,19 +222,19 @@ export function selectStationTransitionAsset(
         (context.maximumDurationSeconds === undefined ||
           entry.item.durationSeconds <= context.maximumDurationSeconds)
     )
-  const sameShow = context.currentShow === context.nextShow
+  const sameShow = sameStationShow(context.currentShow, context.nextShow)
   const priorities: Array<(entry: typeof described[number]) => boolean> = [
     (entry) =>
       entry.descriptor.kind === 'bumper-now-next' &&
-      entry.descriptor.now === context.nextShow &&
-      entry.descriptor.next === context.followingShow,
+      sameStationShow(entry.descriptor.now, context.nextShow) &&
+      sameStationShow(entry.descriptor.next, context.followingShow),
     (entry) =>
       sameShow &&
       entry.descriptor.kind === 'bumper-more' &&
-      entry.descriptor.show === context.nextShow,
+      sameStationShow(entry.descriptor.show, context.nextShow),
     (entry) =>
       entry.descriptor.kind === 'bumper-up-next' &&
-      entry.descriptor.next === context.nextShow,
+      sameStationShow(entry.descriptor.next, context.nextShow),
     (entry) => entry.descriptor.kind === 'ident-general',
   ]
   for (const matches of priorities) {

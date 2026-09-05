@@ -7,6 +7,7 @@
 
 import type { IMediaRepository } from '../repositories/IMediaRepository'
 import type { MediaItemInput } from '../repositories/IMediaRepository'
+import { parseNickstoryAssetFilename } from './StationAssetService'
 import { getFilename } from '../clients/FilesystemClient'
 import { isAbsolute, relative } from 'node:path'
 import type {
@@ -366,9 +367,11 @@ export class MediaIndexer {
   ): Promise<number> {
     const files = this.filesystem.listFiles(
       root.directory,
-      this.mediaConfig.supportedExtensions,
+      isInterlude ? [...this.mediaConfig.supportedExtensions, '.m4v'] : this.mediaConfig.supportedExtensions,
       excludePaths
-    )
+    ).filter((file) => !isInterlude || !this.getRelativePath(root, file).split('/').some(
+      (part) => part.startsWith('.') || part.toLowerCase() === 'rejected_downloads'
+    ))
     this.scanState = {
       ...this.scanState,
       status: 'scanning',
@@ -416,7 +419,8 @@ export class MediaIndexer {
         ? collectionsByKey.get(identity.identityKey)
         : undefined
       const collectionTitle = identity?.sourceTitle ?? getFilename(filePath)
-      const policyEnabled = collection?.effectiveDecision === 'allow'
+      const policyEnabled = collection?.effectiveDecision === 'allow' ||
+        (isInterlude && parseNickstoryAssetFilename(getFilename(filePath)) !== null)
       const existing =
         existingLocatorMap.get(relativePath) ?? existingPathMap.get(filePath)
       const mtime = this.filesystem.getMtime(filePath)

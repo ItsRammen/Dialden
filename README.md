@@ -148,6 +148,29 @@ Malformed structured names are withheld from automatic matching. Unstructured
 legacy clips remain usable as generic assets but cannot participate in exact
 station/show matching until configured in the manager.
 
+### Nickstory v5 automatic import
+
+The output of `nickstory_toasttv_combined_v5.py` can be written directly into
+any subfolder of the mounted Station Assets directory. Point the script's
+`--output` at that host folder (the one mapped to `/media/interludes`). Existing
+exports can be copied there with their folder structure and filenames intact.
+The watcher and periodic scans pick them up; no renaming, per-file configuration,
+or per-file approval is needed for recognized completed exports.
+
+Dialden recognizes the script's `nickelodeon--more--...`, `--up-next--...`,
+`--now-next--now-...--next-...`, and generic `--ident--`, `--filler--`, and
+`--standby--` filenames. It maps Nickelodeon to the `nick` station identity,
+preserves explicit current/next roles, and matches show names with or without
+trailing library release years. `.m4v` exports are supported alongside MP4,
+MKV, and MOV. Production years and codes identify variants; actual duration
+comes from Dialden's own probe.
+
+Hidden staging folders and `rejected_downloads` are excluded. JSON/CSV manifests
+are not needed and do not override playback decisions. An explicit block in
+Dialden stays blocked; unreadable videos cannot play. Ambiguous multi-show names
+remain unconfigured instead of being used as generic bumpers. Station scheduling
+must already be enabled; imports do not change your scheduling preferences.
+
 ### Scheduling and selection
 
 Open **Settings → Playback and scheduling → Station assets** to enable scheduled

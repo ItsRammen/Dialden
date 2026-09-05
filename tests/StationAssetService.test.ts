@@ -37,6 +37,36 @@ function asset(id: number, filename: string, durationSeconds = 8): MediaItem {
 }
 
 describe('station asset filenames and selection', () => {
+  test.each([
+    ['more--spongebob-squarepants', { kind: 'bumper-more', show: 'spongebob-squarepants' }],
+    ['up-next--the-fairly-oddparents', { kind: 'bumper-up-next', next: 'the-fairly-oddparents' }],
+    ['now-next--now-spongebob-squarepants--next-the-fairly-oddparents', { kind: 'bumper-now-next', now: 'spongebob-squarepants', next: 'the-fairly-oddparents' }],
+    ['ident--generic-station-id', { kind: 'ident-general' }],
+    ['filler--generic-break-in', { kind: 'filler-general' }],
+    ['standby--generic-standby', { kind: 'standby-loop' }],
+  ] as const)('recognizes Nickstory v5 export %s', (fields, expected) => {
+    expect(parseStationAssetFilename(`nickelodeon--${fields}--2008--NHD12095-11-2.m4v`)).toEqual({ station: 'nick', ...expected })
+  })
+
+  test('uses explicit current/next roles and matches year-suffixed library titles', () => {
+    const clip = asset(101, 'nickelodeon--now-next--now-spongebob-squarepants--next-the-fairly-oddparents--2008--NHD12095-11-2.mp4')
+    const context = { station: 'nick', currentShow: 'other-show', nextShow: 'spongebob-squarepants-1999', followingShow: 'the-fairly-oddparents-2001', seed: 'test' }
+    expect(selectStationTransitionAsset([clip], context)).toBe(clip)
+    expect(selectStationTransitionAsset([clip], { ...context, nextShow: context.followingShow, followingShow: context.nextShow })).toBeUndefined()
+    expect(selectStationTransitionAsset([clip], { ...context, station: 'disney' })).toBeUndefined()
+  })
+
+  test.each([
+    'nickelodeon--now-next--spongebob+fairly-oddparents--2008--CODE.mp4',
+    'nickelodeon--more--spongebob+fairly-oddparents--2008--CODE.mp4',
+    'nickelodeon--ident--spongebob--2008--CODE.mp4',
+    'nickelodeon--up-next--generic--2008--CODE.mp4',
+  ])('keeps ambiguous export out of the generic fallback: %s', (filename) => {
+    expect(parseStationAssetFilename(filename)).toBeNull()
+    expect(looksLikeStationAssetFilename(filename)).toBe(true)
+    expect(selectStationTransitionAsset([asset(101, filename)], { station: 'nick', currentShow: 'a', nextShow: 'b', seed: 'test' })).toBeUndefined()
+  })
+
   test('builds canonical names from friendly configuration values', () => {
     expect(
       buildStationAssetFilename({

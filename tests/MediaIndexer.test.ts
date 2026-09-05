@@ -63,6 +63,38 @@ describe('MediaIndexer', () => {
     indexer = new MediaIndexer(mediaConfig, interludeConfig, repo, fs, probe)
   })
 
+  test('automatically imports completed Nickstory exports but excludes staging and rejected files', async () => {
+    const filename = 'nickelodeon--ident--generic-station-id--2008--CODE.m4v'
+    fs.listFiles.mockReturnValueOnce([]).mockReturnValueOnce([
+      '/media/interludes/export/nickelodeon/ident/' + filename,
+      '/media/interludes/export/.staging/' + filename,
+      '/media/interludes/export/rejected_downloads/' + filename,
+      '/media/interludes/unclassified.mp4',
+    ])
+    await indexer.scanAll()
+    const rows = repo.upsertBatch.mock.calls.flatMap(([batch]) => batch)
+    expect(rows).toHaveLength(2)
+    expect(rows.find((row) => row.filename === filename)).toMatchObject({
+      mediaType: 'interlude', policyEnabled: true, playbackEnabled: true, durationSeconds: 60,
+    })
+    expect(rows.find((row) => row.filename === 'unclassified.mp4')?.playbackEnabled).toBe(false)
+    expect(fs.listFiles).toHaveBeenCalledWith('/media/interludes', expect.arrayContaining(['.m4v']), [])
+  })
+
+  test.each([false, null])('preserves an explicit block and rejects unprobeable exports (%s)', async (override) => {
+    const filename = 'nickelodeon--more--spongebob-squarepants--2008--CODE.mp4'
+    const path = '/media/interludes/' + filename
+    fs.listFiles.mockReturnValueOnce([]).mockReturnValueOnce([path])
+    if (override === false) {
+      repo.getByRootRelativePaths.mockResolvedValue(new Map([[filename, { playbackOverride: false, durationSeconds: 60, mtime: null } as any]]))
+    } else {
+      probe.getMetadata.mockRejectedValue(new Error('Incomplete video'))
+    }
+    await indexer.scanAll()
+    const row = repo.upsertBatch.mock.calls.flatMap(([batch]) => batch).find((item) => item.filename === filename)
+    expect(row?.playbackEnabled).toBe(false)
+  })
+
   test('scanAll indexes videos and interludes', async () => {
     // Setup file listing with simpler matchers
     // We can check calls later, just set return values for now if specific matchers fail

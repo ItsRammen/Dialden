@@ -90,16 +90,16 @@ describe('MediaDeliveryService', () => {
     expect(await service.resolveForChannelWorker(7)).not.toBeNull()
   })
 
-  test('resolves a station ident from the separate root used by the indexer', async () => {
+  test.each(['mp4', 'm4v'])('resolves a station ident (%s) from the separate root used by the indexer', async (extension) => {
     const interludeDirectory = join(tempDirectory, 'interludes')
     mkdirSync(join(interludeDirectory, 'Nickelodeon'), { recursive: true })
-    const identPath = join(interludeDirectory, 'Nickelodeon', 'ident.mp4')
+    const identPath = join(interludeDirectory, 'Nickelodeon', `ident.${extension}`)
     writeFileSync(identPath, 'ident video')
     repository.getById.mockResolvedValue(mediaItem({
       mediaType: 'interlude',
       isInterlude: true,
       rootId: 'interludes',
-      relativePath: 'Nickelodeon/ident.mp4',
+      relativePath: `Nickelodeon/ident.${extension}`,
     }))
     const indexer = new MediaIndexer(
       { directory: rootDirectory, roots, supportedExtensions: ['.mp4'], databasePath: ':memory:' },
@@ -110,7 +110,7 @@ describe('MediaDeliveryService', () => {
     )
     const service = new MediaDeliveryService(repository, indexer.getPlaybackRoots())
 
-    expect((await service.resolveForChannelWorker(7))?.path).toBe(realpathSync(identPath))
+    expect(await service.resolveForChannelWorker(7)).toMatchObject({ path: realpathSync(identPath), mimeType: 'video/mp4' })
     expect(await service.resolve(7)).toBeNull()
     repository.getById.mockResolvedValue(mediaItem())
     expect((await service.resolveForChannelWorker(7))?.path).toBe(

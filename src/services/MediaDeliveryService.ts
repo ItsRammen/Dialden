@@ -8,6 +8,7 @@ const MIME_TYPES: Readonly<Record<string, string>> = {
   '.mkv': 'video/x-matroska',
   '.mov': 'video/quicktime',
   '.mp4': 'video/mp4',
+  '.m4v': 'video/mp4',
   '.webm': 'video/webm',
 }
 
