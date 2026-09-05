@@ -210,7 +210,7 @@ describe('BumperAdministrationService', () => {
     )
 
     expect(command[0]).toBe('ffmpeg')
-    expect(command.join(' ')).toContain('Up next')
+    expect(command.join(' ')).toContain('UP NEXT')
     expect(command.join(' ')).toContain('SpongeBob SquarePants')
     expect(command.join(' ')).toContain(`fontfile=${fontFile}`)
     expect(library.updateType).toHaveBeenCalledWith(31, 'interlude')

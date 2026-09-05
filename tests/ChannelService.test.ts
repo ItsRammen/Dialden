@@ -426,16 +426,6 @@ describe('ChannelService', () => {
       repository,
       {
         ...policy,
-        roots: {
-          tv: {
-            collections: [
-              {
-                name: 'SpongeBob SquarePants (1999)',
-                groups: ['comfort'],
-              },
-            ],
-          },
-        },
         channels: [
           {
             ...baseChannel!,
@@ -994,6 +984,16 @@ describe('ChannelService', () => {
       repository,
       {
         ...policy,
+        roots: {
+          tv: {
+            collections: [
+              {
+                name: 'SpongeBob SquarePants (1999)',
+                groups: ['comfort'],
+              },
+            ],
+          },
+        },
         channels: [
           {
             id: 'nick',

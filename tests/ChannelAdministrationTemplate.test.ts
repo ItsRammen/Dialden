@@ -338,7 +338,7 @@ describe('channel administration template', () => {
           id: 'bluey-time',
           name: 'Bluey Time',
           timezone: 'UTC',
-          preset: 'all-approved-tv',
+          preset: 'custom',
         },
         automationPreview: {
           collections: [
