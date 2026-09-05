@@ -69,6 +69,11 @@
   --display: "TT Display", "Trebuchet MS", Arial, sans-serif;
   --body: "TT Body", "Segoe UI", Arial, sans-serif;
   --mono: "TT Mono", "Courier New", monospace;
+
+  /* Television overscan. Sets crop the edge of the picture; 5% of a
+     1920x1080 frame is the margin the manufacturers design to. */
+  --safe-x: 96px;
+  --safe-y: 54px;
 }
 
 * { box-sizing: border-box; }
@@ -555,11 +560,29 @@ body::after {
 }
 /* Shown while tuning, whether or not a picture is already up. */
 .player-screen.is-tuning .tuning-panel { display: block; }
+/* The backdrop ident is pinned dead centre, and so is every panel that
+   speaks from the middle of the screen: the tuning card, the off-air notice
+   and the playback error. None of them is opaque enough to cover it -- the
+   tuning card is 82%, the off-air notice has no background at all -- so the
+   wordmark read straight through them and the two logos stacked. The ident
+   is what the screen says when it has nothing else to say, so it stands
+   down whenever one of those is up, exactly as it already does behind the
+   zap curtain. */
+.player-screen.is-tuning .player-backdrop__brand,
+.player-screen.is-off-air .player-backdrop__brand,
+.player-screen.has-error .player-backdrop__brand { display: none; }
 #tuningChannelName { font-family: var(--display); font-size: 36px; letter-spacing: 0.12em; text-transform: uppercase; margin: 0 0 8px; }
 #tuningMessage { font-family: var(--mono); font-size: 15px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); margin: 0; }
 
 .off-air { position: absolute; top: 50%; left: 50%; z-index: 15; width: 900px; text-align: center; transform: translate(-50%, -50%); }
 .off-air__logo { width: 110px; height: 110px; margin-bottom: 18px; object-fit: contain; }
+/* The panel centres its children with text-align, which a flex container
+   ignores, so the buttons packed to the left edge of its 900px box while
+   the logo and the copy above them sat centred -- 252px apart on a 1920
+   line. The setup card and the error panel are left-aligned blocks where
+   the default is right, so this stays scoped to the off-air notice. */
+.off-air .button-row { justify-content: center; }
+.off-air .button-row .button:last-child { margin-right: 0; }
 
 .playback-error { position: absolute; top: 50%; left: 50%; z-index: 30; width: 1000px; transform: translate(-50%, -50%); }
 .player-screen.has-error .playback-error { display: block; }
@@ -587,103 +610,155 @@ body::after {
 
 /* ------------------------------------------------------------------ guide */
 
+/* Sized for a television, not a desktop. Two facts drive every number below.
+ *
+ * Overscan. A set crops the edges of the picture, and 5% is the figure the
+ * manufacturers still design to. Anything outside that box is a coin flip on
+ * any given panel, so the guide keeps all of its content -- including the
+ * channel numbers and the button legend, which sat hard against the bezel --
+ * inside the safe box, and lets only the scrim reach the edge of the screen.
+ *
+ * Viewing distance. This is read from a sofa, not from eighteen inches away.
+ * The smallest type in the guide is 22px against the 1920 canvas and the
+ * programme titles are 32px. The desktop scale this replaces -- 11px meta,
+ * 12px day chips, 17px titles -- laid out correctly and was still illegible
+ * from across a room, which is what made the guide feel broken.
+ */
+
 .overlay { position: absolute; top: 0; right: 0; bottom: 0; left: 0; z-index: 60; display: none; background: rgba(11, 7, 5, 0.965); }
 .overlay.is-open { display: block; }
 
+/* The padding is the safe box: everything the viewer has to read lives inside
+   it, and only the scrim behind reaches the edge of the screen. */
+.guide-panel { position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: flex; flex-direction: column; padding: var(--safe-y) var(--safe-x); }
 .guide-shell { flex: 1 1 auto; display: flex; flex-direction: row; overflow: hidden; }
-.guide-panel { position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: flex; flex-direction: column; }
-.guide-panel__header { display: flex; align-items: center; padding: 14px 44px 12px; border-bottom: 2px solid var(--orange); }
-.guide-panel__header h2 { font-family: var(--display); font-size: 24px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; margin: 1px 0 0; }
-.guide-panel__header-right { margin-left: auto; display: flex; align-items: center; }
-.guide-clock { font-family: var(--mono); font-size: 18px; letter-spacing: 0.1em; margin-right: 14px; }
-.guide-panel__footer { padding: 9px 44px; border-top: 2px solid var(--line); }
+
+.guide-panel__header { flex: 0 0 auto; display: flex; align-items: center; padding: 0 0 18px; border-bottom: 3px solid var(--orange); }
+.guide-panel__header .eyebrow { font-size: 22px; letter-spacing: 0.24em; }
+/* A long channel name must not wrap: a second line grows the header and
+   pushes the whole schedule down the screen. It rides on one line and
+   truncates, so the guide keeps the same geometry on every channel. */
+.guide-panel__header > div { min-width: 0; }
+.guide-panel__header h2 { font-family: var(--display); font-size: 44px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; line-height: 1.1; margin: 4px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.guide-panel__header-right { flex: 0 0 auto; margin-left: auto; padding-left: 30px; display: flex; align-items: center; }
+.guide-clock { font-family: var(--mono); font-size: 30px; letter-spacing: 0.08em; margin-right: 24px; }
+
+.guide-panel__footer { flex: 0 0 auto; padding: 16px 0 0; border-top: 2px solid var(--line); }
+.guide-panel__footer span { margin-right: 40px; font-size: 20px; letter-spacing: 0.08em; }
+.guide-panel__footer .remote-key { font-size: 20px; padding: 7px 14px; margin-right: 12px; }
+
+/* ---------------------------------------------------------- channel rail */
+
+/* focusNode() in app.js scrolls these three by comparing a child's
+   offsetTop/offsetLeft against the container's scrollTop/scrollLeft. That
+   only holds if the container is the child's offsetParent; while these were
+   static the numbers were measured from .guide-panel instead, so every
+   comparison carried the container's own offset as a constant error and the
+   list scrolled early, to the wrong place. Positioning them fixes the
+   arithmetic at the source. */
 
 .catalog-rail {
-  flex: 0 0 33%;
+  flex: 0 0 34%;
   display: block;
+  position: relative;
   overflow-x: hidden;
   overflow-y: auto;
-  padding: 8px 0 20px;
+  padding: 10px 0 24px;
   border-right: 2px solid var(--line);
 }
 .catalog-channel {
   display: flex;
   align-items: baseline;
   width: 100%;
+  min-height: 76px;
   font-family: var(--display);
-  font-size: 16px;
-  letter-spacing: 0.08em;
+  font-size: 28px;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   text-align: left;
   color: var(--muted);
   background: transparent;
   border: 0;
-  border-left: 4px solid transparent;
-  padding: 9px 18px;
+  border-left: 6px solid transparent;
+  padding: 14px 30px 14px 24px;
   cursor: pointer;
   transition: background-color 130ms ease, color 130ms ease, border-color 130ms ease;
 }
-.catalog-channel__num { flex: 0 0 auto; width: 58px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--orange); }
+.catalog-channel__num { flex: 0 0 auto; width: 104px; font-family: var(--mono); font-size: 22px; letter-spacing: 0.1em; color: var(--orange); }
 .catalog-channel__name { flex: 1 1 auto; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .catalog-channel.is-current { color: var(--text); background: var(--surface-raised); border-left-color: var(--orange); }
 .catalog-channel.is-focused,
 .catalog-channel:focus { outline: none; background: var(--focus); color: #14100b; border-left-color: var(--focus); }
-.catalog-channel.is-focused .catalog-channel__num { color: #14100b; }
+.catalog-channel.is-focused .catalog-channel__num,
+.catalog-channel:focus .catalog-channel__num { color: #14100b; }
+
+/* -------------------------------------------------------------- schedule */
 
 .guide-schedule { flex: 1 1 auto; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+.guide-schedule .message { font-size: 24px; padding: 0 34px; }
 
-.catalog-days { display: flex; overflow-x: auto; padding: 8px 30px; border-bottom: 2px solid var(--line); }
+.catalog-days { flex: 0 0 auto; position: relative; display: flex; overflow-x: auto; padding: 14px 34px; border-bottom: 2px solid var(--line); }
 .catalog-day {
+  flex: 0 0 auto;
   font-family: var(--mono);
-  font-size: 12px;
-  letter-spacing: 0.16em;
+  font-size: 24px;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--muted);
   background: transparent;
   border: 0;
-  padding: 6px 13px;
-  margin-right: 10px;
+  padding: 12px 22px;
+  margin-right: 14px;
   white-space: nowrap;
   cursor: pointer;
   transition: background-color 130ms ease, color 130ms ease;
 }
 .catalog-day.is-current { color: #14100b; background: var(--aqua); }
 /* Marks the real today once you have paged away from it. */
-.catalog-day.is-today { box-shadow: inset 0 -2px 0 var(--orange-dark); }
+.catalog-day.is-today { box-shadow: inset 0 -3px 0 var(--orange-dark); }
 .catalog-day.is-today.is-current { box-shadow: none; }
 .catalog-day.is-focused,
 .catalog-day:focus { outline: none; background: var(--focus); color: #14100b; }
 
-/* Teletext straightened out: times in a fixed mono column so the eye runs
-   down one edge, and the programme on now held in a lit row. */
-.guide-list { flex: 1 1 auto; overflow-y: auto; padding: 6px 30px 28px; }
+/* Times in a fixed mono column so the eye runs down one edge, and the
+   programme on now held in a lit row. Rows are 96px tall: seven fill the
+   list, which is about as much as anyone steps through with a d-pad before
+   losing their place. */
+.guide-list { flex: 1 1 auto; position: relative; overflow-y: auto; padding: 10px 34px 30px; }
 .guide-item {
   display: flex;
   align-items: flex-start;
   width: 100%;
-  min-height: 38px;
-  padding: 7px 13px;
+  min-height: 96px;
+  padding: 18px 22px;
   text-align: left;
   color: var(--text);
   background: transparent;
   border: 0;
+  border-left: 6px solid transparent;
   border-bottom: 2px solid var(--line);
   cursor: pointer;
-  transition: background-color 130ms ease, transform 130ms ease;
+  transition: background-color 130ms ease, color 130ms ease, border-color 130ms ease;
 }
-.guide-item__time { flex: 0 0 auto; font-family: var(--mono); font-size: 15px; line-height: 1.4; letter-spacing: 0.08em; color: var(--orange); width: 110px; }
+.guide-item__time { flex: 0 0 auto; width: 168px; font-family: var(--mono); font-size: 30px; line-height: 1.25; letter-spacing: 0.06em; color: var(--orange); }
 .guide-item__body { flex: 1 1 auto; min-width: 0; }
-.guide-item__title { margin: 0; font-family: var(--body); font-size: 17px; font-weight: 600; line-height: 1.2; }
-.guide-item__meta { margin: 1px 0 0; font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; color: var(--dim); }
+.guide-item__title { margin: 0; font-family: var(--body); font-size: 32px; font-weight: 600; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.guide-item__meta { margin: 6px 0 0; font-family: var(--mono); font-size: 22px; letter-spacing: 0.04em; line-height: 1.3; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* The class the client actually sets is is-now. This rule named is-current,
-   which the client only ever puts on channel and day chips, so the programme
-   on air was never lit at all. */
-.guide-item.is-now { background: var(--surface-raised); border-bottom-color: var(--line-hot); }
+/* The class the client actually sets is is-now. */
+.guide-item.is-now { background: var(--surface-raised); border-left-color: var(--tally); border-bottom-color: var(--line-hot); }
 .guide-item.is-now .guide-item__time { color: var(--tally); }
 .guide-item.is-now .guide-item__meta { color: var(--muted); }
+
+/* Focus has to read from the back of the room, so it inverts the whole row
+   rather than tinting it. The old treatment was a 4px nudge and a background
+   two shades off the one beside it -- invisible at this distance. */
 .guide-item.is-focused,
-.guide-item:focus { outline: none; background: var(--surface-soft); transform: translateX(4px); }
+.guide-item:focus { outline: none; background: var(--focus); color: #14100b; border-left-color: var(--orange); }
+.guide-item.is-focused .guide-item__time,
+.guide-item:focus .guide-item__time,
+.guide-item.is-focused .guide-item__meta,
+.guide-item:focus .guide-item__meta { color: #14100b; }
 
 /* ------------------------------------------------------------ scrollbars
  *

@@ -7,7 +7,7 @@
   var STORAGE_CLIENT_NAME = 'toasttv.clientName.v1';
   var STORAGE_SESSION_OWNER = 'toasttv.sessionOwner.v1';
   var STORAGE_SESSION_OWNER_EPOCH = 'toasttv.sessionOwnerEpoch.v1';
-  var CLIENT_VERSION = '0.6.7';
+  var CLIENT_VERSION = '0.7.0';
   var DEFAULT_SERVER = 'http://TOWER:1993';
   var POLL_INTERVAL_MS = 30000;
   var CHANNEL_REFRESH_INTERVAL_MS = 15000;
@@ -4030,9 +4030,12 @@
       title.textContent = program.title;
       var collection = document.createElement('p');
       collection.className = 'guide-item__meta';
+      /* The footer legend already says OK watches the channel live, so the
+         row does not repeat it. At the guide's type size that suffix pushed
+         the episode title into an ellipsis on nearly every row. */
       collection.textContent = isNow
         ? 'On now · ' + (programEpisodeText(program) || program.collectionTitle || 'Live')
-        : (programEpisodeText(program) || program.collectionTitle || 'Scheduled') + ' · Watch channel live';
+        : (programEpisodeText(program) || program.collectionTitle || 'Scheduled');
       details.appendChild(title);
       details.appendChild(collection);
       item.appendChild(time);
