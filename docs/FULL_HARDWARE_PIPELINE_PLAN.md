@@ -34,13 +34,41 @@ is the cost being measured.
 - `MediaIndexer.backfillAudioProbes()` is an existing post-scan backfill to
   copy for the probe work below.
 
-## What stopped it before
+## What stopped it before — solved
 
-`decodeHint` carries the history: *"per-input QSV decode produced exit-218
-failures under lineup contention"*. Six channels, each holding several
-lookahead inputs open, is a lot of simultaneous QSV sessions. The limit is real
-and independent of codec support, so any re-enable needs a concurrency ceiling
-and a software fallback rather than a blanket flag.
+`decodeHint` recorded the history as *"per-input QSV decode produced exit-218
+failures under lineup contention"*. Contention was not it. The probe ran 48
+concurrent full-hardware sessions clean, far past what six channels need.
+
+**Exit 218 is an input `-t` on a hardware input in a graph that has other
+hardware inputs.** FFmpeg reconciles the streams through a software scaler it
+cannot apply to qsv frames and fails with *"Impossible to convert between the
+formats supported by the filter 'graph 0 input from stream N:0' and the filter
+'auto_scale_N'"*. Nothing is written; the exit code is 218.
+
+A single hardware input with `-t` is fine, which is exactly why this hid for so
+long: every isolated test passes. Every scheduled item carries a duration, so
+every real window had `-t` on several hardware inputs and failed nearly always
+— and more channels meant more failures, which is indistinguishable from load
+from the outside. That is how it came to be written down as contention.
+
+The fix is to bound each item with `trim`/`atrim` inside the graph instead.
+`-ss` is unaffected and stays on the input.
+
+Two normalisers from the software chain also have to be carried over, and both
+were missed at first for the same reason — the software graph is
+`scale,pad,setsar=1,fps=30,format,setpts` and only the scaling and format were
+ported:
+
+- **`format=nv12` on every `vpp_qsv`.** A 10-bit source otherwise reaches the
+  encoder as P010 and the run writes zero packets with no error at all.
+- **`framerate` on every `vpp_qsv`, and `-r` at the output.** Without it the
+  graph carries no frame rate to the muxer, FFmpeg assumes 25, and a 60-frame
+  GOP produces 2.4s segments against a 2s target — enough to skew the live edge.
+
+A lesson worth keeping: diff the two filter chains filter by filter before
+reasoning about what each one ought to do. Both omissions were visible that way
+from the start.
 
 ## Library reality
 
@@ -146,9 +174,16 @@ is what later allows `fps=30` to be skipped for sources already at 30.
 It must be side-loaded with `docker cp`: `.dockerignore` excludes `scripts`,
 so the image never carries it.
 
-### 3. The pipeline, behind the flag
+### 3. The pipeline, behind the flag — done
 
-Only once 1 and 2 are done.
+`FfmpegHardwareHlsPipelineFactory`, selected by
+`TOASTTV_TRANSCODING_MODE=intel-qsv-full`. Verified on the deployed box against
+real library files: 11 segments in 20 seconds, exactly 2.000s each, segments
+decode cleanly, repeatable, `-ss` unaffected.
+
+`scripts/hardware-pipeline-dry-run.ts` regenerates the command from the real
+factory and emits a script that runs it and checks the output. Use it after any
+change to the graph.
 
 - new `ChannelPipelineFactory` implementation: `-hwaccel qsv` decode →
   `vpp_qsv` scale/pad/fps → `h264_qsv` encode, frames never leaving the GPU
@@ -163,7 +198,17 @@ Only once 1 and 2 are done.
 - no concurrency ceiling: none was found at 48 sessions, so one would be
   guesswork that hides the real failure mode
 
-### 4. Bring it up one channel at a time
+### 4. Bring it up one channel at a time — next
+
+Nothing below has been exercised for more than about twenty seconds:
+programme boundaries mid-stream, the append-window path
+(`appendToExistingPlaylist`), a long run where GPU surfaces could leak, and
+**whether CPU actually falls**, which is the entire point and is still
+unmeasured.
+
+Prerequisites: rebuild the container, then scan until the probe backfill
+reports `library complete`. Until `pixel_format` converges, eligibility sits
+near 3% and the flag will look as though it does nothing.
 
 Still worth doing, but for a different reason than the plan first assumed.
 Contention is not the risk — 48 sessions ran clean. The risk is a graph that
