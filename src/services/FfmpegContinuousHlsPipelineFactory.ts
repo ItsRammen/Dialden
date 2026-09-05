@@ -274,6 +274,7 @@ export class FfmpegContinuousHlsPipelineFactory implements ChannelPipelineFactor
     let stopping = false
     let stopPromise: Promise<void> | null = null
     return {
+      ...(typeof process.pid === 'number' ? { pid: process.pid } : {}),
       completed: Promise.all([
         process.exited,
         process.stderrTail ?? Promise.resolve(''),

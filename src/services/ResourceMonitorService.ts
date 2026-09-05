@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+
 /**
  * Samples what the machine is actually spending on the lineup.
  *
@@ -25,8 +27,10 @@ export interface ResourceReaders {
   readCgroupCpu(): string | null
   /** /proc/<pid>/stat for one pipeline process. */
   readProcessStat(pid: number): string | null
-  /** A GPU busy percentage where the kernel publishes one. */
+  /** A GPU busy percentage where the kernel publishes one. amdgpu does. */
   readGpuBusyPercent(): string | null
+  /** Current and maximum engine frequency, which i915 does publish. */
+  readGpuFrequency(): { currentMhz: number; maxMhz: number } | null
   cores(): number
   nowMs(): number
 }
@@ -53,8 +57,16 @@ export interface ResourceSample {
   readonly gpu: {
     readonly available: boolean
     readonly busyPercent?: number
-    /** Why no figure is shown, when there is none. */
+    /** Why no busy figure is shown, when there is none. */
     readonly reason?: string
+    /**
+     * i915 publishes no busy percentage, but it does publish engine frequency,
+     * which idles low and climbs under load. Not a utilisation figure, and not
+     * presented as one -- but it does answer "is the media engine doing
+     * anything", which is the question after switching a pipeline to it.
+     */
+    readonly frequencyMhz?: number
+    readonly maxFrequencyMhz?: number
     /** Channels currently decoding and encoding on the media engine. */
     readonly hardwarePipelines: number
     readonly softwarePipelines: number
@@ -154,6 +166,14 @@ export class ResourceMonitorService {
       hardwarePipelines,
       softwarePipelines: processes.length - hardwarePipelines,
     }
+    const frequency = this.readers.readGpuFrequency()
+    const clock =
+      frequency && frequency.maxMhz > 0
+        ? {
+            frequencyMhz: Math.round(frequency.currentMhz),
+            maxFrequencyMhz: Math.round(frequency.maxMhz),
+          }
+        : {}
     const raw = this.readers.readGpuBusyPercent()
     if (raw === null) {
       return {
@@ -161,17 +181,77 @@ export class ResourceMonitorService {
         reason:
           'the kernel does not publish a GPU busy figure here; ' +
           'i915 exposes it only through a perf counter a container cannot usually read',
+        ...clock,
         ...counts,
       }
     }
     const value = Number(raw.trim())
     if (!Number.isFinite(value)) {
-      return { available: false, reason: 'unreadable GPU busy value', ...counts }
+      return { available: false, reason: 'unreadable GPU busy value', ...clock, ...counts }
     }
-    return { available: true, busyPercent: round(value), ...counts }
+    return { available: true, busyPercent: round(value), ...clock, ...counts }
   }
 }
 
 function round(value: number): number {
   return Math.max(0, Math.round(value * 10) / 10)
+}
+
+
+/*
+ * Readers for a Linux container, using only paths confirmed readable on the
+ * deployed box: cgroup v2 cpu.stat, /proc/<pid>/stat, and the i915 frequency
+ * files. GPU busy is deliberately absent -- i915 publishes none, and the probe
+ * confirmed the PMU intel_gpu_top would use is gated by perf_event_paranoid.
+ */
+export function createLinuxResourceReaders(
+  readFile: (path: string) => string | null = defaultReadFile,
+  cpuCount: () => number = () => navigator.hardwareConcurrency || 1
+): ResourceReaders {
+  const firstReadable = (paths: readonly string[]): string | null => {
+    for (const path of paths) {
+      const value = readFile(path)
+      if (value !== null) return value
+    }
+    return null
+  }
+  return {
+    readCgroupCpu: () =>
+      firstReadable([
+        '/sys/fs/cgroup/cpu.stat',
+        '/sys/fs/cgroup/cpuacct/cpuacct.usage',
+      ]),
+    readProcessStat: (pid) => readFile(`/proc/${pid}/stat`),
+    readGpuBusyPercent: () =>
+      firstReadable([
+        '/sys/class/drm/card0/device/gpu_busy_percent',
+        '/sys/class/drm/card1/device/gpu_busy_percent',
+      ]),
+    readGpuFrequency: () => {
+      for (const card of ['card0', 'card1']) {
+        const current = firstReadable([
+          `/sys/class/drm/${card}/gt_act_freq_mhz`,
+          `/sys/class/drm/${card}/gt/gt0/rps_act_freq_mhz`,
+          `/sys/class/drm/${card}/gt_cur_freq_mhz`,
+        ])
+        const max = firstReadable([`/sys/class/drm/${card}/gt_max_freq_mhz`])
+        const currentMhz = Number(current?.trim())
+        const maxMhz = Number(max?.trim())
+        if (Number.isFinite(currentMhz) && Number.isFinite(maxMhz) && maxMhz > 0) {
+          return { currentMhz, maxMhz }
+        }
+      }
+      return null
+    },
+    cores: cpuCount,
+    nowMs: () => Date.now(),
+  }
+}
+
+function defaultReadFile(path: string): string | null {
+  try {
+    return readFileSync(path, 'utf8')
+  } catch {
+    return null
+  }
 }

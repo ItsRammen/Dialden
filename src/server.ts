@@ -16,6 +16,11 @@ import { DashboardEventService } from './services/DashboardEventService'
 import { ThumbnailClient } from './clients/ThumbnailClient'
 import { createPlaybackController } from './controllers/PlaybackController'
 import { createLibraryController } from './controllers/LibraryController'
+import { createResourceController } from './controllers/ResourceController'
+import {
+  ResourceMonitorService,
+  createLinuxResourceReaders,
+} from './services/ResourceMonitorService'
 import { createSettingsController } from './controllers/SettingsController'
 import { createDashboardController } from './controllers/DashboardController'
 import { EventsController } from './controllers/EventsController'
@@ -580,6 +585,21 @@ export async function createServer(
   app.route('/', reviewAssistantController)
   app.route('/', reviewRunController)
   app.route('/', playbackController)
+  /* Whether a channel is on the media engine is known for certain from the
+     transcoding mode and the pipeline that was selected; the CPU it costs is
+     measured from its own process. */
+  const resourceMonitor = new ResourceMonitorService(createLinuxResourceReaders())
+  app.route(
+    '/',
+    createResourceController({
+      monitor: resourceMonitor,
+      processes: () =>
+        channelWorkers.listPipelineProcesses().map((item) => ({
+          ...item,
+          hardware: fullHardwarePipeline,
+        })),
+    })
+  )
   app.route('/', libraryController)
   app.route('/', settingsController)
   app.route('/', dashboardController)

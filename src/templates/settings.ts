@@ -431,6 +431,12 @@ function renderTranscodingStatus(
         <span class="profile-badge">Hardware ${stateLabel}</span>
         <span class="hint">${summary}</span>
       </div>
+      <!-- Live figures, polled rather than rendered once: the question after
+           switching a pipeline is what it costs now, not at page load. -->
+      <div id="resource-usage" hx-get="/api/admin/v1/resources/view"
+           hx-trigger="load, every 5s" hx-swap="innerHTML">
+        <p class="hint">Measuring…</p>
+      </div>
       <dl class="settings-status-list">
         <div><dt>Configured</dt><dd>${configuredLabel}</dd></div>
         <div><dt>Active encoder</dt><dd>${activeLabel}</dd></div>

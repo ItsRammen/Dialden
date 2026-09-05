@@ -19,6 +19,7 @@ function readers(over: Partial<ResourceReaders> = {}): ResourceReaders {
     readCgroupCpu: () => null,
     readProcessStat: () => null,
     readGpuBusyPercent: () => null,
+    readGpuFrequency: () => null,
     cores: () => 4,
     nowMs: () => 0,
     ...over,
@@ -162,6 +163,22 @@ describe('ResourceMonitorService', () => {
 
     expect(sample.gpu.available).toBe(true)
     expect(sample.gpu.busyPercent).toBe(37)
+  })
+
+  test('reports engine frequency where i915 publishes it, without calling it utilisation', () => {
+    /* The deployed box exposes gt_act_freq_mhz and gt_max_freq_mhz but no busy
+       percentage. Frequency idling at 350 and climbing toward 1300 answers
+       "is the media engine doing anything", which is the question after
+       switching a pipeline onto it. */
+    const sample = new ResourceMonitorService(
+      readers({ readGpuFrequency: () => ({ currentMhz: 350, maxMhz: 1300 }) })
+    ).sample([])
+
+    expect(sample.gpu.frequencyMhz).toBe(350)
+    expect(sample.gpu.maxFrequencyMhz).toBe(1300)
+    // Still not a busy figure, and still says so.
+    expect(sample.gpu.available).toBe(false)
+    expect(sample.gpu.busyPercent).toBeUndefined()
   })
 
   test('a clock that does not advance cannot produce a percentage', () => {

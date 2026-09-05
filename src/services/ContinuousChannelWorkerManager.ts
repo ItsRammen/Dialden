@@ -94,6 +94,8 @@ export interface ChannelPipelineExit {
 export interface ChannelPipelineHandle {
   readonly completed: Promise<ChannelPipelineExit>
   stop(): Promise<void> | void
+  /** The FFmpeg process, so its CPU time can be attributed to this channel. */
+  readonly pid?: number
 }
 
 export interface ChannelPipelineRequest {
@@ -579,6 +581,16 @@ export class ContinuousChannelWorkerManager {
   getState(channelId: string): ContinuousChannelWorkerState | null {
     const record = this.records.get(channelId)
     return record ? this.snapshot(record) : null
+  }
+
+  /** Running pipelines and their processes, for the resource monitor. */
+  listPipelineProcesses(): Array<{ channelId: string; pid: number }> {
+    const running: Array<{ channelId: string; pid: number }> = []
+    for (const [channelId, record] of this.records) {
+      const pid = record.pipeline?.pid
+      if (typeof pid === 'number' && pid > 0) running.push({ channelId, pid })
+    }
+    return running.sort((left, right) => left.channelId.localeCompare(right.channelId))
   }
 
   listStates(): ContinuousChannelWorkerState[] {
