@@ -156,4 +156,54 @@ describe('FileWatcherService', () => {
 
     expect(batched).toBe(false) // Event was cleared, not batched
   })
+
+  test('re-establishes a watch instead of giving up on the root', async () => {
+    /* A recursive watch walks the whole tree, so one unreadable entry fails
+       the watch for all of it. That used to disable change detection for a
+       22,000-file library until someone restarted the container. */
+    const timers: Array<{ fn: () => void; ms: number }> = []
+    let attempts = 0
+    let failNext = true
+    let onError: ((error: unknown) => void) | undefined
+
+    const filesystem = {
+      exists: () => true,
+      watch: (_dir: string, _cb: unknown, handler?: (error: unknown) => void) => {
+        attempts += 1
+        onError = handler as (error: unknown) => void
+        return { close: () => {} }
+      },
+    } as never
+
+    const service = new FileWatcherService(
+      filesystem,
+      ['/media/tv'],
+      ['.mkv'],
+      ((fn: () => void, ms: number) => {
+        timers.push({ fn, ms })
+        return timers.length as unknown as Timer
+      }) as never,
+      (() => {}) as never
+    )
+
+    service.start()
+    expect(attempts).toBe(1)
+
+    // The walk trips over one unreadable file.
+    onError?.(new Error("EACCES: permission denied, open '/media/tv/one.mkv'"))
+    expect(timers).toHaveLength(1)
+    expect(timers[0]?.ms).toBe(5000)
+
+    // The retry re-establishes it rather than leaving the root unwatched.
+    failNext = false
+    timers[0]?.fn()
+    expect(attempts).toBe(2)
+    expect(failNext).toBe(false)
+
+    // A second failure backs off further rather than hammering the share.
+    onError?.(new Error('EACCES again'))
+    expect(timers[1]?.ms).toBe(5000)
+
+    service.stop()
+  })
 })
