@@ -430,7 +430,7 @@ export async function createServer(
   const bumperAdministrationController = createBumperAdministrationController({
     bumpers: new BumperAdministrationService(
       mediaService,
-      !daemon.isMediaReadOnly,
+      runtime.stationAssetsWritable,
       {
         render: async (command) => {
           const child = Bun.spawn([...command], {
@@ -460,7 +460,7 @@ export async function createServer(
       }
     ),
     library: collectionLibraryService,
-    writable: !daemon.isMediaReadOnly,
+    writable: runtime.stationAssetsWritable,
     refreshSchedules: async () => {
       channelService.invalidateScheduleCatalog()
       await daemon.getEngine().refreshCache(true)

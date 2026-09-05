@@ -533,7 +533,7 @@ The initial headless milestone now provides:
 - `TOASTTV_DATA`, `TOASTTV_DATABASE`, `TOASTTV_MEDIA`, `TOASTTV_TV_MEDIA`, `TOASTTV_MOVIE_MEDIA`, `TOASTTV_LIBRARY_POLICY`, `TOASTTV_CONFIG`, `TOASTTV_HOST`, `TOASTTV_MEDIA_READ_ONLY`, `TOASTTV_UPDATES_ENABLED`, and `PORT` process settings;
 - a shared `TOASTTV_DATA` path helper for thumbnails, logo uploads, update logs, and static thumbnail serving, while the database defaults beneath the same directory and the bootstrap config path remains explicitly configurable;
 - a multi-stage Bun `1.3.6` Dockerfile with FFmpeg/ffprobe, a non-root runtime, and dependency installation locked by committed `bun.lock` plus `bun install --frozen-lockfile --production`;
-- Compose persistence at `/app/data`, separate read-only `/media/tv`, `/media/movies`, and `/media/interludes` mounts, plus a read-only policy mount. Required TV/movie bind sources use `create_host_path: false`;
+- Compose persistence at `/app/data`, separate read-only `/media/tv` and `/media/movies` mounts, a narrowly writable Station Assets mount at the compatibility path `/media/interludes`, plus a read-only policy mount. Required bind sources use `create_host_path: false`;
 - `TOASTTV_MEDIA_READ_ONLY=true`, which replaces the upload UI with host-mount guidance, hides delete controls, and rejects both `POST /api/upload` and `DELETE /api/media/:id` with `403`; writable-mode filenames are reduced to a single basename, checked for canonical root containment, and rejected when the destination is a symlink;
 - `TOASTTV_UPDATES_ENABLED=false`, which skips update checks and rejects the bare-metal apply flow inside the container; Docker deployments update by rebuilding/redeploying the image;
 - unavailable roots preserve their index while successful empty roots reconcile; stable locators survive mount-prefix changes, and batch indexing persists computed compatibility values;
@@ -563,12 +563,12 @@ The legacy Pi path remains the default outside the container. Shutdown is not ye
 
 /media/tv          read-only TV library
 /media/movies      read-only movie library
-/media/interludes  read-only optional interludes
+/media/interludes  writable Station Assets library (compatibility path)
 /app/data/kids-7.library.json  seeded persistent policy; active for Unraid and image-default deployments
 /app/config/kids-7.library.json  active read-only repository policy in the supplied Compose deployment
 ```
 
-The named `toasttv-data` volume preserves the implemented `/app/data` contents across container recreation. `TOASTTV_DATA` is the root for mutable generated paths, `TOASTTV_DATABASE` can override its database, `TOASTTV_CONFIG` selects the bootstrap JSON, and the TV, movie, and interlude roots remain separate read-only mounts. The image creates `/media` before dropping privileges but does not change ownership of a user-supplied runtime bind mount. The runtime user is UID/GID `1000`, so a host/NAS library must grant that identity or a supplemental group file read and directory traverse permissions; the README includes the Compose `group_add` pattern.
+The named `toasttv-data` volume preserves the implemented `/app/data` contents across container recreation. `TOASTTV_DATA` is the root for mutable generated paths, `TOASTTV_DATABASE` can override its database, and `TOASTTV_CONFIG` selects the bootstrap JSON. TV and movie roots remain read-only; the separate Station Assets root is writable only when `TOASTTV_STATION_ASSETS_WRITABLE=true`. The image creates `/media` before dropping privileges but does not change ownership of a user-supplied runtime bind mount. The runtime user must have read/traverse access to programme libraries and write access to Station Assets.
 
 The image seeds `kids-7.library.json` into appdata only when it is missing, so
 Unraid policy edits survive image replacement. Container `TZ` controls logs and
@@ -808,7 +808,7 @@ Exit condition: management HTTP boots without MPV/CEC/Pi hardware; SQLite and ge
 - [x] Container data/media environment paths are recognized.
 - [x] Dockerfile contains Bun and FFmpeg/ffprobe and runs as non-root.
 - [x] Container dependency install is frozen to committed `bun.lock`.
-- [x] Compose persists `/app/data` and separately mounts TV, movies, interludes, and policy read-only without auto-creating missing source paths.
+- [x] Compose persists `/app/data`, mounts TV/movies and policy read-only, and narrowly enables writes only for the separate Station Assets mount without auto-creating missing source paths.
 - [x] Mutable generated paths use `TOASTTV_DATA`.
 - [x] Docker read-only upload/delete UI and endpoint behavior is explicit; writable-mode filenames are root-confined and existing symlink destinations are rejected.
 - [x] In-container bare-metal update checks/apply are disabled.

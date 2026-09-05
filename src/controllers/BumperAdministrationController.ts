@@ -85,7 +85,7 @@ export function createBumperAdministrationController(
   })
 
   controller.post('/library/bumpers/upload', async (c) => {
-    if (!deps.writable) return c.text('The media library is mounted read-only', 403)
+    if (!deps.writable) return c.text('The Station Assets library is read-only', 403)
     const body = await c.req.parseBody()
     try {
       const file = body['file']
@@ -110,7 +110,7 @@ export function createBumperAdministrationController(
   })
 
   controller.post('/library/bumpers/generate', async (c) => {
-    if (!deps.writable) return c.text('The media library is mounted read-only', 403)
+    if (!deps.writable) return c.text('The Station Assets library is read-only', 403)
     const body = await c.req.parseBody()
     try {
       await deps.bumpers.generate(

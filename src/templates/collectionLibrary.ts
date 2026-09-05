@@ -259,7 +259,7 @@ function renderSummary(summary: CollectionLibrarySummaryViewModel): string {
           <span>${summary.movieCollections === 1 ? 'collection' : 'collections'}</span>
         </a>
         <a href="/library/interludes" class="collection-summary-card">
-          <span class="collection-summary-label">Interludes</span>
+          <span class="collection-summary-label">Station assets</span>
           <strong>${count(summary.interludes)}</strong>
           <span>${summary.interludes === 1 ? 'item' : 'items'}</span>
         </a>
@@ -514,7 +514,7 @@ export function renderCollectionDetail(
 
   return `
     <section class="collection-detail" aria-labelledby="collection-detail-title">
-      <a class="collection-back-link" href="/library/${detail.kind === 'tv' ? 'tv' : detail.kind === 'movie' ? 'movies' : 'interludes'}">← Back to ${detail.kind === 'tv' ? 'TV shows' : detail.kind === 'movie' ? 'movies' : 'interludes'}</a>
+      <a class="collection-back-link" href="/library/${detail.kind === 'tv' ? 'tv' : detail.kind === 'movie' ? 'movies' : 'interludes'}">← Back to ${detail.kind === 'tv' ? 'TV shows' : detail.kind === 'movie' ? 'movies' : 'station assets'}</a>
       <div class="collection-detail-hero">
         <div class="collection-detail-poster">
           ${poster ? `<img src="${poster}" alt="" width="300" height="450">` : '<span aria-hidden="true">▣</span>'}
@@ -709,8 +709,8 @@ export function renderCollectionLibraryContent(
         <a href="/library">Overview</a>
         <a href="/library/tv">TV shows</a>
         <a href="/library/movies">Movies</a>
-        <a href="/library/interludes">Interludes</a>
-        <a href="/library/bumpers">Bumper Manager</a>
+        <a href="/library/interludes">Asset files</a>
+        <a href="/library/bumpers">Station Assets</a>
         <a href="/library/review">Review queue</a>
       </nav>
       <section id="collection-live-work" class="collection-live-work" role="status" aria-live="polite" hidden>

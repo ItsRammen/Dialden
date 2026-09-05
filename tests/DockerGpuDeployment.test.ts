@@ -7,6 +7,23 @@ const readRootFile = (name: string): string =>
   readFileSync(join(root, name), 'utf8')
 
 describe('Docker Intel GPU deployment', () => {
+  test('keeps programme mounts read-only while making only Station Assets writable', () => {
+    const compose = readRootFile('docker-compose.yml')
+    const template = readRootFile('templates/toasttv.xml')
+    const stationAssets = template.match(
+      /<Config Name="Station Assets"[^>]*>[^<]*<\/Config>/
+    )?.[0]
+
+    expect(compose).toContain('TOASTTV_STATION_ASSETS_WRITABLE: "true"')
+    expect(compose).toContain('TOASTTV_STATION_ASSETS_PATH')
+    expect(compose).toMatch(/target: \/media\/interludes\s+read_only: false/)
+    expect(stationAssets).toContain('Target="/media/interludes"')
+    expect(stationAssets).toContain('Mode="rw"')
+    expect(template).toContain(
+      'Target="TOASTTV_STATION_ASSETS_WRITABLE" Default="true"'
+    )
+  })
+
   test('maps the DRM directory independently from the FFmpeg render node', () => {
     const override = readRootFile('docker-compose.qsv.yml')
     const environment = readRootFile('docker-compose.env.example')

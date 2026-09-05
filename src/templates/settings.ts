@@ -125,8 +125,8 @@ export function renderSettings(props: SettingsProps): string {
 
           <section class="settings-card">
             <div class="card-header">
-              <div><p class="settings-card-kicker">Continuity</p><h3>Interludes</h3></div>
-              <label class="toggle" aria-label="Enable interludes">
+              <div><p class="settings-card-kicker">Continuity</p><h3>Station assets</h3></div>
+              <label class="toggle" aria-label="Enable scheduled station assets">
                 <input type="checkbox" id="interludeEnabled" name="interludeEnabled" value="true" ${config.interlude.enabled ? 'checked' : ''}>
                 <span class="toggle-slider"></span>
               </label>
@@ -142,7 +142,7 @@ export function renderSettings(props: SettingsProps): string {
                   )
                   .join('')}
               </select>
-              <span class="hint">Insert interlude after every N videos</span>
+              <span class="hint">Schedule a bumper or ident after every N programmes</span>
             </div>
           </section>
 

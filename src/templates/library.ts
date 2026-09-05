@@ -158,7 +158,7 @@ export function renderLibraryContent(props: LibraryProps): string {
     )
   } else if (filter === 'interludes') {
     mediaContent = renderMediaSection(
-      'Interludes',
+      'Station assets',
       '',
       interludes,
       view,
@@ -233,7 +233,7 @@ export function renderLibraryContent(props: LibraryProps): string {
           ${renderLibraryLink('Not scheduled', { ...navigation, filter: 'blocked', page: 1 }, `btn btn-small ${filter === 'blocked' ? 'active' : ''}`)}
           ${renderLibraryLink('File errors', { ...navigation, filter: 'errors', page: 1 }, `btn btn-small library-filter-errors ${filter === 'errors' ? 'active' : ''}`)}
           ${renderLibraryLink('Videos', { ...navigation, filter: 'videos', page: 1 }, `btn btn-small ${filter === 'videos' ? 'active' : ''}`)}
-          ${renderLibraryLink('Interludes', { ...navigation, filter: 'interludes', page: 1 }, `btn btn-small ${filter === 'interludes' ? 'active' : ''}`)}
+          ${renderLibraryLink('Station assets', { ...navigation, filter: 'interludes', page: 1 }, `btn btn-small ${filter === 'interludes' ? 'active' : ''}`)}
         </div>
         
         <div class="view-buttons">

@@ -1,6 +1,50 @@
-# Station assets
+# Station Assets library
 
-ToastTV can select bumpers by station and adjacent shows, then use filler assets to cover the end of a bounded lineup slot instead of leaving the channel with no scheduled media.
+**Station Assets** is the user-facing name for the dedicated library containing
+bumpers, idents, fillers, and standby loops. The database continues to call
+these files `interlude` media, and the container path remains
+`/media/interludes` for compatibility with existing installations.
+
+Programme libraries should remain read-only. Station Assets should be a
+separate writable directory when uploads, generated bumpers, or renaming are
+enabled.
+
+## Deployment paths
+
+| Deployment | Host path | Container path | Access |
+| --- | --- | --- | --- |
+| Unraid | `/mnt/user/appdata/toasttv/station-assets` | `/media/interludes` | Read/write |
+| Docker Compose | `TOASTTV_STATION_ASSETS_PATH` | `/media/interludes` | Read/write |
+| Legacy/local | `<media directory>/interludes` | Not applicable | Read/write |
+
+Set `TOASTTV_STATION_ASSETS_WRITABLE=true` only when that dedicated mount is
+writable. This permission does not make the TV or movie roots writable. Older
+host directories named `interludes` can remain in place; point the Station
+Assets mapping at them rather than moving files solely for the new label.
+
+ToastTV can select bumpers by station and adjacent shows, then use filler
+assets to cover the end of a bounded lineup slot instead of leaving the channel
+with no scheduled media.
+
+## Recommended layout
+
+The manager creates these folders automatically:
+
+```text
+station-assets/
+  nick/
+    bumpers/
+      more/
+      up-next/
+      now-next/
+    idents/
+    fillers/
+    standby/
+```
+
+Folders are for organization; matching is driven by the canonical filename.
+Use the channel ID as the station slug. Nickelodeon and Nick Jr. profiles share
+the special `nick` slug.
 
 ## Filename contract
 
@@ -43,17 +87,38 @@ Start with a small pack that can exercise every path:
 - General fillers around 5, 10, 15, 30, and 60 seconds.
 - One clean 60-second standby loop with audio that also loops cleanly.
 
-After indexing the files, open **Library → Bumper Manager**. It scans likely assets, reports naming and playback problems, and provides fields for station, asset type, show relationships, target duration, and variant. Use **Preview name** to inspect the canonical filename, then **Rename and configure** to rename the real file, mark it as an interlude, and apply the selected playback decision.
+After indexing the files, open **Library → Station Assets**. It scans likely
+assets, reports naming and playback problems, and provides fields for station,
+asset type, show relationships, target duration, and variant. Use **Preview
+name** to inspect the canonical filename, then **Rename and configure** to
+rename the real file, mark it as an internal interlude, and apply the selected
+playback decision.
 
-Collectionless station assets are fail-closed. The manager defaults to explicit approval, but can instead leave an asset following policy or explicitly block it. In a read-only deployment the complete scan and filename preview remain available while mutation controls are disabled.
+Collectionless station assets are fail-closed. The manager defaults to explicit
+approval, but can instead leave an asset following policy or explicitly block
+it. In a read-only deployment the complete scan and filename preview remain
+available while mutation controls are disabled.
 
 ### Uploading finished clips
 
-Use **Upload a finished clip** when the video is already authored. Choose the file and configure its meaning; ToastTV stores it under `media/interludes/<station>/<category>/`, gives it the canonical filename, marks it as an interlude, and applies the playback choice. MP4, MKV, AVI, MOV, and WebM files up to 512 MB are accepted. Existing files are never overwritten: an occupied variant advances to the next free number.
+Use **Upload a finished clip** when the video is already authored. Choose the
+file and configure its meaning; ToastTV stores it under the mounted Station
+Assets library at `<station>/<category>/`, gives it the canonical filename,
+marks it as an interlude internally, and applies the playback choice. MP4, MKV,
+AVI, MOV, and WebM files up to 512 MB are accepted. Existing files are never
+overwritten: an occupied variant advances to the next free number.
 
 ### Designing simple bumpers
 
 Use **Design a simple bumper** for a clean 1080p title card. The live browser preview shows the wording and palette. ToastTV renders the final H.264/AAC MP4 with FFmpeg and includes a stereo audio stream so clients do not have to reconfigure between assets. Generated clips are limited to 60 seconds and use the same folders, names, approval rules, and collision protection as uploaded clips.
+
+## Scheduling configuration
+
+Open **Settings → Playback and scheduling → Station assets** to enable or
+disable scheduled breaks and choose how many programmes play between them.
+Channel transitions prefer exact now/next assets, then show-specific bumpers,
+then a generic ident. Fillers and standby loops are reserved for unused time at
+the end of bounded schedule slots.
 
 ## Pilot acceptance checks
 

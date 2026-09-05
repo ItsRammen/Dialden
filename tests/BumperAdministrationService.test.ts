@@ -71,7 +71,9 @@ describe('BumperAdministrationService', () => {
   test('renames, marks, and approves an asset as one configuration operation', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'toasttv-bumper-admin-'))
     directories.push(directory)
-    const originalPath = join(directory, 'Nick bumper old.mp4')
+    const stationAssets = join(directory, 'interludes')
+    mkdirSync(stationAssets, { recursive: true })
+    const originalPath = join(stationAssets, 'Nick bumper old.mp4')
     writeFileSync(originalPath, 'asset')
     const original = media(10, originalPath)
     const configuredPath = join(
@@ -79,6 +81,7 @@ describe('BumperAdministrationService', () => {
       'nick__bumper-up-next__next-spongebob-squarepants-1999__target-08s__v02.mp4'
     )
     const library = mock<MediaService>()
+    library.getMediaDirectory.mockReturnValue(directory)
     library.getById.mockImplementation(async (id) =>
       id === 10
         ? original
@@ -109,6 +112,31 @@ describe('BumperAdministrationService', () => {
     expect(configured.filename).toBe(expectedName)
     expect(library.updateType).toHaveBeenCalledWith(11, 'interlude')
     expect(library.updatePlaybackOverride).toHaveBeenCalledWith(11, true)
+  })
+
+  test('never changes a bumper-like file outside the Station Assets library', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'toasttv-bumper-boundary-'))
+    directories.push(directory)
+    const outsidePath = join(directory, 'tv', 'Nick bumper old.mp4')
+    mkdirSync(join(directory, 'tv'), { recursive: true })
+    writeFileSync(outsidePath, 'asset')
+    const library = mock<MediaService>()
+    library.getMediaDirectory.mockReturnValue(directory)
+    library.getById.mockResolvedValue(media(12, outsidePath))
+
+    await expect(
+      new BumperAdministrationService(library, true).configure(
+        12,
+        {
+          station: 'Nick',
+          kind: 'ident-general',
+          targetSeconds: 8,
+          variant: 1,
+        },
+        'allow'
+      )
+    ).rejects.toThrow('Only files in the Station Assets library can be changed')
+    expect(existsSync(outsidePath)).toBe(true)
   })
 
   test('previews in read-only mode but refuses to mutate the file', async () => {

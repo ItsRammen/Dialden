@@ -10,6 +10,7 @@ describe('loadRuntimeConfig', () => {
     expect(result.configPath).toBe('./data/config.json')
     expect(result.headless).toBe(false)
     expect(result.mediaReadOnly).toBe(false)
+    expect(result.stationAssetsWritable).toBe(true)
     expect(result.transcodingMode).toBe('software')
     expect(result.qsvDevice).toBe('/dev/dri/renderD128')
   })
@@ -21,6 +22,7 @@ describe('loadRuntimeConfig', () => {
       TOASTTV_CONFIG: '/app/data/config.json',
       TOASTTV_HEADLESS: 'yes',
       TOASTTV_MEDIA_READ_ONLY: 'on',
+      TOASTTV_STATION_ASSETS_WRITABLE: 'true',
       TOASTTV_TRANSCODING_MODE: 'intel-qsv',
       TOASTTV_QSV_DEVICE: '/dev/dri/renderD129',
     })
@@ -30,6 +32,7 @@ describe('loadRuntimeConfig', () => {
     expect(result.configPath).toBe('/app/data/config.json')
     expect(result.headless).toBe(true)
     expect(result.mediaReadOnly).toBe(true)
+    expect(result.stationAssetsWritable).toBe(true)
     expect(result.transcodingMode).toBe('intel-qsv')
     expect(result.qsvDevice).toBe('/dev/dri/renderD129')
   })
@@ -44,6 +47,12 @@ describe('loadRuntimeConfig', () => {
     expect(result.port).toBe(1993)
     expect(result.headless).toBe(false)
     expect(result.transcodingMode).toBe('software')
+  })
+
+  test('keeps station assets read-only with a read-only media deployment unless explicitly enabled', () => {
+    const result = loadRuntimeConfig({ TOASTTV_MEDIA_READ_ONLY: 'true' })
+
+    expect(result.stationAssetsWritable).toBe(false)
   })
 
   test('accepts automatic hardware probing without changing the device default', () => {

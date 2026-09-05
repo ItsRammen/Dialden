@@ -37,8 +37,8 @@ export function renderBumperAdministration(
       <header class="bumper-admin-header">
         <div>
           <p class="collection-eyebrow">Station continuity</p>
-          <h1>Bumper Manager</h1>
-          <p>Scan, classify, rename, mark, and approve the files used between programmes.</p>
+          <h1>Station Assets</h1>
+          <p>Scan, upload, design, name, and approve bumpers, idents, fillers, and standby loops.</p>
         </div>
         <form method="post" action="/library/bumpers/scan">
           <button class="btn btn-primary" type="submit">Scan bumper files</button>
@@ -48,12 +48,12 @@ export function renderBumperAdministration(
         <a href="/library">Overview</a>
         <a href="/library/tv">TV shows</a>
         <a href="/library/movies">Movies</a>
-        <a href="/library/interludes">Interludes</a>
-        <a href="/library/bumpers" aria-current="page">Bumper Manager</a>
+        <a href="/library/interludes">Asset files</a>
+        <a href="/library/bumpers" aria-current="page">Station Assets</a>
         <a href="/library/review">Review queue</a>
       </nav>
       ${view.notice ? `<div class="bumper-notice bumper-notice-${view.notice.kind}" role="status">${escapeHtml(view.notice.message)}</div>` : ''}
-      ${view.writable ? '' : '<div class="bumper-notice bumper-notice-warning">The library is mounted read-only. Scanning works, but files cannot be renamed or marked.</div>'}
+      ${view.writable ? '' : '<div class="bumper-notice bumper-notice-warning">The Station Assets library is read-only. Scanning works, but files cannot be uploaded, generated, renamed, or marked.</div>'}
       <section class="bumper-summary" aria-label="Bumper scan summary">
         ${summaryCard('Recognized', view.scan.recognized)}
         ${summaryCard('Needs naming', view.scan.invalid + view.scan.legacy)}
@@ -103,7 +103,7 @@ export function renderBumperAdministration(
       <section class="bumper-assets" aria-label="Bumper assets">
         ${visible.length > 0 ? visible.map((item) => renderAsset(item, view)).join('') : '<p class="collection-empty">No bumper assets match this filter.</p>'}
       </section>
-      <p class="bumper-contract-link"><a href="/library/interludes">Return to Interludes</a>. Filenames follow <code>station__type__details__target-08s__v01.mp4</code>.</p>
+      <p class="bumper-contract-link"><a href="/library/interludes">View all asset files</a>. Filenames follow <code>station__type__details__target-08s__v01.mp4</code>.</p>
     </div>
     <script>
       document.querySelectorAll('[data-bumper-form]').forEach((form) => {

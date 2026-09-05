@@ -6,6 +6,7 @@ export interface RuntimeConfig {
   readonly configPath: string
   readonly headless: boolean
   readonly mediaReadOnly: boolean
+  readonly stationAssetsWritable: boolean
   readonly transcodingMode: TranscodingMode
   readonly qsvDevice: string
 }
@@ -30,6 +31,11 @@ export function loadRuntimeConfig(
     Number.isInteger(parsedPort) && parsedPort > 0 && parsedPort <= 65535
       ? parsedPort
       : 1993
+  const mediaReadOnly = TRUTHY_VALUES.has(
+    (environment.TOASTTV_MEDIA_READ_ONLY ?? '').trim().toLowerCase()
+  )
+  const stationAssetsWritableValue =
+    environment.TOASTTV_STATION_ASSETS_WRITABLE
 
   return {
     port,
@@ -38,9 +44,11 @@ export function loadRuntimeConfig(
     headless: TRUTHY_VALUES.has(
       (environment.TOASTTV_HEADLESS ?? '').trim().toLowerCase()
     ),
-    mediaReadOnly: TRUTHY_VALUES.has(
-      (environment.TOASTTV_MEDIA_READ_ONLY ?? '').trim().toLowerCase()
-    ),
+    mediaReadOnly,
+    stationAssetsWritable:
+      stationAssetsWritableValue === undefined
+        ? !mediaReadOnly
+        : TRUTHY_VALUES.has(stationAssetsWritableValue.trim().toLowerCase()),
     // Software remains the default so an upgrade never silently changes the
     // output encoder. `auto` and `intel-qsv` both probe the configured render
     // node and fall back safely when the device or driver is unavailable.

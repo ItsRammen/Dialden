@@ -19,6 +19,9 @@ services:
       TOASTTV_MOVIE_MEDIA: /media/movies
       TOASTTV_LIBRARY_POLICY: /app/config/kids-7.library.json
       TOASTTV_MEDIA_READ_ONLY: "true"
+      # Programme libraries stay read-only; only the dedicated Station Assets
+      # mount may be changed by Bumper Manager.
+      TOASTTV_STATION_ASSETS_WRITABLE: "true"
       TOASTTV_TRANSCODING_MODE: "${TOASTTV_TRANSCODING_MODE:-software}"
       TOASTTV_QSV_DEVICE: "${TOASTTV_QSV_DEVICE:-/dev/dri/renderD128}"
       TOASTTV_UPDATES_ENABLED: "false"
@@ -47,9 +50,9 @@ services:
         bind:
           create_host_path: false
       - type: bind
-        source: "${TOASTTV_INTERLUDE_PATH:-./media/interludes}"
+        source: "${TOASTTV_STATION_ASSETS_PATH:-${TOASTTV_INTERLUDE_PATH:-./media/interludes}}"
         target: /media/interludes
-        read_only: true
+        read_only: false
         bind:
           create_host_path: false
       - type: bind

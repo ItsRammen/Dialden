@@ -404,7 +404,7 @@ export function renderHeadlessDashboardContent(
           <dl class="headless-library-counts">
             <div><dt>TV shows</dt><dd>${count(view.library.tvCollections)}</dd><span>${count(view.library.episodes)} episodes</span></div>
             <div><dt>Movies</dt><dd>${count(view.library.movieCollections)}</dd></div>
-            <div><dt>Interludes</dt><dd>${count(view.library.interludes)}</dd></div>
+            <div><dt>Station assets</dt><dd>${count(view.library.interludes)}</dd></div>
           </dl>
           <dl class="headless-stat-list headless-approval-counts">
             <div><dt>Approved</dt><dd>${count(view.library.approvedCollections)}</dd></div>

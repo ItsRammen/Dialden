@@ -1,5 +1,5 @@
 import { lstat, mkdir, rename, unlink, writeFile } from 'node:fs/promises'
-import { basename, dirname, extname, join, resolve } from 'node:path'
+import { basename, dirname, extname, join, resolve, sep } from 'node:path'
 import type { MediaItem } from '../types'
 import type { MediaService } from './MediaService'
 import { buildBumperArgs } from './bumpers/renderSpec'
@@ -101,9 +101,13 @@ export class BumperAdministrationService {
     configuration: StationAssetConfiguration,
     playback: 'allow' | 'block' | 'policy'
   ): Promise<MediaItem> {
-    if (!this.writable) throw new Error('The media library is mounted read-only')
+    if (!this.writable) throw new Error('The Station Assets library is read-only')
     const { item, filename } = await this.preview(id, configuration)
     const originalPath = resolve(item.path)
+    const root = this.stationAssetsRoot()
+    if (originalPath !== root && !originalPath.startsWith(`${root}${sep}`)) {
+      throw new Error('Only files in the Station Assets library can be changed')
+    }
     const targetPath = resolve(dirname(originalPath), filename)
     if (dirname(targetPath) !== dirname(originalPath) || basename(targetPath) !== filename) {
       throw new Error('The generated filename is not safe')
@@ -154,7 +158,7 @@ export class BumperAdministrationService {
     configuration: StationAssetConfiguration,
     playback: 'allow' | 'block' | 'policy'
   ): Promise<MediaItem> {
-    if (!this.writable) throw new Error('The media library is mounted read-only')
+    if (!this.writable) throw new Error('The Station Assets library is read-only')
     if (bytes.byteLength === 0) throw new Error('The uploaded file is empty')
     const extension = extname(basename(originalFilename)).toLowerCase()
     if (!UPLOAD_EXTENSIONS.has(extension)) {
@@ -181,7 +185,7 @@ export class BumperAdministrationService {
     design: BumperDesign,
     playback: 'allow' | 'block' | 'policy'
   ): Promise<MediaItem> {
-    if (!this.writable) throw new Error('The media library is mounted read-only')
+    if (!this.writable) throw new Error('The Station Assets library is read-only')
     if (!this.options.render) throw new Error('Bumper rendering is unavailable')
     if (
       !Number.isSafeInteger(configuration.targetSeconds) ||
@@ -241,7 +245,7 @@ export class BumperAdministrationService {
     extension: string
   ): Promise<{ path: string; configuration: StationAssetConfiguration }> {
     const station = stationDirectory(configuration.station)
-    const root = resolve(this.media.getMediaDirectory(), 'interludes')
+    const root = this.stationAssetsRoot()
     const directory = resolve(root, station, categoryDirectory(configuration.kind))
     if (!directory.startsWith(`${root}/`)) throw new Error('Invalid station destination')
     const requestedVariant = configuration.variant ?? 1
@@ -257,6 +261,10 @@ export class BumperAdministrationService {
       }
     }
     throw new Error('No unused variant number is available')
+  }
+
+  private stationAssetsRoot(): string {
+    return resolve(this.media.getMediaDirectory(), 'interludes')
   }
 
   private async indexAndConfigure(
