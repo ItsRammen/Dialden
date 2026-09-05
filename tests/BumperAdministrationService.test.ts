@@ -77,7 +77,7 @@ describe('BumperAdministrationService', () => {
     writeFileSync(originalPath, 'asset')
     const original = media(10, originalPath)
     const configuredPath = join(
-      directory,
+      stationAssets,
       'nick__bumper-up-next__next-spongebob-squarepants-1999__target-08s__v02.mp4'
     )
     const library = mock<MediaService>()
@@ -108,7 +108,7 @@ describe('BumperAdministrationService', () => {
     const expectedName =
       'nick__bumper-up-next__next-spongebob-squarepants-1999__target-08s__v02.mp4'
     expect(existsSync(originalPath)).toBe(false)
-    expect(existsSync(join(directory, expectedName))).toBe(true)
+    expect(existsSync(join(stationAssets, expectedName))).toBe(true)
     expect(configured.filename).toBe(expectedName)
     expect(library.updateType).toHaveBeenCalledWith(11, 'interlude')
     expect(library.updatePlaybackOverride).toHaveBeenCalledWith(11, true)
