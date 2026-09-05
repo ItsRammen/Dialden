@@ -272,3 +272,36 @@ describe('pipeline failure reporting', () => {
     expect(__testing.boundedStderrDetail('')).toBeUndefined()
   })
 })
+
+describe('benign FFmpeg chatter', () => {
+  test('a routine demuxer warning is not reported as the cause', async () => {
+    /* "UDTA parsing failed retrying raw" is an mp4 metadata atom the demuxer
+       shrugs at. It was reported as the cause of a channel outage purely
+       because it contains the word "failed" and came first. */
+    const { __testing } = await import(
+      '../src/services/FfmpegContinuousHlsPipelineFactory'
+    )
+    const detail = __testing.boundedStderrDetail(
+      [
+        '[in#2] UDTA parsing failed retrying raw',
+        '[in#3] Could not find codec parameters',
+        "Impossible to convert between the formats supported by the filter 'x' and the filter 'auto_scale_1'",
+        '[vost#0:0/h264_qsv] Terminating thread with return code -22 (Invalid argument)',
+      ].join('\n')
+    )
+
+    expect(detail).toContain('Impossible to convert')
+    expect(detail).not.toContain('UDTA')
+  })
+
+  test('when everything is benign, it does not invent a cause', async () => {
+    const { __testing } = await import(
+      '../src/services/FfmpegContinuousHlsPipelineFactory'
+    )
+    const detail = __testing.boundedStderrDetail(
+      '[in#2] UDTA parsing failed retrying raw\nlast line'
+    )
+
+    expect(detail).toBe('last line')
+  })
+})

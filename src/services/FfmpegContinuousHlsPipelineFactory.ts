@@ -64,6 +64,19 @@ const STDERR_TAIL_BYTES = 8_192
 /** Matches the lines worth reporting out of FFmpeg's chatter. */
 const INFORMATIVE_STDERR =
   /(?:error|failed|invalid|no such|unable|impossible|mfx|vaapi|qsv)/i
+/* Routine demuxer and decoder chatter that contains one of those words and
+   means nothing. "UDTA parsing failed retrying raw" is an mp4 metadata atom
+   the demuxer shrugs at, and it got reported as the cause of a channel outage
+   purely because it happened to say "failed" before anything else did. */
+const BENIGN_STDERR = [
+  /udta parsing failed/i,
+  /retrying raw/i,
+  /could not find codec parameters/i,
+  /non-existing (?:pps|sps)/i,
+  /error while decoding mb/i,
+  /deprecated pixel format used/i,
+  /timestamps are unset/i,
+]
 
 /**
  * Drains FFmpeg's stderr into a bounded tail so exit diagnostics survive into
@@ -105,7 +118,9 @@ async function collectStderrTail(
 function findInformative(text: string): string | null {
   for (const line of text.split(/\r?\n/)) {
     const trimmed = line.trim()
-    if (trimmed && INFORMATIVE_STDERR.test(trimmed)) return trimmed
+    if (!trimmed || !INFORMATIVE_STDERR.test(trimmed)) continue
+    if (BENIGN_STDERR.some((pattern) => pattern.test(trimmed))) continue
+    return trimmed
   }
   return null
 }
@@ -125,8 +140,13 @@ function boundedStderrDetail(stderrTail?: string): string | undefined {
   /* Forwards, not in reverse. FFmpeg's first error is the cause and the rest
      is what it knocked over on the way down; reporting the last one named the
      audio encoder for a fault in the filter graph. */
-  const cause = lines.find((line) => INFORMATIVE_STDERR.test(line))
-  const last = [...lines].reverse().find((line) => INFORMATIVE_STDERR.test(line))
+  const informative = lines.filter(
+    (line) =>
+      INFORMATIVE_STDERR.test(line) &&
+      !BENIGN_STDERR.some((pattern) => pattern.test(line))
+  )
+  const cause = informative[0]
+  const last = informative.at(-1)
   const chosen = cause ?? lines.at(-1)
   if (!chosen) return undefined
   // Both ends when they differ: the cause, and what it ended up failing at.
@@ -257,12 +277,24 @@ export class FfmpegContinuousHlsPipelineFactory implements ChannelPipelineFactor
       completed: Promise.all([
         process.exited,
         process.stderrTail ?? Promise.resolve(''),
-      ]).then(([code, stderrTail]) => ({
-        code,
-        signal: stopping ? 'SIGTERM' : undefined,
-        error:
-          code === 0 || stopping ? undefined : composeExitError(code, stderrTail),
-      })),
+      ]).then(([code, stderrTail]) => {
+        /* One line can only ever be a guess at which line mattered, and that
+           guess has been wrong twice. On a real failure the whole captured
+           tail goes to the log once, so diagnosis does not depend on it. */
+        if (code !== 0 && !stopping && stderrTail) {
+          console.error(
+            `FFmpeg pipeline failed with code ${code}. Captured output:\n${stderrTail}`
+          )
+        }
+        return {
+          code,
+          signal: stopping ? 'SIGTERM' : undefined,
+          error:
+            code === 0 || stopping
+              ? undefined
+              : composeExitError(code, stderrTail),
+        }
+      }),
       stop: () => {
         if (!stopPromise) {
           stopping = true
