@@ -174,7 +174,7 @@ is what later allows `fps=30` to be skipped for sources already at 30.
 It must be side-loaded with `docker cp`: `.dockerignore` excludes `scripts`,
 so the image never carries it.
 
-### 3. The pipeline, behind the flag — done
+### 3. The pipeline, behind the flag — built, and not yet working on a live channel
 
 `FfmpegHardwareHlsPipelineFactory`, selected by
 `TOASTTV_TRANSCODING_MODE=intel-qsv-full`. Verified on the deployed box against
@@ -184,6 +184,27 @@ decode cleanly, repeatable, `-ss` unaffected.
 `scripts/hardware-pipeline-dry-run.ts` regenerates the command from the real
 factory and emits a script that runs it and checks the output. Use it after any
 change to the graph.
+
+**But a live channel did not come up under `intel-qsv-full`.** The dry run
+passes on real files and the channel does not, so something the worker does
+differs from what the dry run builds and is not yet identified. Candidates,
+none of which the dry run exercises:
+
+- append windows (`appendToExistingPlaylist`), which the dry run never sets
+- `loopSource` items, used for off-air and emergency loops
+- a window made entirely of station assets — those are the only rows with a
+  pixel format today, so they are the only windows that reach the hardware path
+  at all, and every mixed window silently falls back to software
+- many more items per window than the three the dry run uses
+
+`auto` is the working configuration and the flag is opt-in, so nothing is at
+risk by leaving it there. Before trying again, capture the worker's own error:
+
+```bash
+docker logs ToastTV --tail 300 2>&1 | grep -viE "failed to probe|ffprobe failed|matroska|EBML"
+```
+
+An `Impossible to convert` line means the graph; anything else means the worker.
 
 - new `ChannelPipelineFactory` implementation: `-hwaccel qsv` decode →
   `vpp_qsv` scale/pad/fps → `h264_qsv` encode, frames never leaving the GPU
