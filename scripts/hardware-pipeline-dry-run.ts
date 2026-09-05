@@ -40,6 +40,11 @@ const seconds = Number(option('seconds', '20'))
    builds -- and hand-written probes kept diverging in other ways too, so the
    fix is to make this generator match rather than to write another probe. */
 const offsetSeconds = Number(option('offset', '300'))
+/* Which shape leads the window, because the offset lands on whatever is first.
+   Production's live item is usually a 4:3 rip, so the seek sits on a branch
+   that also goes through overlay_qsv -- a combination every earlier probe
+   missed by always putting a widescreen file first. */
+const first = option('first', 'pillarbox')
 
 const HARDWARE_CODECS = ['h264', 'hevc', 'av1', 'vp9', 'mpeg2video']
 
@@ -69,7 +74,11 @@ function pick(where: string, limit: number): Array<Record<string, unknown>> {
 const widescreen = pick("media_type <> 'interlude' AND width = 1920 AND height = 1080", 1)
 const pillarboxed = pick("media_type <> 'interlude' AND width * 1080 <> height * 1920", 1)
 const assets = pick("media_type = 'interlude'", Math.max(1, itemCount - 2))
-const rows = [...widescreen, ...pillarboxed, ...assets].slice(0, itemCount)
+const ordered =
+  first === 'widescreen'
+    ? [...widescreen, ...pillarboxed]
+    : [...pillarboxed, ...widescreen]
+const rows = [...ordered, ...assets].slice(0, itemCount)
 
 if (rows.length === 0) {
   console.error(

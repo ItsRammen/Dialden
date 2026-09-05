@@ -101,7 +101,23 @@ export class FfmpegHardwareHlsPipelineFactory extends FfmpegContinuousHlsPipelin
          on the same files. -ss is unaffected and stays here. */
       args.push('-hwaccel', 'qsv', '-hwaccel_output_format', 'qsv')
       if (item.loopSource) args.push('-stream_loop', '-1')
-      if (item.sourceOffsetSeconds > 0) args.push('-ss', decimal(item.sourceOffsetSeconds))
+      if (item.sourceOffsetSeconds > 0) {
+        /* -noaccurate_seek matters as much as -ss here. An accurate seek makes
+           FFmpeg insert a trim ahead of the graph to drop the frames between
+           the keyframe and the requested instant, and on a variable frame rate
+           source that trim drags in a software scaler which cannot touch qsv
+           frames: "Impossible to convert between the formats supported by the
+           filter 'graph 0 input from stream 0:0' and the filter auto_scale".
+           Measured on the deployed box against the exact command a live
+           channel built: identical runs pass with this flag and fail without.
+
+           It was invisible for a long time because a constant frame rate
+           source seeks accurately without complaint, and every synthetic test
+           used one. The cost is landing on the nearest keyframe rather than
+           the exact frame -- under a GOP, and a viewer joining a programme
+           already in progress cannot tell. */
+        args.push('-noaccurate_seek', '-ss', decimal(item.sourceOffsetSeconds))
+      }
       args.push('-i', item.sourcePath)
       const video = inputIndex++
 

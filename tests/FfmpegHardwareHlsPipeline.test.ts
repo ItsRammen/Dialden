@@ -199,6 +199,22 @@ describe('hardware HLS pipeline', () => {
     ).toContain('-ss 8')
   })
 
+  test('seeks without the accurate-seek trim', () => {
+    /* An accurate seek makes FFmpeg insert a trim ahead of the graph, and on a
+       variable frame rate source that trim drags in a software scaler which
+       cannot touch qsv frames. Measured against the exact command a live
+       channel built: identical runs pass with the flag and fail without. */
+    const line = factory()
+      .command(request([item({ sourceOffsetSeconds: 937.612 })]))
+      .join(' ')
+
+    expect(line).toContain('-noaccurate_seek -ss 937.612')
+    // It belongs to the seek, so an item starting at zero does not carry it.
+    expect(
+      factory().command(request([item({ sourceOffsetSeconds: 0 })])).join(' ')
+    ).not.toContain('-noaccurate_seek')
+  })
+
   test('an item with no duration is not eligible', () => {
     // The bound is a trim in the graph, so a duration is required for it.
     const unbounded = request([item({ sourceDurationSeconds: undefined })])
