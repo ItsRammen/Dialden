@@ -12,7 +12,8 @@ import { tmpdir } from 'node:os'
 import { mock, type MockProxy } from 'jest-mock-extended'
 import type { IMediaRepository } from '../src/repositories/IMediaRepository'
 import { MediaDeliveryService } from '../src/services/MediaDeliveryService'
-import type { MediaItem, MediaRootConfig } from '../src/types'
+import { MediaIndexer } from '../src/services/MediaIndexer'
+import type { IFileSystem, IMediaProbe, MediaItem, MediaRootConfig } from '../src/types'
 
 function mediaItem(overrides: Partial<MediaItem> = {}): MediaItem {
   return {
@@ -87,6 +88,34 @@ describe('MediaDeliveryService', () => {
 
     expect(await service.resolve(7)).toBeNull()
     expect(await service.resolveForChannelWorker(7)).not.toBeNull()
+  })
+
+  test('resolves a station ident from the separate root used by the indexer', async () => {
+    const interludeDirectory = join(tempDirectory, 'interludes')
+    mkdirSync(join(interludeDirectory, 'Nickelodeon'), { recursive: true })
+    const identPath = join(interludeDirectory, 'Nickelodeon', 'ident.mp4')
+    writeFileSync(identPath, 'ident video')
+    repository.getById.mockResolvedValue(mediaItem({
+      mediaType: 'interlude',
+      isInterlude: true,
+      rootId: 'interludes',
+      relativePath: 'Nickelodeon/ident.mp4',
+    }))
+    const indexer = new MediaIndexer(
+      { directory: rootDirectory, roots, supportedExtensions: ['.mp4'], databasePath: ':memory:' },
+      { directory: interludeDirectory, enabled: true, frequency: 1 },
+      repository,
+      mock<IFileSystem>(),
+      mock<IMediaProbe>()
+    )
+    const service = new MediaDeliveryService(repository, indexer.getPlaybackRoots())
+
+    expect((await service.resolveForChannelWorker(7))?.path).toBe(realpathSync(identPath))
+    expect(await service.resolve(7)).toBeNull()
+    repository.getById.mockResolvedValue(mediaItem())
+    expect((await service.resolveForChannelWorker(7))?.path).toBe(
+      realpathSync(join(rootDirectory, 'Bluey', 'episode.mp4'))
+    )
   })
 
   test('keeps unavailable scheduled media fail-closed for channel workers', async () => {

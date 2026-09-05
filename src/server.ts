@@ -132,7 +132,7 @@ export async function createServer(
   )
   const mediaDeliveryService = new MediaDeliveryService(
     daemon.getRepository(),
-    daemon.getMediaRoots()
+    daemon.getIndexer().getPlaybackRoots()
   )
   const collectionLibraryService = new CollectionLibraryService(
     daemon.getRepository()

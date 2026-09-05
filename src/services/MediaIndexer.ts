@@ -176,11 +176,7 @@ export class MediaIndexer {
     let removed = 0
 
     const roots = this.getMediaRoots()
-    const interludeRoot: MediaRootConfig = {
-      id: 'interludes',
-      directory: this.interludeConfig.directory,
-      kind: 'other',
-    }
+    const interludeRoot = this.getInterludeRoot()
     // Startup already quarantines persisted rows before the initial scan.
     // Routine watcher/safety scans must keep a previously verified root live
     // while it is walked; taking every root offline here makes an otherwise
@@ -634,6 +630,19 @@ export class MediaIndexer {
     )
 
     return files.length
+  }
+
+  /** Use the same root IDs and directories for indexing and channel playback. */
+  getPlaybackRoots(): readonly MediaRootConfig[] {
+    return [...this.getMediaRoots(), this.getInterludeRoot()]
+  }
+
+  private getInterludeRoot(): MediaRootConfig {
+    return {
+      id: 'interludes',
+      directory: this.interludeConfig.directory,
+      kind: 'other',
+    }
   }
 
   private getMediaRoots(): readonly MediaRootConfig[] {
