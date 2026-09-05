@@ -14,6 +14,29 @@ function functionSource(script: string, name: string, nextName: string): string 
 }
 
 describe('LG webOS presence telemetry', () => {
+  test('viewer guide skips station assets without changing the playback timeline or show times', () => {
+    const script = readFileSync(join(import.meta.dir, '..', 'clients', 'webos', 'app.js'), 'utf8')
+    const source = functionSource(script, 'isViewerGuideProgram', 'setChannelPreviewUpcoming')
+    const append = new Function('isArray', source + '; return appendUpcomingPrograms;')(Array.isArray)
+    const start = Date.parse('2026-09-05T12:00:00Z')
+    const programs = ['ident', 'bumper', 'interlude', 'program', 'movie', 'short'].map((type, index) => ({
+      type,
+      scheduledStart: new Date(start + index * 10000).toISOString(),
+      scheduledEnd: new Date(start + (index + 1) * 10000).toISOString(),
+    }))
+    const original = JSON.stringify(programs)
+    const upcoming: typeof programs = []
+    append({ programs }, upcoming, start - 1)
+    expect(upcoming).toEqual(programs.slice(3))
+    expect(JSON.stringify(programs)).toBe(original)
+    expect(upcoming[0]).toBe(programs[3])
+    const render = functionSource(script, 'renderCatalogWeekDay', 'renderCatalogPrograms')
+    expect(render).toContain('isViewerGuideProgram(program)')
+    expect(render.indexOf('isViewerGuideProgram(program)')).toBeLessThan(render.indexOf('matches.slice(0, GUIDE_RENDER_LIMIT)'))
+    const preview = functionSource(script, 'renderChannelPreviewUpcoming', 'isViewerGuideProgram')
+    expect(preview).toContain('isViewerGuideProgram(data.next)')
+  })
+
   test('prefers English browser audio tracks without replacing the original fallback', () => {
     const script = readFileSync(
       join(import.meta.dir, '..', 'clients', 'webos', 'app.js'),

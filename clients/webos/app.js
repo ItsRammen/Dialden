@@ -7,7 +7,7 @@
   var STORAGE_CLIENT_NAME = 'toasttv.clientName.v1';
   var STORAGE_SESSION_OWNER = 'toasttv.sessionOwner.v1';
   var STORAGE_SESSION_OWNER_EPOCH = 'toasttv.sessionOwnerEpoch.v1';
-  var CLIENT_VERSION = '0.6.6';
+  var CLIENT_VERSION = '0.6.7';
   var DEFAULT_SERVER = 'http://TOWER:1993';
   var POLL_INTERVAL_MS = 30000;
   var CHANNEL_REFRESH_INTERVAL_MS = 15000;
@@ -1745,8 +1745,13 @@
       appendUpcomingPrograms(tomorrow, programs, now);
       if (!tomorrow && state.view === 'channels') requestGuideDay(channel.id, tomorrowStart);
     }
-    if (!programs.length && data && data.next) programs.push(data.next);
+    if (!programs.length && data && data.next && isViewerGuideProgram(data.next)) programs.push(data.next);
     setChannelPreviewUpcoming(programs, fallbackText);
+  }
+
+  // Presentation only: keep the authoritative timeline intact for playback.
+  function isViewerGuideProgram(program) {
+    return program.type !== 'ident' && program.type !== 'bumper' && program.type !== 'interlude';
   }
 
   function appendUpcomingPrograms(cached, programs, now) {
@@ -1755,7 +1760,7 @@
       for (index = 0; index < cached.programs.length && programs.length < 3; index += 1) {
         var program = cached.programs[index];
         var startsAt = Date.parse(program.scheduledStart);
-        if (isFinite(startsAt) && startsAt > now) programs.push(program);
+        if (isViewerGuideProgram(program) && isFinite(startsAt) && startsAt > now) programs.push(program);
       }
     }
   }
@@ -3975,7 +3980,7 @@
     var startMs = catalogDayStart(state.catalog.dayIndex).getTime();
     var endMs = catalogDayStart(state.catalog.dayIndex + 1).getTime();
     var matches = entry.programs.filter(function (program) {
-      return Date.parse(program.scheduledEnd) > startMs && Date.parse(program.scheduledStart) < endMs;
+      return isViewerGuideProgram(program) && Date.parse(program.scheduledEnd) > startMs && Date.parse(program.scheduledStart) < endMs;
     });
     var wasTrimmed = matches.length > GUIDE_RENDER_LIMIT;
     var coverageMs = Date.parse(entry.coverageEnd || '');
