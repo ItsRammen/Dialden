@@ -23,6 +23,10 @@ import type {
   PolicyDecision,
 } from '../types'
 import { cleanFilename } from '../utils/cleanFilename'
+import {
+  looksLikeStationAssetFilename,
+  parseStationAssetFilename,
+} from '../services/StationAssetService'
 
 interface CollectionLibraryPageControllerDeps {
   readonly library: CollectionLibraryService
@@ -63,13 +67,19 @@ export function createCollectionLibraryPageController(
       deps.library.getInterludes(),
     ])
     const collections = files.map(interludeCard)
+    const recognized = files.filter((item) =>
+      parseStationAssetFilename(item.filename)
+    ).length
+    const playable = files.filter(
+      (item) => item.rootAvailable === true && item.playbackEnabled === true
+    ).length
     return c.html(
       renderCollectionLibrary({
         activeView: 'interludes',
         summary,
         heading: 'Interludes',
         description:
-          'Station assets are listed separately from show and movie collections.',
+          `${recognized} of ${files.length} station assets use the scheduling name format; ${playable} are currently playable. Use Bumper Manager to scan, rename, classify, mark, and approve these files.`,
         collections,
         emptyMessage: 'No interlude or station assets are indexed.',
         updateAvailable: deps.updateAvailable?.(),
@@ -443,6 +453,7 @@ function collectionDetailModel(
 }
 
 function interludeCard(item: MediaItem): CollectionCardViewModel {
+  const descriptor = parseStationAssetFilename(item.filename)
   const effective: PolicyDecision =
     item.rootAvailable === true && item.playbackEnabled === true
       ? 'allow'
@@ -455,7 +466,11 @@ function interludeCard(item: MediaItem): CollectionCardViewModel {
     fileCount: 1,
     metadata: {
       status: 'not_configured',
-      reason: 'Station assets are managed as files and are not sent to TMDB.',
+      reason: descriptor
+        ? `Recognized ${descriptor.station} ${descriptor.kind} asset${descriptor.targetSeconds ? ` targeting ${descriptor.targetSeconds} seconds` : ''}${descriptor.variant ? `, variant ${descriptor.variant}` : ''}. Station assets are not sent to TMDB.`
+        : looksLikeStationAssetFilename(item.filename)
+          ? 'Invalid station asset name: this file is withheld from automatic bumper matching until its structured filename is fixed.'
+        : 'Legacy interlude: usable for generic transitions, but not for station- or show-aware matching. Rename it with the station asset format.',
     },
     decision: {
       policyDecision: effective,

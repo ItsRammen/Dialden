@@ -710,6 +710,7 @@ export function renderCollectionLibraryContent(
         <a href="/library/tv">TV shows</a>
         <a href="/library/movies">Movies</a>
         <a href="/library/interludes">Interludes</a>
+        <a href="/library/bumpers">Bumper Manager</a>
         <a href="/library/review">Review queue</a>
       </nav>
       <section id="collection-live-work" class="collection-live-work" role="status" aria-live="polite" hidden>

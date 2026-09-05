@@ -19,7 +19,9 @@ export function renderLayout(
 ): string {
   const activeSection = title.toLowerCase().includes('channel')
     ? 'channels'
-    : title.toLowerCase().includes('librar') || title.toLowerCase().includes('media')
+    : title.toLowerCase().includes('librar') ||
+        title.toLowerCase().includes('media') ||
+        title.toLowerCase().includes('bumper')
       ? 'library'
       : title.toLowerCase().includes('setting') || title.toLowerCase().includes('metadata')
         ? 'settings'

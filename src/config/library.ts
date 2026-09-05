@@ -506,12 +506,10 @@ function validateChannelAutomation(
   const eraStartYear = value.eraStartYear
   const eraEndYear = value.eraEndYear
   const selectionMode = value.selectionMode
-  const hasNetworkFields =
+  const hasStrictNetworkFields =
     networkId !== '' ||
     eraStartYear !== undefined ||
     eraEndYear !== undefined ||
-    selectionMode !== undefined ||
-    value.collectionRefs !== undefined ||
     value.handoff !== undefined
   if (preset === 'network-copy') {
     if (!networkIds.has(networkId as ChannelAutomationNetworkId)) {
@@ -557,10 +555,17 @@ function validateChannelAutomation(
     if (!['automatic', 'explicit'].includes(String(selectionMode))) {
       throw new Error(`Channel ${channelId} automation selection mode is invalid`)
     }
-  } else if (hasNetworkFields) {
+  } else if (hasStrictNetworkFields) {
     throw new Error(
       `Channel ${channelId} network-copy settings require the network-copy preset`
     )
+  }
+  if (
+    preset !== 'network-copy' &&
+    selectionMode !== undefined &&
+    !['automatic', 'explicit'].includes(String(selectionMode))
+  ) {
+    throw new Error(`Channel ${channelId} automation selection mode is invalid`)
   }
   const collectionRefs =
     value.collectionRefs === undefined
@@ -578,6 +583,27 @@ function validateChannelAutomation(
   if (preset === 'network-copy' && selectionMode === 'automatic' && collectionRefs) {
     throw new Error(
       `Channel ${channelId} automatic network selection cannot store collection references`
+    )
+  }
+  if (
+    preset !== 'network-copy' &&
+    collectionRefs &&
+    selectionMode !== 'explicit'
+  ) {
+    throw new Error(
+      `Channel ${channelId} automatic recipe cannot store collection references`
+    )
+  }
+  if (preset === 'custom' && selectionMode === 'automatic') {
+    throw new Error(`Channel ${channelId} custom automation must be explicit`)
+  }
+  if (
+    preset !== 'network-copy' &&
+    selectionMode === 'explicit' &&
+    (!collectionRefs || collectionRefs.length === 0)
+  ) {
+    throw new Error(
+      `Channel ${channelId} explicit selection requires collection references`
     )
   }
   const handoff =
@@ -606,7 +632,12 @@ function validateChannelAutomation(
           ...(collectionRefs ? { collectionRefs } : {}),
           ...(handoff ? { handoff } : {}),
         }
-      : {}),
+      : {
+          ...(selectionMode === undefined
+            ? {}
+            : { selectionMode: selectionMode as 'automatic' | 'explicit' }),
+          ...(collectionRefs ? { collectionRefs } : {}),
+        }),
   }
 }
 

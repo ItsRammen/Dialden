@@ -1,5 +1,10 @@
 import type { IMediaRepository } from '../repositories/IMediaRepository'
 import type { MediaItem } from '../types'
+import {
+  selectStationFillerAsset,
+  selectStationTransitionAsset,
+  stationShowKey,
+} from './StationAssetService'
 import type {
   ChannelAutomationCollectionRef,
   ChannelAutomationHandoffPolicy,
@@ -1013,12 +1018,14 @@ export class ChannelService {
       request.selectionMode ??
       (request.collectionIds === undefined ? 'automatic' : 'explicit')
     if (
-      current?.preset !== 'network-copy' ||
+      !current ||
+      current.preset !== request.preset ||
       current.selectionMode !== 'explicit' ||
       requestedMode !== 'explicit' ||
-      current.networkId !== request.networkId ||
-      current.eraStartYear !== request.eraStartYear ||
-      current.eraEndYear !== request.eraEndYear
+      (current.preset === 'network-copy' &&
+        (current.networkId !== request.networkId ||
+          current.eraStartYear !== request.eraStartYear ||
+          current.eraEndYear !== request.eraEndYear))
     ) {
       return []
     }
@@ -1043,32 +1050,43 @@ export class ChannelService {
     const changed: string[] = []
     for (const channel of this.channels) {
       const automation = channel.automation
-      if (
-        automation?.preset !== 'network-copy' ||
-        !automation.networkId ||
-        automation.eraStartYear === undefined ||
-        automation.eraEndYear === undefined ||
-        !automation.selectionMode
-      ) {
-        continue
-      }
+      if (!automation || !isStationPresetId(automation.preset)) continue
       try {
+        const selectionMode =
+          automation.selectionMode ??
+          (automation.preset === 'custom' ? undefined : 'automatic')
+        if (!selectionMode) continue
+        if (
+          automation.preset === 'network-copy' &&
+          (!automation.networkId ||
+            automation.eraStartYear === undefined ||
+            automation.eraEndYear === undefined)
+        ) {
+          continue
+        }
         const automaticRequest: StationBuildRequest = {
           id: channel.id,
           name: channel.name,
           timezone: channel.timezone,
-          preset: 'network-copy',
-          networkId: automation.networkId,
-          eraStartYear: automation.eraStartYear,
-          eraEndYear: automation.eraEndYear,
-          selectionMode: 'automatic',
+          preset: automation.preset,
+          ...(automation.preset === 'network-copy'
+            ? {
+                networkId: automation.networkId,
+                eraStartYear: automation.eraStartYear,
+                eraEndYear: automation.eraEndYear,
+              }
+            : {}),
+          selectionMode,
           airtime: automation.airtime,
           ...(automation.handoff ? { handoff: automation.handoff } : {}),
           ...(channel.marathon ? { marathon: channel.marathon } : {}),
         }
-        const eligible = selectStationCollections(catalog, automaticRequest)
+        const eligible =
+          selectionMode === 'automatic'
+            ? selectStationCollections(catalog, automaticRequest)
+            : catalog.collections
         const selected =
-          automation.selectionMode === 'automatic'
+          selectionMode === 'automatic'
             ? eligible
             : eligible.filter((collection) =>
                 (automation.collectionRefs ?? []).some(
@@ -1253,7 +1271,33 @@ export class ChannelService {
       if (request.handoff) {
         throw new Error('After-hours handoff requires a Cartoon Network copy')
       }
-      return { preset: request.preset, airtime }
+      const selectionMode =
+        request.preset === 'custom' || request.collectionIds !== undefined
+          ? 'explicit'
+          : 'automatic'
+      const collectionRefs = new Map<string, ChannelAutomationCollectionRef>()
+      for (const collection of selectedCollections) {
+        if (collection.libraryKind !== 'tv' && collection.libraryKind !== 'movie') {
+          throw new Error('An explicit channel can store only TV and movie selections')
+        }
+        const reference: ChannelAutomationCollectionRef = {
+          rootId: collection.rootId,
+          libraryKind: collection.libraryKind,
+          identityKey: collection.identityKey,
+        }
+        collectionRefs.set(this.automationReferenceKey(reference), reference)
+      }
+      for (const reference of preservedCollectionRefs) {
+        collectionRefs.set(this.automationReferenceKey(reference), reference)
+      }
+      return {
+        preset: request.preset,
+        airtime,
+        selectionMode,
+        ...(selectionMode === 'explicit'
+          ? { collectionRefs: [...collectionRefs.values()] }
+          : {}),
+      }
     }
     if (
       !request.networkId ||
@@ -1665,7 +1709,6 @@ export class ChannelService {
       let sequence = 0
       let orderIndex = 0
       let programsSinceInterlude = 0
-      let interludeIndex = 0
       const interludes = this.orderedInterludes(
         source,
         channel,
@@ -1703,7 +1746,36 @@ export class ChannelService {
           interludes.length > 0 &&
           sequence < MAX_PROGRAMS_PER_SLOT
         ) {
-          const interlude = interludes[interludeIndex % interludes.length]
+          const remainingAfterProgram = Math.floor(
+            (end.getTime() - cursorMs) / 1000
+          )
+          const nextProgram = this.nextFittingProgram(
+            ordered,
+            orderIndex,
+            remainingAfterProgram
+          )
+          const followingProgram = nextProgram
+            ? this.nextFittingProgram(
+                ordered,
+                (nextProgram.index + 1) % ordered.length,
+                remainingAfterProgram
+              )?.item
+            : undefined
+          const interlude = nextProgram
+            ? selectStationTransitionAsset(interludes, {
+                station: this.stationAssetKey(channel),
+                currentShow: this.stationProgramKey(selected),
+                nextShow: this.stationProgramKey(nextProgram.item),
+                ...(followingProgram
+                  ? { followingShow: this.stationProgramKey(followingProgram) }
+                  : {}),
+                seed: `${channel.id}|${cursorMs}|transition`,
+                maximumDurationSeconds: Math.max(
+                  0,
+                  remainingAfterProgram - nextProgram.item.durationSeconds
+                ),
+              })
+            : undefined
           const interludeEndMs =
             cursorMs + (interlude?.durationSeconds ?? 0) * 1000
           if (interlude && interludeEndMs <= end.getTime()) {
@@ -1717,7 +1789,6 @@ export class ChannelService {
             )
             cursorMs = interludeEndMs
             sequence++
-            interludeIndex++
             programsSinceInterlude = 0
           } else if (interlude) {
             // Never skip a due break merely to squeeze another program into a
@@ -1725,6 +1796,25 @@ export class ChannelService {
             break
           }
         }
+      }
+      while (cursorMs < end.getTime() && sequence < MAX_PROGRAMS_PER_SLOT) {
+        const remainingSeconds = Math.ceil((end.getTime() - cursorMs) / 1000)
+        const filler = selectStationFillerAsset(
+          interludes,
+          this.stationAssetKey(channel),
+          remainingSeconds,
+          `${channel.id}|${cursorMs}|filler`
+        )
+        if (!filler) break
+        const playSeconds = Math.min(filler.durationSeconds, remainingSeconds)
+        const scheduledEnd = new Date(
+          Math.min(end.getTime(), cursorMs + playSeconds * 1000)
+        )
+        programs.push(
+          this.scheduledProgram(channel, filler, new Date(cursorMs), scheduledEnd)
+        )
+        cursorMs = scheduledEnd.getTime()
+        sequence++
       }
     }
 
@@ -1828,6 +1918,10 @@ export class ChannelService {
     scheduledEnd: Date
   ): ScheduledProgram {
     const isInterlude = item.mediaType === 'interlude' || item.isInterlude
+    const scheduledDurationSeconds = Math.max(
+      0.001,
+      (scheduledEnd.getTime() - scheduledStart.getTime()) / 1000
+    )
     return {
       id: `${channel.id}:${scheduledStart.getTime()}:${item.id}`,
       channelId: channel.id,
@@ -1839,15 +1933,15 @@ export class ChannelService {
       ...(isInterlude ? {} : this.programEpisodeLabel(item)),
       scheduledStart: scheduledStart.toISOString(),
       scheduledEnd: scheduledEnd.toISOString(),
-      durationSeconds: item.durationSeconds,
-      durationMs: item.durationSeconds * 1000,
+      durationSeconds: scheduledDurationSeconds,
+      durationMs: scheduledDurationSeconds * 1000,
       type: isInterlude
         ? 'interlude'
         : item.libraryKind === 'movie'
           ? 'movie'
           : 'program',
       sourceStartSeconds: 0,
-      sourceDurationSeconds: item.durationSeconds,
+      sourceDurationSeconds: Math.min(item.durationSeconds, scheduledDurationSeconds),
       transitionIn: 'hard_cut',
       transitionOut: 'hard_cut',
     }
@@ -1880,14 +1974,24 @@ export class ChannelService {
     const frequency = this.interludeFrequency()
     const output: MediaItem[] = []
     let programCount = 0
-    let interludeIndex = 0
     for (let repetition = 0; repetition < frequency; repetition++) {
-      for (const program of programs) {
+      for (let index = 0; index < programs.length; index++) {
+        const program = programs[index] as MediaItem
         output.push(program)
         programCount++
         if (programCount % frequency === 0) {
-          output.push(interludes[interludeIndex % interludes.length] as MediaItem)
-          interludeIndex++
+          const next = programs[(index + 1) % programs.length] as MediaItem
+          const following = programs[(index + 2) % programs.length]
+          const interlude = selectStationTransitionAsset(interludes, {
+            station: this.stationAssetKey(channel),
+            currentShow: this.stationProgramKey(program),
+            nextShow: this.stationProgramKey(next),
+            ...(following
+              ? { followingShow: this.stationProgramKey(following) }
+              : {}),
+            seed: `${seed}|${repetition}|${index}|transition`,
+          })
+          if (interlude) output.push(interlude)
         }
       }
     }
@@ -1914,6 +2018,36 @@ export class ChannelService {
   private interludeFrequency(): number {
     const value = Math.floor(this.interludePolicy.frequency)
     return Number.isFinite(value) && value > 0 ? value : 1
+  }
+
+  private stationAssetKey(channel: LibraryChannelPolicy): string {
+    if (
+      channel.automation?.networkId === 'nickelodeon' ||
+      channel.automation?.networkId === 'nick-jr'
+    ) {
+      return 'nick'
+    }
+    const key = stationShowKey(channel.id)
+    return key.startsWith('nick') ? 'nick' : key
+  }
+
+  private stationProgramKey(item: MediaItem): string {
+    return stationShowKey(
+      item.collectionTitle || item.collectionMetadataTitle || item.filename
+    )
+  }
+
+  private nextFittingProgram(
+    ordered: readonly MediaItem[],
+    startIndex: number,
+    remainingSeconds: number
+  ): { item: MediaItem; index: number } | undefined {
+    for (let attempt = 0; attempt < ordered.length; attempt++) {
+      const index = (startIndex + attempt) % ordered.length
+      const item = ordered[index]
+      if (item && item.durationSeconds <= remainingSeconds) return { item, index }
+    }
+    return undefined
   }
 
   private interludeActiveOn(

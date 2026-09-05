@@ -426,6 +426,16 @@ describe('ChannelService', () => {
       repository,
       {
         ...policy,
+        roots: {
+          tv: {
+            collections: [
+              {
+                name: 'SpongeBob SquarePants (1999)',
+                groups: ['comfort'],
+              },
+            ],
+          },
+        },
         channels: [
           {
             ...baseChannel!,
@@ -966,6 +976,59 @@ describe('ChannelService', () => {
       mediaId: 1,
       type: 'program',
       scheduledStart: '2026-08-23T22:40:30.000Z',
+    })
+  })
+
+  test('fills the remainder of a bounded Nick slot instead of leaving the channel offline', async () => {
+    const repository = mock<IMediaRepository>()
+    const show = {
+      ...video(1, 'SpongeBob SquarePants (1999)'),
+      durationSeconds: 700,
+    }
+    const filler = {
+      ...interlude(90, 60),
+      filename: 'nick__filler-general__target-60s__v01.mp4',
+    }
+    repository.getAll.mockResolvedValue([show, filler])
+    const service = new ChannelService(
+      repository,
+      {
+        ...policy,
+        channels: [
+          {
+            id: 'nick',
+            name: 'Nick',
+            enabled: true,
+            timezone: 'UTC',
+            slots: [
+              {
+                days: ['sun'],
+                start: '06:30',
+                end: '07:00',
+                groups: ['comfort'],
+              },
+            ],
+          },
+        ],
+      },
+      { now: () => new Date('2026-08-23T06:30:00.000Z') },
+      undefined,
+      { enabled: true, frequency: 1 }
+    )
+
+    const guide = await service.getGuide('nick', 1)
+    const programs = guide?.programs ?? []
+    expect(programs[0]?.scheduledStart).toBe('2026-08-23T06:30:00.000Z')
+    expect(programs.at(-1)?.scheduledEnd).toBe('2026-08-23T07:00:00.000Z')
+    for (let index = 1; index < programs.length; index++) {
+      expect(programs[index]?.scheduledStart).toBe(
+        programs[index - 1]?.scheduledEnd
+      )
+    }
+    expect(programs.filter((item) => item.type === 'interlude')).toHaveLength(7)
+    expect(programs.at(-1)).toMatchObject({
+      durationSeconds: 40,
+      sourceDurationSeconds: 40,
     })
   })
 
@@ -1750,6 +1813,70 @@ describe('ChannelService', () => {
         (await service.stationAutomationDraft('cn-explicit'))
           ?.unavailableCollectionRefs
       ).toBeUndefined()
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  test('reconciles general recipes while keeping hand-picked AI-style selections durable', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'toasttv-general-recipes-'))
+    try {
+      const repository = mock<IMediaRepository>()
+      const store = new ChannelConfigurationStore(
+        join(directory, 'channels.json'),
+        policy.channels
+      )
+      const pbs = {
+        ...copiedNetworkCollection(301, 'PBS Show', 'pbs-show', 2020),
+        networks: ['PBS Kids'],
+        genres: ['Family'],
+      }
+      const cbbc = {
+        ...copiedNetworkCollection(302, 'CBBC Show', 'cbbc-show', 2021),
+        networks: ['CBBC'],
+        genres: ['Children'],
+      }
+      let catalog = stationCatalog([pbs])
+      const service = new ChannelService(repository, policy, undefined, store)
+      service.stationAutomationCatalog = async () => catalog
+
+      const recipe = await service.createAutomatedStation({
+        id: 'public-kids',
+        name: 'Public Kids',
+        timezone: 'UTC',
+        preset: 'public-kids-mix',
+        selectionMode: 'automatic',
+        airtime: 'all-day',
+      })
+      expect(recipe.channel.automation).toMatchObject({
+        preset: 'public-kids-mix',
+        selectionMode: 'automatic',
+      })
+
+      await service.createAutomatedStation({
+        id: 'ai-picks',
+        name: 'AI Picks',
+        timezone: 'UTC',
+        preset: 'custom',
+        selectionMode: 'explicit',
+        collectionIds: [301],
+        airtime: 'all-day',
+      })
+      expect(
+        service.administrationSnapshot().channels.find((item) => item.id === 'ai-picks')
+          ?.automation?.collectionRefs
+      ).toEqual([
+        { rootId: 'tv', libraryKind: 'tv', identityKey: 'pbs-show' },
+      ])
+
+      catalog = stationCatalog([pbs, cbbc])
+      expect(await service.reconcileAutomatedStations()).toEqual(['public-kids'])
+      expect(
+        (await service.stationAutomationDraft('ai-picks'))?.collectionIds
+      ).toEqual([301])
+      expect(
+        (await service.stationAutomationDraft('public-kids'))?.collectionIds
+      ).toEqual(expect.arrayContaining([301, 302]))
     } finally {
       rmSync(directory, { recursive: true, force: true })
     }

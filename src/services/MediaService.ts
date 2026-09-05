@@ -77,6 +77,10 @@ export class MediaService {
     return this.repository.getById(id)
   }
 
+  async getByPath(path: string): Promise<MediaItem | null> {
+    return this.repository.getByPath(path)
+  }
+
   /**
    * Get video count (excludes interludes)
    */

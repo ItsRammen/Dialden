@@ -468,13 +468,13 @@
     })
 
     Array.prototype.forEach.call(modeInputs, function (input) {
-      input.setAttribute('aria-controls', input.value === 'network'
-        ? 'network-channel-options'
-        : 'custom-channel-options')
+      input.setAttribute('aria-controls', input.value + '-channel-options')
     })
     var networkModePanel = autoBuilder.querySelector('[data-builder-mode-panel="network"]')
+    var mixModePanel = autoBuilder.querySelector('[data-builder-mode-panel="mix"]')
     var customModePanel = autoBuilder.querySelector('[data-builder-mode-panel="custom"]')
     if (networkModePanel) networkModePanel.id = 'network-channel-options'
+    if (mixModePanel) mixModePanel.id = 'mix-channel-options'
     if (customModePanel) customModePanel.id = 'custom-channel-options'
     if (legacyMigrationFields && legacyMigrationButton) {
       legacyMigrationButton.addEventListener('click', function () {

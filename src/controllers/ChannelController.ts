@@ -13,6 +13,10 @@ import type {
 import type { ChannelLogoStore } from '../services/ChannelLogoStore'
 import type { ChannelTimelineResolverService } from '../services/ChannelTimelineResolverService'
 import type { StationBuildRequest } from '../services/ChannelService'
+import type {
+  ChannelLineupSuggestion,
+  ChannelLineupSuggestionService,
+} from '../services/ChannelLineupSuggestionService'
 /* Keep parsing tied to the catalog so new era recipes work in every endpoint. */
 import {
   isStationPresetId,
@@ -35,6 +39,7 @@ interface ChannelControllerDeps {
   ) => Promise<void> | void
   /** Legacy alias retained for callers that only invalidate branding edits. */
   onBrandingUpdated?: (channelId: string) => Promise<void> | void
+  suggestChannelLineup?: ChannelLineupSuggestionService['suggestChannelLineup']
 }
 
 /** Schedule API, same-origin channel administration, and browser editor. */
@@ -44,6 +49,7 @@ export function createChannelController({
   branding,
   onChannelChanged,
   onBrandingUpdated,
+  suggestChannelLineup,
 }: ChannelControllerDeps) {
   const controller = new Hono()
   const notifyChannelChanged = async (channelId: string) => {
@@ -294,12 +300,52 @@ export function createChannelController({
     let request: StationBuildRequest | undefined
     let automationSearch = ''
     let automationTargetId: string | undefined
+    let automationSuggestion: ChannelLineupSuggestion | undefined
+    let automationSuggestionGoal = ''
     try {
       const data = await c.req.formData()
       automationSearch = readCatalogSearch(textValue(data.get('catalogSearch')))
       automationTargetId = textValue(data.get('targetChannelId')) || undefined
       request = readFormStationRequest(data)
       const action = textValue(data.get('action'))
+      automationSuggestionGoal = textValue(data.get('suggestionGoal')).slice(0, 500)
+      if (action === 'ai-suggest') {
+        if (!suggestChannelLineup) {
+          throw new Error('AI channel suggestions are not available')
+        }
+        if (!automationSuggestionGoal) {
+          throw new Error('Describe the channel you want the AI to suggest')
+        }
+        const catalog = await channels.stationAutomationCatalog()
+        const candidates = catalog.collections
+          .filter((collection) => collection.libraryKind === 'tv')
+          .slice(0, 300)
+        automationSuggestion = await suggestChannelLineup({
+          goal: automationSuggestionGoal,
+          collections: candidates,
+        })
+        request = {
+          ...request,
+          id: request.id || channelIdFromName(automationSuggestion.name),
+          name: request.name || automationSuggestion.name,
+          preset: 'custom',
+          selectionMode: 'explicit',
+          collectionIds: [...automationSuggestion.collectionIds],
+          genres: [],
+          networks: [],
+          studios: [],
+        }
+        return c.html(
+          renderChannelAdministration(channels.administrationSnapshot(), {
+            ...(await automationSurface(channels)),
+            automationDraft: request,
+            automationSuggestion,
+            automationSuggestionGoal,
+            automationOpen: true,
+            automationTargetId,
+          })
+        )
+      }
       if (action === 'search' || action === 'clear-search') {
         if (action === 'clear-search') automationSearch = ''
         return c.html(
@@ -355,6 +401,8 @@ export function createChannelController({
           automationSearch,
           automationOpen: true,
           automationTargetId,
+          automationSuggestion,
+          automationSuggestionGoal,
           error: safeMessage(error),
         }),
         400
@@ -525,6 +573,17 @@ export function createChannelController({
   })
 
   return controller
+}
+
+function channelIdFromName(value: string): string {
+  const id = value
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 59)
+  return id || 'ai-suggested-channel'
 }
 
 async function readJsonStationRequest(

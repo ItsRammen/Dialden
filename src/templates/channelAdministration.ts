@@ -10,8 +10,11 @@ import type {
 import type {
   StationAutomationCatalog,
 } from '../services/StationAutomationService'
+import type { ChannelLineupSuggestion } from '../services/ChannelLineupSuggestionService'
 import {
   isEraStationTemplateId,
+  isStationPresetId,
+  selectStationCollections,
   STATION_AIRTIME_OPTIONS,
 } from '../services/StationAutomationService'
 import { renderLayout } from './layout'
@@ -29,6 +32,8 @@ interface ChannelAdministrationOptions {
   readonly automationSearch?: string
   readonly automationOpen?: boolean
   readonly automationTargetId?: string
+  readonly automationSuggestion?: ChannelLineupSuggestion
+  readonly automationSuggestionGoal?: string
   readonly channelLogoIds?: readonly string[]
   readonly channelLogoVariants?: Readonly<Record<string, readonly string[]>>
 }
@@ -102,8 +107,10 @@ export function renderChannelAdministration(
               options.automationPreview,
                options.automationSearch,
                automationTarget,
-               options.automationTargetId,
-               options.error
+              options.automationTargetId,
+               options.error,
+               options.automationSuggestion,
+               options.automationSuggestionGoal
                )
             )
           : ''
@@ -204,14 +211,27 @@ function renderChannelImprovements(
                   )
             )
           : []
+        const recipePreset = channel.automation?.preset
+        const followsRecipe =
+          !profile &&
+          recipePreset !== undefined &&
+          recipePreset !== 'custom' &&
+          recipePreset !== 'network-copy' &&
+          isStationPresetId(recipePreset) &&
+          channel.automation?.selectionMode !== 'explicit'
+        const recipeCollections = followsRecipe
+          ? selectStationCollections(catalog, { preset: recipePreset })
+          : []
         const available = (followsProfile
           ? profileMatches.map((match) => collectionsById.get(match.collectionId))
-          : references.map((reference) =>
-              collectionsByReference.get(collectionReferenceKey(reference))
-            ))
+          : followsRecipe
+            ? recipeCollections
+            : references.map((reference) =>
+                collectionsByReference.get(collectionReferenceKey(reference))
+              ))
           .filter((collection): collection is StationAutomationCatalog['collections'][number] => Boolean(collection))
           .sort((left, right) => left.displayTitle.localeCompare(right.displayTitle))
-        const unavailableCount = followsProfile
+        const unavailableCount = followsProfile || followsRecipe
           ? 0
           : references.length - available.length
         const suggestions = profile?.missingSuggestions.filter((suggestion) =>
@@ -228,7 +248,7 @@ function renderChannelImprovements(
           ? ` · ${startYear}–${endYear}`
           : ''
         return `<article class="channel-improvement-card">
-          <header><div><h3>${escapeHtml(channel.name)}</h3><p>${profile ? `${escapeHtml(profile.name)}${era}` : 'Custom automated lineup'}</p></div><a href="/channels?builder=${encodeURIComponent(channel.id)}#station-builder">Review lineup</a></header>
+          <header><div><h3>${escapeHtml(channel.name)}</h3><p>${profile ? `${escapeHtml(profile.name)}${era}` : followsRecipe ? escapeHtml(catalog.presets.find((preset) => preset.id === recipePreset)?.name ?? 'General mix') : 'Hand-picked automated lineup'}</p></div><a href="/channels?builder=${encodeURIComponent(channel.id)}#station-builder">Review lineup</a></header>
           <div class="channel-improvement-columns">
             <section aria-labelledby="available-${escapeHtml(channel.id)}">
               <h4 id="available-${escapeHtml(channel.id)}">Available now <span>${available.length}</span></h4>
@@ -245,7 +265,9 @@ function renderChannelImprovements(
                 ? suggestions.length > 0
                   ? `<ul>${suggestions.map((suggestion) => `<li><strong>${escapeHtml(suggestion.title)}</strong><small>${escapeHtml(suggestion.libraryKind.toUpperCase())} · carried ${suggestion.airStartYear}–${suggestion.airEndYear}</small></li>`).join('')}</ul>`
                   : '<p class="channel-improvement-empty">Your library covers every curated title for this era.</p>'
-                : '<p class="channel-improvement-empty">Custom channels have no network-specific recommendation profile.</p>'}
+                : followsRecipe
+                  ? '<p class="channel-improvement-empty">This recipe already follows every matching approved title in your library.</p>'
+                  : '<p class="channel-improvement-empty">Hand-picked channels change only when you review and apply a new selection.</p>'}
             </section>
           </div>
         </article>`
@@ -488,7 +510,9 @@ function renderAutomationBuilder(
   catalogSearch = '',
   target?: LibraryChannelPolicy,
   requestedTargetId?: string,
-  error?: string
+  error?: string,
+  suggestion?: ChannelLineupSuggestion,
+  suggestionGoal = ''
 ): string {
   if (requestedTargetId && !target) {
     return `<section class="channel-auto" id="auto-builder"><h2>Channel not found</h2><p>The selected channel no longer exists.</p></section>`
@@ -501,11 +525,23 @@ function renderAutomationBuilder(
     (profile) => profile.id === draft?.networkId
   )
   const selectedProfile = requestedProfile ?? profiles[0]
+  const draftPreset = draft?.preset
   const networkMode =
     profiles.length > 0 &&
     (draft
       ? draft.preset === 'network-copy' || draft.networkId !== undefined
       : true)
+  const mixMode = Boolean(
+    draftPreset &&
+      draftPreset !== 'network-copy' &&
+      draftPreset !== 'custom' &&
+      !isEraStationTemplateId(draftPreset)
+  )
+  const customMode = !networkMode && !mixMode
+  const selectedMixPreset =
+    catalog.presets.find((preset) => preset.id === draftPreset) ??
+    catalog.presets.find((preset) => preset.id === 'public-kids-mix') ??
+    catalog.presets[0]
   const selectedIds = new Set(draft?.collectionIds ?? [])
   const hasExplicitSelection = draft?.collectionIds !== undefined
   const selectedLineupMode =
@@ -598,7 +634,11 @@ function renderAutomationBuilder(
                     <span><strong>Network channel</strong><small>Pick one network and an era. Only strictly eligible titles from that network can be selected.</small></span>
                   </label>
                   <label>
-                    <input type="radio" name="builderMode" value="custom" data-builder-mode ${networkMode ? '' : 'checked'}>
+                    <input type="radio" name="builderMode" value="mix" data-builder-mode ${mixMode ? 'checked' : ''} ${catalog.presets.length === 0 ? 'disabled' : ''}>
+                    <span><strong>General mix</strong><small>Use an explainable recipe that can combine compatible shows across broadcasters.</small></span>
+                  </label>
+                  <label>
+                    <input type="radio" name="builderMode" value="custom" data-builder-mode ${customMode ? 'checked' : ''}>
                     <span><strong>Custom channel</strong><small>Search the entire playable library and choose every show or movie yourself.</small></span>
                   </label>
                 </div>
@@ -617,13 +657,20 @@ function renderAutomationBuilder(
                 networkMode,
                 selectedLineupMode
               )}
+              ${renderGeneralMixBuilder(
+                catalog,
+                selectedMixPreset?.id,
+                mixMode
+              )}
               ${renderCustomChannelBuilder(
                 visibleCollections,
                 matchingCollections.length,
                 catalog.collections.length,
                 selectedIds,
                 catalogSearch,
-                !networkMode
+                customMode,
+                suggestion,
+                suggestionGoal
               )}
             </section>
 
@@ -935,7 +982,9 @@ function renderCustomChannelBuilder(
   totalCount: number,
   selectedIds: ReadonlySet<number>,
   catalogSearch: string,
-  active: boolean
+  active: boolean,
+  suggestion?: ChannelLineupSuggestion,
+  suggestionGoal = ''
 ): string {
   const selectedCount = collections.filter((collection) =>
     selectedIds.has(collection.id)
@@ -946,6 +995,15 @@ function renderCustomChannelBuilder(
       <legend class="channel-visually-hidden">Custom channel settings</legend>
       <input type="hidden" name="selectionMode" value="explicit">
       <header class="channel-custom-header"><div><h3>Choose from every playable title</h3><p>No network identity is implied. Only checked titles are scheduled.</p></div><strong data-selection-count aria-live="polite">${countLabel(selectedCount, 'selected title')}</strong></header>
+      <aside class="channel-auto-disclaimer">
+        <strong>AI suggested draft</strong>
+        <p>Describe a channel and the configured review assistant will choose only from approved, playable TV metadata. It cannot approve, download, create, or silently update media.</p>
+        <label>Channel idea
+          <textarea name="suggestionGoal" maxlength="500" rows="3" placeholder="A calm public-media kids channel mixing PBS, CBC, CBBC, and CBeebies shows">${escapeHtml(suggestionGoal)}</textarea>
+        </label>
+        <button type="submit" name="action" value="ai-suggest" formnovalidate class="btn-secondary">Suggest a hand-picked lineup</button>
+        ${suggestion ? `<p role="status"><strong>${escapeHtml(suggestion.name)}:</strong> ${escapeHtml(suggestion.rationale)} Review the ${countLabel(suggestion.collectionIds.length, 'checked title')} below, then preview before saving.</p>` : ''}
+      </aside>
       ${renderTitlePickerToolbar('custom', catalogSearch)}
       <div class="channel-title-grid channel-title-grid-custom" data-title-list>
         ${collections.map((collection) => `<label data-title-row data-search-text="${escapeHtml(collectionSearchText(collection))}">
@@ -956,6 +1014,26 @@ function renderCustomChannelBuilder(
       <p class="channel-title-empty" data-title-filter-empty hidden>No playable title matches this search.</p>
       ${matchingCount === 0 && catalogSearch ? '<p class="channel-admin-help">No collection matches this catalog search. Clear it to browse the catalog.</p>' : ''}
       ${matchingCount > 250 ? `<p class="channel-admin-help">Showing the first 250 of ${matchingCount} matching titles. Refine the search to reach the rest.</p>` : normalize(catalogSearch) ? `<p class="channel-admin-help">Showing ${countLabel(matchingCount, 'matching title')}.</p>` : totalCount > 250 ? '<p class="channel-admin-help">Showing the first 250 playable titles. Search by title, network, studio, or genre to reach the rest.</p>' : ''}
+    </fieldset>
+  </section>`
+}
+
+function renderGeneralMixBuilder(
+  catalog: StationAutomationCatalog,
+  selectedPreset: StationAutomationCatalog['presets'][number]['id'] | undefined,
+  active: boolean
+): string {
+  return `<section class="channel-builder-mode-panel channel-mix-builder" data-builder-mode-panel="mix" ${active ? '' : 'hidden'}>
+    <fieldset data-builder-mode-fields ${active ? '' : 'disabled'}>
+      <legend>Choose a general channel recipe</legend>
+      <input type="hidden" name="selectionMode" value="automatic">
+      <div class="channel-auto-airtime-grid">
+        ${catalog.presets.map((preset) => `<label class="channel-auto-airtime">
+          <input type="radio" name="preset" value="${escapeHtml(preset.id)}" ${preset.id === selectedPreset ? 'checked' : ''}>
+          <span><strong>${escapeHtml(preset.name)}</strong><small>${escapeHtml(preset.description)} ${countLabel(preset.matchedCollections, 'matching title')}${preset.unofficial ? ' · Unofficial personal mix' : ''}</small></span>
+        </label>`).join('')}
+      </div>
+      <p class="channel-auto-disclaimer"><strong>Recipe-based personal channel.</strong> ToastTV uses approved TMDB metadata and refreshes this lineup deterministically when your playable library changes. It does not claim to reproduce any broadcaster feed.</p>
     </fieldset>
   </section>`
 }

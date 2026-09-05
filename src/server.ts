@@ -29,6 +29,8 @@ import { createMediaController } from './controllers/MediaController'
 import { CollectionLibraryService } from './services/CollectionLibraryService'
 import { createCollectionLibraryController } from './controllers/CollectionLibraryController'
 import { createCollectionLibraryPageController } from './controllers/CollectionLibraryPageController'
+import { createBumperAdministrationController } from './controllers/BumperAdministrationController'
+import { BumperAdministrationService } from './services/BumperAdministrationService'
 import { ArtworkCacheService } from './services/ArtworkCacheService'
 import { createArtworkController } from './controllers/ArtworkController'
 import { join } from 'node:path'
@@ -37,6 +39,8 @@ import { renderHeadlessDashboard } from './templates/headlessDashboard'
 import { createMetadataSettingsController } from './controllers/MetadataSettingsController'
 import { createReviewAssistantController } from './controllers/ReviewAssistantController'
 import { createReviewRunController } from './controllers/ReviewRunController'
+import { loadPersistedReviewAssistantConfig } from './config/reviewAssistant'
+import { OpenAiCompatibleReviewAssistant } from './services/review/OpenAiCompatibleReviewAssistant'
 import { ClientPresenceService } from './services/ClientPresenceService'
 import { ChannelQualityTierService } from './services/ChannelQualityTierService'
 import { LineupSessionService } from './services/LineupSessionService'
@@ -369,6 +373,15 @@ export async function createServer(
     channels: channelService,
     logos: channelLogos,
     branding: channelTimeline,
+    suggestChannelLineup: async (request, signal) => {
+      const config = await loadPersistedReviewAssistantConfig(
+        daemon.getRepository()
+      )
+      return new OpenAiCompatibleReviewAssistant(config).suggestChannelLineup(
+        request,
+        signal
+      )
+    },
     onChannelChanged: async (channelId, mode) => {
       if (mode === 'deactivate') {
         await channelWorkers.deactivate(channelId)
@@ -411,6 +424,58 @@ export async function createServer(
       channelService.invalidateScheduleCatalog()
       await daemon.getEngine().refreshCache(true)
       await playbackService.reconcilePrequeue()
+    },
+    updateAvailable: () => updateService.getUpdateInfo()?.updateAvailable,
+  })
+  const bumperAdministrationController = createBumperAdministrationController({
+    bumpers: new BumperAdministrationService(
+      mediaService,
+      !daemon.isMediaReadOnly,
+      {
+        render: async (command) => {
+          const child = Bun.spawn([...command], {
+            stdout: 'ignore',
+            stderr: 'pipe',
+          })
+          let timedOut = false
+          const timeout = setTimeout(() => {
+            timedOut = true
+            child.kill()
+          }, 120_000)
+          try {
+            const [code, stderr] = await Promise.all([
+              child.exited,
+              new Response(child.stderr).text(),
+            ])
+            return {
+              code,
+              stderr: timedOut
+                ? `Bumper render timed out after 120 seconds. ${stderr}`
+                : stderr,
+            }
+          } finally {
+            clearTimeout(timeout)
+          }
+        },
+      }
+    ),
+    library: collectionLibraryService,
+    writable: !daemon.isMediaReadOnly,
+    refreshSchedules: async () => {
+      channelService.invalidateScheduleCatalog()
+      await daemon.getEngine().refreshCache(true)
+      await playbackService.reconcilePrequeue()
+      await Promise.all(
+        channelWorkers
+          .listStates()
+          .filter((state) => state.viewerCount > 0)
+          .map((state) =>
+            channelWorkers.restart(
+              state.channelId,
+              'Bumper assets changed'
+            )
+          )
+      )
     },
     updateAvailable: () => updateService.getUpdateInfo()?.updateAvailable,
   })
@@ -504,6 +569,7 @@ export async function createServer(
   app.route('/', mediaController)
   app.route('/', collectionLibraryController)
   app.route('/', collectionLibraryPageController)
+  app.route('/', bumperAdministrationController)
   app.route('/', artworkController)
   app.route('/', metadataSettingsController)
   app.route('/', clientPresenceController)

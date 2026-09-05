@@ -15,6 +15,12 @@ import {
   type MetadataProviderErrorCode,
 } from '../../metadata/types'
 import type { ReviewAssistantRuntimeConfig } from '../../config/reviewAssistant'
+import {
+  parseChannelLineupSuggestion,
+  type ChannelLineupSuggestion,
+  type ChannelLineupSuggestionRequest,
+  type ChannelLineupSuggestionService,
+} from '../ChannelLineupSuggestionService'
 import { parseDisambiguation, parseSuitability } from './verdict'
 import type {
   DisambiguationRequest,
@@ -70,7 +76,25 @@ const SUITABILITY_SCHEMA = {
   },
 } as const
 
-export class OpenAiCompatibleReviewAssistant implements ReviewAssistant {
+const CHANNEL_LINEUP_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['name', 'rationale', 'collectionIds'],
+  properties: {
+    name: { type: 'string' },
+    rationale: { type: 'string' },
+    collectionIds: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 60,
+      uniqueItems: true,
+      items: { type: 'integer', minimum: 1 },
+    },
+  },
+} as const
+
+export class OpenAiCompatibleReviewAssistant
+  implements ReviewAssistant, ChannelLineupSuggestionService {
   readonly id = PROVIDER_ID
   /** Cleared for the process once a provider refuses a strict schema. */
   private schemaSupported = true
@@ -158,6 +182,32 @@ export class OpenAiCompatibleReviewAssistant implements ReviewAssistant {
       signal
     )
     return parseSuitability(content, request)
+  }
+
+  async suggestChannelLineup(
+    request: ChannelLineupSuggestionRequest,
+    signal?: AbortSignal
+  ): Promise<ChannelLineupSuggestion> {
+    if (!request.goal.trim()) throw new Error('Describe the channel you want')
+    if (request.collections.length === 0) {
+      throw new Error('No approved TV shows are available for an AI suggestion')
+    }
+    const content = await this.complete(
+      [
+        {
+          role: 'system',
+          content:
+            'You propose a cohesive personal TV channel from an approved local catalog. ' +
+            'Select only collection IDs supplied by the user; never invent an ID or title. ' +
+            'Prefer a varied, balanced lineup that directly matches the stated goal. ' +
+            'This is an advisory draft: the administrator will inspect and confirm it.',
+        },
+        { role: 'user', content: renderChannelLineupPrompt(request) },
+      ],
+      { name: 'channel_lineup', schema: CHANNEL_LINEUP_SCHEMA },
+      signal
+    )
+    return parseChannelLineupSuggestion(content, request)
   }
 
   /**
@@ -340,6 +390,32 @@ function renderSuitabilityPrompt(request: SuitabilityRequest): string {
       : `A previous assessment said "${request.currentBand}". You may agree or be stricter, never more permissive.`,
   ]
   return lines.filter((line): line is string => line !== null).join('\n')
+}
+
+function renderChannelLineupPrompt(
+  request: ChannelLineupSuggestionRequest
+): string {
+  return [
+    `Channel goal: ${truncate(request.goal, 500)}`,
+    '',
+    'Approved playable TV collections:',
+    ...request.collections.map((collection) =>
+      [
+        `id=${collection.id}`,
+        `title=${collection.displayTitle}`,
+        collection.firstAirYear ? `year=${collection.firstAirYear}` : null,
+        collection.genres.length ? `genres=${collection.genres.join(', ')}` : null,
+        collection.networks.length
+          ? `networks=${collection.networks.join(', ')}`
+          : null,
+        collection.studios.length
+          ? `studios=${collection.studios.join(', ')}`
+          : null,
+      ]
+        .filter((part): part is string => part !== null)
+        .join(' | ')
+    ),
+  ].join('\n')
 }
 
 function truncate(value: string, limit: number): string {

@@ -22,6 +22,7 @@ export type StationPresetId =
   | 'network-copy'
   | 'all-approved-tv'
   | 'family-animation'
+  | 'public-kids-mix'
   | 'nature-documentaries'
   | 'nickelodeon-style'
   | 'nick-jr-style'
@@ -391,6 +392,18 @@ const NATURE_DOCUMENTARY_TITLE_TERMS = [
   'prehistoric planet',
   'wildlife',
 ]
+const PUBLIC_KIDS_NETWORKS = new Set(
+  [
+    'pbs',
+    'pbs kids',
+    'cbc',
+    'cbc television',
+    'cbc kids',
+    'cbc gem',
+    'cbbc',
+    'cbeebies',
+  ].map(normalize)
+)
 const NICK_JR_TITLES = new Set(
   [
     'blaze and the monster machines',
@@ -683,6 +696,21 @@ const presetDefinitions: readonly PresetDefinition[] = [
       collection.libraryKind === 'tv' &&
       collection.genres.some((genre) =>
         ['animation', 'family'].includes(normalize(genre))
+      ),
+  },
+  {
+    id: 'public-kids-mix',
+    name: 'Public Kids mix',
+    description:
+      'A general children\'s channel combining parent-allowed PBS, CBC, CBBC, and CBeebies shows from your playable library.',
+    unofficial: true,
+    matches: (collection) =>
+      collection.libraryKind === 'tv' &&
+      collection.networks.some((network) =>
+        PUBLIC_KIDS_NETWORKS.has(normalize(network))
+      ) &&
+      collection.genres.some((genre) =>
+        ['animation', 'children', 'family', 'kids'].includes(normalize(genre))
       ),
   },
   {
