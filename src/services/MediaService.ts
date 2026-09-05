@@ -170,6 +170,20 @@ export class MediaService {
   }
 
   /**
+   * Rows still awaiting the media probe. The backfill converges over several
+   * scans, and hardware-decode eligibility depends on it, so the count is
+   * worth showing rather than leaving in the container log.
+   */
+  async countMissingProbe(): Promise<number> {
+    if (typeof this.repository.countMissingProbe !== 'function') return 0
+    try {
+      return await this.repository.countMissingProbe()
+    } catch {
+      return 0
+    }
+  }
+
+  /**
    * Generate thumbnails for all media
    */
   async generateThumbnails(): Promise<void> {

@@ -259,6 +259,9 @@ export interface IMediaRepository {
     audioCodec: string | null
   ): Promise<void>
 
+  /** How many rows still lack any part of the media probe, for progress. */
+  countMissingProbe?(): Promise<number>
+
   /**
    * Persist the video half of the same probe. Optional so an older repository
    * implementation keeps working; the caller checks before using it.

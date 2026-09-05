@@ -63,6 +63,24 @@ describe('MediaRepository', () => {
     expect(refreshed?.fps).toBeCloseTo(23.976, 3)
   })
 
+  test('counts every row still awaiting the probe, not just a page of them', async () => {
+    /* The progress figure came from a capped list, so it reported the cap:
+       "500 still to go" whether five hundred or twenty thousand remained. */
+    for (let index = 0; index < 12; index += 1) {
+      await repo.upsertMedia(
+        createInput({ path: `/videos/f${index}.mp4`, filename: `f${index}.mp4` })
+      )
+    }
+    expect(await repo.countMissingProbe()).toBe(12)
+
+    const all = await repo.getAll()
+    for (const item of all.slice(0, 5)) {
+      await repo.updateAudioProbe(item.id, true, 'aac')
+      await repo.updateVideoProbe(item.id, 'yuv420p', 25)
+    }
+    expect(await repo.countMissingProbe()).toBe(7)
+  })
+
   test('a probe that comes back empty does not erase what is already known', async () => {
     await repo.upsertMedia(
       createInput({ path: '/videos/known.mp4', filename: 'known.mp4' })

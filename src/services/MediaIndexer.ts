@@ -331,14 +331,15 @@ export class MediaIndexer {
     }
   }
 
-  /** How many rows still lack one of the probed fields, for the progress line. */
-  private async countMissingProbes(): Promise<number> {
-    if (typeof this.repository.listMissingAudioProbe !== 'function') return 0
+  /**
+   * How many rows still lack one of the probed fields. A real count: this was
+   * a capped list, which reported the cap as the remainder and so said "500
+   * still to go" whether five hundred or twenty thousand were left.
+   */
+  async countMissingProbes(): Promise<number> {
+    if (typeof this.repository.countMissingProbe !== 'function') return 0
     try {
-      // A full count is not worth a bespoke query; a capped probe is enough to
-      // say whether anything is left.
-      const rest = await this.repository.listMissingAudioProbe(500)
-      return Array.isArray(rest) ? rest.length : 0
+      return await this.repository.countMissingProbe()
     } catch {
       return 0
     }

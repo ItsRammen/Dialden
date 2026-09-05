@@ -2172,6 +2172,19 @@ export class MediaRepository implements IMediaRepository {
       .run(hasAudio ? 1 : 0, audioCodec, id)
   }
 
+  /** How many rows still lack any part of the media probe. */
+  async countMissingProbe(): Promise<number> {
+    if (!this.db) throw new Error('Repository not initialized')
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS pending FROM media
+         WHERE (has_audio IS NULL OR pixel_format IS NULL OR fps IS NULL)
+           AND root_available = 1`
+      )
+      .get() as { pending: number } | undefined
+    return row?.pending ?? 0
+  }
+
   /**
    * Persists the video half of the same probe.
    *

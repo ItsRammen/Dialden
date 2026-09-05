@@ -126,7 +126,17 @@ export function createLibraryController(deps: LibraryControllerDeps) {
 
     // If no view param, called from Settings - just return toast
     if (!body['view']) {
-      return c.html(`<div class="toast success">Scanned ${count} files</div>`)
+      /* The probe backfill converges over several scans, and until it is done
+         hardware-decode eligibility stays near nothing. Saying so here is the
+         difference between "the scan did nothing" and "keep going". */
+      const pending = await media.countMissingProbe()
+      const probe =
+        pending > 0
+          ? ` · media probe: ${pending.toLocaleString('en-US')} file${pending === 1 ? '' : 's'} left, rescan to continue`
+          : ' · media probe complete'
+      return c.html(
+        `<div class="toast success">Scanned ${count} files${probe}</div>`
+      )
     }
 
     const appConfig = await config.get()
