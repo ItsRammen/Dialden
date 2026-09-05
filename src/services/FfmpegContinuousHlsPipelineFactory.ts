@@ -60,7 +60,10 @@ export function preferredAudioStreamIndex(
 }
 
 const AUDIO_PROBE_CACHE_TTL_MS = 10 * 60_000
-const STDERR_TAIL_BYTES = 2_048
+const STDERR_TAIL_BYTES = 8_192
+/** Matches the lines worth reporting out of FFmpeg's chatter. */
+const INFORMATIVE_STDERR =
+  /(?:error|failed|invalid|no such|unable|impossible|mfx|vaapi|qsv)/i
 
 /**
  * Drains FFmpeg's stderr into a bounded tail so exit diagnostics survive into
@@ -72,6 +75,12 @@ async function collectStderrTail(
   stream: ReadableStream<Uint8Array>,
   capacityBytes = STDERR_TAIL_BYTES
 ): Promise<string> {
+  /* The first error is the cause; everything after it is usually cascade. It
+     has to be captured as the stream passes, because a single "Impossible to
+     convert" is followed by thousands of bytes of pixel-format lists that push
+     it straight out of any bounded tail -- which is exactly how a graph fault
+     came to be reported as "-22 Invalid argument" from the audio encoder. */
+  let firstError: string | null = null
   let text = ''
   try {
     const reader = stream.getReader()
@@ -80,13 +89,25 @@ async function collectStderrTail(
       const { done, value } = await reader.read()
       if (done) break
       text += decoder.decode(value, { stream: true })
+      if (firstError === null) firstError = findInformative(text)
       if (text.length > capacityBytes) text = text.slice(-capacityBytes)
     }
     text += decoder.decode()
+    if (firstError === null) firstError = findInformative(text)
   } catch {
     // Diagnostics are best-effort; never let capture failures mask the exit.
   }
-  return text.slice(-capacityBytes)
+  const tail = text.slice(-capacityBytes)
+  // Kept at the front so the cause survives however the tail is trimmed.
+  return firstError && !tail.includes(firstError) ? `${firstError}\n${tail}` : tail
+}
+
+function findInformative(text: string): string | null {
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (trimmed && INFORMATIVE_STDERR.test(trimmed)) return trimmed
+  }
+  return null
 }
 
 function composeExitError(code: number, stderrTail?: string): string {
@@ -101,12 +122,21 @@ function boundedStderrDetail(stderrTail?: string): string | undefined {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-  const informative = [...lines]
-    .reverse()
-    .find((line) => /(?:error|failed|invalid|no such|unable|mfx|vaapi|qsv)/i.test(line))
-  const chosen = informative ?? lines.at(-1)
-  return chosen ? chosen.slice(0, 500) : undefined
+  /* Forwards, not in reverse. FFmpeg's first error is the cause and the rest
+     is what it knocked over on the way down; reporting the last one named the
+     audio encoder for a fault in the filter graph. */
+  const cause = lines.find((line) => INFORMATIVE_STDERR.test(line))
+  const last = [...lines].reverse().find((line) => INFORMATIVE_STDERR.test(line))
+  const chosen = cause ?? lines.at(-1)
+  if (!chosen) return undefined
+  // Both ends when they differ: the cause, and what it ended up failing at.
+  return last && last !== chosen
+    ? `${chosen.slice(0, 400)} | then: ${last.slice(0, 200)}`
+    : chosen.slice(0, 500)
 }
+
+/** Exposed for tests: choosing the wrong line here hides the real fault. */
+export const __testing = { boundedStderrDetail }
 
 const SOFTWARE_TRANSCODING: FfmpegTranscodingStatus = {
   configuredMode: 'software',

@@ -238,3 +238,37 @@ describe('fitWithin', () => {
     }
   })
 })
+
+describe('pipeline failure reporting', () => {
+  test('names the cause, not what it knocked over', async () => {
+    /* A graph fault prints "Impossible to convert" and then thousands of bytes
+       of pixel-format lists, after which every encoder reports -22. Searching
+       backwards through a 2KB tail found only the encoder, so a filter-graph
+       bug was reported as an audio encoder failure and cost hours. */
+    const { __testing } = await import(
+      '../src/services/FfmpegContinuousHlsPipelineFactory'
+    )
+    const stderr = [
+      "Impossible to convert between the formats supported by the filter 'graph 0 input from stream 2:0' and the filter 'auto_scale_1'",
+      'Pixel formats:',
+      '  src: qsv',
+      `  dst: ${Array.from({ length: 400 }, (_, i) => `fmt${i}`).join(' ')}`,
+      '[aost#0:1/aac] Terminating thread with return code -22 (Invalid argument)',
+    ].join('\n')
+
+    const detail = __testing.boundedStderrDetail(stderr)
+
+    expect(detail).toContain('Impossible to convert')
+    // The symptom is still reported, but after the cause rather than instead.
+    expect(detail).toContain('then:')
+    expect(detail?.indexOf('Impossible')).toBeLessThan(detail?.indexOf('then:') ?? 0)
+  })
+
+  test('falls back to the last line when nothing looks like an error', async () => {
+    const { __testing } = await import(
+      '../src/services/FfmpegContinuousHlsPipelineFactory'
+    )
+    expect(__testing.boundedStderrDetail('one\ntwo\nthree')).toBe('three')
+    expect(__testing.boundedStderrDetail('')).toBeUndefined()
+  })
+})
