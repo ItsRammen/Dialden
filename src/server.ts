@@ -48,6 +48,7 @@ import { createClientPresenceController } from './controllers/ClientPresenceCont
 import { mutationOriginGuard } from './middleware/mutationOriginGuard'
 import { ContinuousChannelWorkerManager } from './services/ContinuousChannelWorkerManager'
 import { FfmpegContinuousHlsPipelineFactory } from './services/FfmpegContinuousHlsPipelineFactory'
+import { FfmpegHardwareHlsPipelineFactory } from './services/FfmpegHardwareHlsPipelineFactory'
 import {
   resolveFfmpegTranscodingBackend,
   type FfmpegTranscodingStatus,
@@ -144,10 +145,21 @@ export async function createServer(
   )
   const clientPresenceService = new ClientPresenceService()
   const channelLogos = new ChannelLogoStore(getDataPath('channel-logos'))
+  /* The full-hardware pipeline probes and reports as ordinary QSV; the mode
+     only decides which graph is built, so the backend resolver sees the
+     established value and its diagnostics are unchanged. */
+  const fullHardwarePipeline = runtime.transcodingMode === 'intel-qsv-full'
   const transcodingStatus = await resolveFfmpegTranscodingBackend({
-    mode: runtime.transcodingMode,
+    mode: fullHardwarePipeline ? 'intel-qsv' : runtime.transcodingMode,
     qsvDevice: runtime.qsvDevice,
   })
+  if (fullHardwarePipeline) {
+    console.log(
+      transcodingStatus.activeBackend === 'intel-qsv'
+        ? 'Full-hardware channel pipeline enabled: decode, scale and encode on the media engine'
+        : 'Full-hardware channel pipeline requested but QSV is unavailable; using software'
+    )
+  }
   const qualityTier = new ChannelQualityTierService()
   const qualityDecision = qualityTier.resolve({
     hardwareAcceleration: transcodingStatus.hardwareAcceleration,
@@ -166,13 +178,21 @@ export async function createServer(
   )
   const channelWorkers = new ContinuousChannelWorkerManager(
     channelTimeline,
-    new FfmpegContinuousHlsPipelineFactory(
-      'ffmpeg',
-      undefined,
-      undefined,
-      undefined,
-      transcodingStatus
-    ),
+    fullHardwarePipeline
+      ? new FfmpegHardwareHlsPipelineFactory(
+          'ffmpeg',
+          undefined,
+          undefined,
+          undefined,
+          transcodingStatus
+        )
+      : new FfmpegContinuousHlsPipelineFactory(
+          'ffmpeg',
+          undefined,
+          undefined,
+          undefined,
+          transcodingStatus
+        ),
     new BunChannelWorkerFiles(),
     {
       outputRoot: getDataPath('streams'),

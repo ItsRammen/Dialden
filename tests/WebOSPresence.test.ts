@@ -46,6 +46,10 @@ describe('LG webOS presence telemetry', () => {
     const script = readFileSync(join(import.meta.dir, '..', 'clients', 'webos', 'app.js'), 'utf8')
     const source = functionSource(script, 'isViewerGuideProgram', 'appendUpcomingPrograms')
 
+    /* Anchored to the clock rather than to a fixed date: the helper only
+       offers programmes that start after now, so hard-coded dates make the
+       test pass until the day they silently stop being in the future. */
+    const dayStart = new Date().setUTCHours(0, 0, 0, 0)
     const guideDays: Record<string, unknown> = {}
     const helpers = new Function(
       'state',
@@ -56,7 +60,7 @@ describe('LG webOS presence telemetry', () => {
     )(
       { clockOffsetMs: 0 },
       (channelId: string, dayStart: number) => guideDays[`${channelId}:${dayStart}`] ?? null,
-      (offset: number) => new Date(Date.parse('2026-09-05T00:00:00Z') + offset * 86400000),
+      (offset: number) => new Date(dayStart + offset * 86400000),
       (cached: { programs?: unknown[] } | null, out: unknown[], now: number) => {
         for (const program of cached?.programs ?? []) {
           const item = program as { type: string; scheduledStart: string }
@@ -79,10 +83,17 @@ describe('LG webOS presence telemetry', () => {
     const later = {
       type: 'program',
       title: 'CatDog',
-      scheduledStart: '2026-09-05T12:00:00Z',
+      scheduledStart: new Date(Date.now() + 3_600_000).toISOString(),
     }
-    guideDays['nick:' + Date.parse('2026-09-05T00:00:00Z')] = {
-      programs: [{ type: 'interlude', title: 'filler', scheduledStart: '2026-09-05T11:00:00Z' }, later],
+    guideDays['nick:' + dayStart] = {
+      programs: [
+        {
+          type: 'interlude',
+          title: 'filler',
+          scheduledStart: new Date(Date.now() + 1_800_000).toISOString(),
+        },
+        later,
+      ],
     }
     expect(helpers.viewerNextProgram({ channelId: 'nick', next: ident })).toBe(later)
 

@@ -202,7 +202,9 @@ export class ChannelTimelineResolverService implements ChannelTimelineResolver {
             : undefined,
           this.hardwareDecodesH264() && hardwareDecodable(mediaItem)
             ? 'hw'
-            : 'sw'
+            : 'sw',
+          mediaItem?.width ?? null,
+          mediaItem?.height ?? null
         )
       )
       if (result.length >= Math.max(1, minimumItems)) break
@@ -247,7 +249,9 @@ export class ChannelTimelineResolverService implements ChannelTimelineResolver {
     durationSeconds: number,
     nextScheduleItemId?: string,
     hasAudio?: boolean,
-    decodeHint?: 'hw' | 'sw'
+    decodeHint?: 'hw' | 'sw',
+    sourceWidth?: number | null,
+    sourceHeight?: number | null
   ): ChannelTimelinePosition {
     const boundedElapsed = Math.max(
       0,
@@ -261,6 +265,12 @@ export class ChannelTimelineResolverService implements ChannelTimelineResolver {
       sourceDurationSeconds: Math.max(0.001, durationSeconds),
       ...(hasAudio === undefined ? {} : { hasAudio }),
       ...(decodeHint === undefined ? {} : { decodeHint }),
+      ...(typeof sourceWidth === 'number' && sourceWidth > 0
+        ? { sourceWidth }
+        : {}),
+      ...(typeof sourceHeight === 'number' && sourceHeight > 0
+        ? { sourceHeight }
+        : {}),
       timelineRevision,
       type: program.type,
     }
@@ -326,20 +336,39 @@ function defaultBranding(mode: ChannelBrandingPolicy['mode']): ChannelBrandingPo
   return { mode, opacity: 210, position: 2, x: 24, y: 24, sizePercent: 12 }
 }
 
+/*
+ * Codecs the media engine decodes, measured rather than assumed --
+ * scripts/qsv-capability-probe.sh on the deployed box. H.264, HEVC at 8 and
+ * 10 bit, AV1, VP9 and MPEG-2 all passed. VC-1 and MPEG-4 part 2 were not
+ * probed and stay on software until they are; they are 212 files between them.
+ */
+const HARDWARE_DECODABLE_CODECS = new Set([
+  'h264',
+  'hevc',
+  'av1',
+  'vp9',
+  'mpeg2video',
+])
+
 /**
- * Hardware decode eligibility for the (currently dormant) per-input QSV
- * experiment. Conservative by construction: an unknown pixel format — legacy
- * rows awaiting the lazy backfill — is treated as software-decodable only,
- * and anything 10-bit or deeper stays software because Intel's H.264 decoder
- * cannot handle Hi10P. Failing closed here prevents a mid-tune spawn death.
+ * Hardware decode eligibility.
+ *
+ * Conservative where it must be and no further. An unknown pixel format — a
+ * legacy row awaiting the probe backfill — is software-only, because failing
+ * closed here prevents a mid-tune spawn death. The deep-colour exclusion
+ * applies to H.264 alone: Intel has no Hi10P decoder, but 10-bit HEVC decodes
+ * fine provided the graph converts P010 to NV12, which the hardware pipeline
+ * always asks for.
  */
 function hardwareDecodable(
   item: Pick<MediaItem, 'codec' | 'compatibility' | 'pixelFormat'> | null
 ): boolean {
   if (!item) return false
-  if (item.codec !== 'h264') return false
   if (item.compatibility === 'incompatible') return false
+  const codec = item.codec
+  if (typeof codec !== 'string' || !HARDWARE_DECODABLE_CODECS.has(codec)) return false
   const pixelFormat = item.pixelFormat
   if (typeof pixelFormat !== 'string' || pixelFormat.length === 0) return false
-  return !/(?:10|12|16)/.test(pixelFormat)
+  if (codec === 'h264' && /(?:10|12|16)/.test(pixelFormat)) return false
+  return true
 }

@@ -171,7 +171,10 @@ class FfprobeChannelAudioProbe implements ChannelAudioProbe {
  * HLS. A later lookahead window appends to the same rolling playlist.
  */
 export class FfmpegContinuousHlsPipelineFactory implements ChannelPipelineFactory {
-  private lastStartNumber = 0
+  /* Protected rather than private so the hardware pipeline can extend this one
+     and replace only the filter graph, keeping the process handling, the audio
+     probe and the segment numbering identical between the two. */
+  protected lastStartNumber = 0
   private readonly audioProbeCache = new Map<
     string,
     {
@@ -181,10 +184,10 @@ export class FfmpegContinuousHlsPipelineFactory implements ChannelPipelineFactor
   >()
 
   constructor(
-    private readonly ffmpegPath = 'ffmpeg',
-    private readonly spawner: ChannelProcessSpawner = BUN_SPAWNER,
-    private readonly audioProbe: ChannelAudioProbe = new FfprobeChannelAudioProbe('ffprobe'),
-    private readonly now: () => number = Date.now,
+    protected readonly ffmpegPath = 'ffmpeg',
+    protected readonly spawner: ChannelProcessSpawner = BUN_SPAWNER,
+    protected readonly audioProbe: ChannelAudioProbe = new FfprobeChannelAudioProbe('ffprobe'),
+    protected readonly now: () => number = Date.now,
     readonly transcodingStatus: FfmpegTranscodingStatus = SOFTWARE_TRANSCODING
   ) {}
 
@@ -393,7 +396,7 @@ function isEnglish(language: string | undefined): boolean {
   return primary === 'en' || primary === 'eng' || normalized === 'english'
 }
 
-function decimal(value: number): string {
+export function decimal(value: number): string {
   if (!Number.isFinite(value) || value < 0) throw new Error('FFmpeg time values must be finite and non-negative')
   return value.toFixed(3).replace(/\.000$/, '')
 }

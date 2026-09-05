@@ -24,6 +24,14 @@ export interface ChannelTimelinePosition {
    * measured re-enable attempt needs no resolver changes.
    */
   readonly decodeHint?: 'hw' | 'sw'
+  /**
+   * Source geometry, so a hardware graph can compute its own letterbox. vpp_qsv
+   * has no aspect-preserving fit, so the pad is a composite at fixed offsets
+   * and those offsets have to be known before the command is built. Undefined
+   * for a row the library has not measured.
+   */
+  readonly sourceWidth?: number
+  readonly sourceHeight?: number
   /** Loop a finite emergency asset until the scheduled replacement range ends. */
   readonly loopSource?: boolean
   readonly timelineRevision: string

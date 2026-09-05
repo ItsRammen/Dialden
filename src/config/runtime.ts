@@ -1,4 +1,10 @@
-export type TranscodingMode = 'software' | 'auto' | 'intel-qsv'
+/**
+ * 'intel-qsv-full' puts the whole graph on the media engine -- hardware decode,
+ * scale and letterbox as well as the encode -- instead of decoding and
+ * filtering on the CPU and using QSV for the encode alone. Opt-in while it
+ * proves itself; every other value behaves exactly as before.
+ */
+export type TranscodingMode = 'software' | 'auto' | 'intel-qsv' | 'intel-qsv-full'
 
 export interface RuntimeConfig {
   readonly port: number
@@ -14,7 +20,13 @@ const TRUTHY_VALUES = new Set(['1', 'true', 'yes', 'on'])
 
 function transcodingMode(value: string | undefined): TranscodingMode {
   const normalized = value?.trim().toLowerCase()
-  if (normalized === 'auto' || normalized === 'intel-qsv') return normalized
+  if (
+    normalized === 'auto' ||
+    normalized === 'intel-qsv' ||
+    normalized === 'intel-qsv-full'
+  ) {
+    return normalized
+  }
   return 'software'
 }
 
