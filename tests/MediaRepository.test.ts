@@ -63,6 +63,40 @@ describe('MediaRepository', () => {
     expect(refreshed?.fps).toBeCloseTo(23.976, 3)
   })
 
+  test('a file ffprobe cannot read does not spin the backfill', async () => {
+    /* An unreadable file is never written back, so it stays pending and the
+       next query returns it again. Looping over batches turned that into a
+       spin on the same files for the whole time budget, and the scan never
+       finished -- which also meant channels never reconciled. */
+    const { MediaIndexer } = await import('../src/services/MediaIndexer')
+    for (let index = 0; index < 4; index += 1) {
+      await repo.upsertMedia(
+        createInput({ path: `/videos/bad${index}.mp4`, filename: `bad${index}.mp4` })
+      )
+    }
+
+    let probeCalls = 0
+    const indexer = new MediaIndexer(
+      { directory: '/videos', extensions: ['.mp4'] } as never,
+      { directory: '/interludes', extensions: ['.mp4'] } as never,
+      repo,
+      { listFiles: () => [], exists: () => true, getStats: () => null } as never,
+      {
+        getDuration: async () => 0,
+        getMetadata: async () => {
+          probeCalls += 1
+          throw new Error('Invalid data found when processing input')
+        },
+      } as never
+    )
+
+    await indexer.scanAll()
+
+    // Four unreadable rows, tried once each, not forever.
+    expect(probeCalls).toBe(4)
+    expect(await repo.countMissingProbe()).toBe(4)
+  })
+
   test('the probe phase reports progress rather than freezing the bar', async () => {
     /* The file loop finishes long before the scan does: probing a large
        library takes minutes, during which the progress bar previously sat at

@@ -311,6 +311,13 @@ export class MediaIndexer {
     const deadline = Date.now() + PROBE_BACKFILL_BUDGET_MS
     let updatedTotal = 0
     let exhaustedBudget = false
+    /* A file ffprobe cannot read is never written back, so it stays pending
+       and the next query returns it again. Batching in a loop turned that into
+       a spin: the same unreadable files, over and over, for the whole budget,
+       and the scan never finished. Remembering what this run has already tried
+       ends the pass instead. They are retried on the next scan, which is what
+       a single batch per scan used to do. */
+    const attempted = new Set<number>()
 
     /* The file loop has finished but the scan is not over: probing 21k rows
        takes minutes, and without this the progress bar sits frozen at
@@ -329,7 +336,7 @@ export class MediaIndexer {
     }
 
     while (Date.now() < deadline) {
-      const batch = await this.backfillProbeBatch()
+      const batch = await this.backfillProbeBatch(attempted)
       if (batch === null) return
       if (batch === 0) break
       updatedTotal += batch
@@ -362,15 +369,19 @@ export class MediaIndexer {
   }
 
   /** One batch. Returns rows updated, 0 when complete, null on a query error. */
-  private async backfillProbeBatch(): Promise<number | null> {
-    let pending: Awaited<ReturnType<IMediaRepository['listMissingAudioProbe']>> | undefined
+  private async backfillProbeBatch(attempted: Set<number>): Promise<number | null> {
+    let queried: Awaited<ReturnType<IMediaRepository['listMissingAudioProbe']>> | undefined
     try {
-      pending = await this.repository.listMissingAudioProbe(PROBE_BACKFILL_BATCH)
+      queried = await this.repository.listMissingAudioProbe(PROBE_BACKFILL_BATCH)
     } catch (error) {
       console.error('Media probe backfill query failed', error)
       return null
     }
-    if (!Array.isArray(pending) || pending.length === 0) return 0
+    if (!Array.isArray(queried) || queried.length === 0) return 0
+    // Everything the query still returns has already been tried this run.
+    const pending = queried.filter((item) => !attempted.has(item.id))
+    if (pending.length === 0) return 0
+    for (const item of pending) attempted.add(item.id)
     const results = await this.probeParallel(
       pending.map((item) => item.path),
       4
@@ -868,7 +879,14 @@ export class MediaIndexer {
           try {
             return await this.mediaProbe.getMetadata(filePath)
           } catch (error) {
-            console.error(`Failed to probe ${filePath}:`, error)
+            /* One line. Passing the error object prints the bundle's source
+               around the throw site, which for a handful of unreadable files
+               buries every other log line on the box. */
+            console.error(
+              `Failed to probe ${filePath}: ${
+                error instanceof Error ? error.message : String(error)
+              }`
+            )
             return null
           }
         })
