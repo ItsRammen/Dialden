@@ -34,6 +34,12 @@ const databasePath = option('db', '/mnt/tower/appdata/toasttv/media.db')
 const outputScript = option('out', '/tmp/hardware-pipeline-dry-run.sh')
 const itemCount = Number(option('items', '3'))
 const seconds = Number(option('seconds', '20'))
+/* Production's first item is the programme already in progress, so it always
+   carries an offset. The dry run defaulted to zero for every item, which is
+   the one structural difference between what it builds and what the worker
+   builds -- and hand-written probes kept diverging in other ways too, so the
+   fix is to make this generator match rather than to write another probe. */
+const offsetSeconds = Number(option('offset', '300'))
 
 const HARDWARE_CODECS = ['h264', 'hevc', 'av1', 'vp9', 'mpeg2video']
 
@@ -77,7 +83,8 @@ if (rows.length === 0) {
 const sequence: ChannelTimelinePosition[] = rows.map((row, index) => ({
   scheduleItemId: `dry-run-${index}`,
   sourcePath: String(row.path),
-  sourceOffsetSeconds: 0,
+  // Only the live item is joined mid-way, exactly as the resolver does it.
+  sourceOffsetSeconds: index === 0 ? offsetSeconds : 0,
   sourceDurationSeconds: Math.min(Number(row.duration_seconds), 30),
   hasAudio: row.has_audio === null ? undefined : row.has_audio === 1,
   decodeHint: 'hw',
@@ -115,8 +122,9 @@ const factory = new FfmpegHardwareHlsPipelineFactory(
 
 console.log('Window:')
 for (const item of sequence) {
+  const offset = item.sourceOffsetSeconds > 0 ? ` +${item.sourceOffsetSeconds}s` : ''
   console.log(
-    `  ${item.sourceWidth}x${item.sourceHeight}  ${String(item.sourcePath)}`
+    `  ${item.sourceWidth}x${item.sourceHeight}${offset}  ${String(item.sourcePath)}`
   )
 }
 console.log(`\nEligible as one window: ${factory.eligible(request)}\n`)

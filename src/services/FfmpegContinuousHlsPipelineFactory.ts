@@ -280,10 +280,17 @@ export class FfmpegContinuousHlsPipelineFactory implements ChannelPipelineFactor
       ]).then(([code, stderrTail]) => {
         /* One line can only ever be a guess at which line mattered, and that
            guess has been wrong twice. On a real failure the whole captured
-           tail goes to the log once, so diagnosis does not depend on it. */
-        if (code !== 0 && !stopping && stderrTail) {
+           tail goes to the log once, so diagnosis does not depend on it.
+
+           The command goes with it. A dry run that reproduces the factory's
+           output can pass while the worker's own window fails, and without the
+           argv there is no way to see which of them differs -- that gap cost
+           several rebuild cycles. */
+        if (code !== 0 && !stopping) {
           console.error(
-            `FFmpeg pipeline failed with code ${code}. Captured output:\n${stderrTail}`
+            `FFmpeg pipeline failed with code ${code}.\nCommand: ${command
+              .map((part) => (/[\s;'"[\]]/.test(part) ? JSON.stringify(part) : part))
+              .join(' ')}${stderrTail ? `\nCaptured output:\n${stderrTail}` : ''}`
           )
         }
         return {
