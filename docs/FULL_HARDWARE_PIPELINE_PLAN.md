@@ -219,22 +219,45 @@ An `Impossible to convert` line means the graph; anything else means the worker.
 - no concurrency ceiling: none was found at 48 sessions, so one would be
   guesswork that hides the real failure mode
 
-### 4. Bring it up one channel at a time — next
+### 4. Result — measured
 
-Nothing below has been exercised for more than about twenty seconds:
-programme boundaries mid-stream, the append-window path
-(`appendToExistingPlaylist`), a long run where GPU surfaces could leak, and
-**whether CPU actually falls**, which is the entire point and is still
-unmeasured.
+Six channels on air, all on the media engine, none falling back:
 
-Prerequisites: rebuild the container, then scan until the probe backfill
-reports `library complete`. Until `pixel_format` converges, eligibility sits
-near 3% and the flag will look as though it does nothing.
+| | Before | After |
+| --- | --- | --- |
+| Server CPU | 50-90% of cores | **19.7% of 16 cores** |
 
-Still worth doing, but for a different reason than the plan first assumed.
-Contention is not the risk — 48 sessions ran clean. The risk is a graph that
-produces empty output silently, so one channel at a time is about being able
-to see that happen, not about staying under a limit.
+Per channel, as a share of one core: disney_channel 63, Nickelodeon 55,
+pbs-kids 52, cartoon_network 47, nick-jr 45, nature-discovery 32. That sums to
+294% -- about 2.9 cores, or 18.4% of sixteen -- and the remainder is the server
+itself, so the whole-box figure and the per-channel figures agree.
+
+The media engine reports 550MHz against a 350MHz idle and a 1300MHz maximum,
+which is the confirmation available on i915: not a utilisation figure, but it
+does not sit at idle while the work is happening.
+
+## What it took
+
+Nine hypotheses were wrong before the cause was found: a session ceiling, input
+`-t` (the right mechanism, dismissed two rounds early because it was tested
+with a single input), multiple overlays, mixed codecs, SAR, frame rate,
+degenerate durations, audio in the graph, and `-ss` alone.
+
+What actually worked was unglamorous and should have come first:
+
+1. **Print the whole error.** The cause was being captured and then discarded --
+   the tail was 2KB, and "Impossible to convert" is followed by thousands of
+   bytes of pixel-format lists, so the reported line was always the cascade.
+2. **Print the command that failed.** Every hand-written probe differed from the
+   real command in ways that were not being controlled, so each pass proved
+   nothing and was read as evidence anyway.
+3. **Reproduce the failure standalone, then bisect one variable at a time.**
+   Once the failing command ran outside the app, the cause took one pass.
+
+The general lesson: a passing test that was not derived from the failing case
+is not evidence. Diffing the two filter chains filter by filter at the outset
+would have found both missing normalisers -- `format=nv12` and the frame
+rate -- in the first hour rather than the sixth round.
 
 ## Cheap wins available regardless
 
