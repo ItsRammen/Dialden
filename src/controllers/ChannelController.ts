@@ -623,15 +623,35 @@ async function readJsonStationRequest(
 }
 
 function readFormStationRequest(data: FormData): StationBuildRequest {
-  const selectionMode = data.get('selectionMode')
+  const builderMode = textValue(data.get('builderMode'))
+  const submittedPreset = data.get('preset')
+  const submittedSelectionMode = data.get('selectionMode')
+  const preset =
+    builderMode === 'network'
+      ? 'network-copy'
+      : builderMode === 'custom'
+        ? 'custom'
+        : submittedPreset
+  const selectionMode =
+    builderMode === 'mix'
+      ? 'automatic'
+      : builderMode === 'custom'
+        ? 'explicit'
+        : submittedSelectionMode
   return normalizeStationRequest({
     id: data.get('id'),
     name: data.get('name'),
     timezone: data.get('timezone'),
-    preset: data.get('preset'),
-    networkId: data.get('networkId'),
-    eraStartYear: data.get('eraStartYear'),
-    eraEndYear: data.get('eraEndYear'),
+    preset,
+    networkId: builderMode && builderMode !== 'network' ? undefined : data.get('networkId'),
+    eraStartYear:
+      builderMode && builderMode !== 'network'
+        ? undefined
+        : data.get('eraStartYear'),
+    eraEndYear:
+      builderMode && builderMode !== 'network'
+        ? undefined
+        : data.get('eraEndYear'),
     selectionMode,
     airtime: data.get('airtime'),
     collectionIds:
@@ -643,6 +663,7 @@ function readFormStationRequest(data: FormData): StationBuildRequest {
     studios: data.getAll('studios'),
     marathon: readFormMarathon(data),
     handoff:
+      (builderMode === '' || builderMode === 'network') &&
       textValue(data.get('handoffEnabled')) === 'true'
         ? {
             identity: 'adult-swim',

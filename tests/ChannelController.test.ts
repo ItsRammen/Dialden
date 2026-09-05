@@ -447,6 +447,39 @@ describe('ChannelController', () => {
     expect(request).not.toHaveProperty('collectionIds')
   })
 
+  test('uses the selected network builder even when stale hidden presets are submitted', async () => {
+    const channels = mock<ChannelService>()
+    const app = new Hono().route('/', createChannelController({ channels }))
+    const body = new URLSearchParams({
+      action: 'create',
+      id: 'nick',
+      name: 'Nick',
+      timezone: 'UTC',
+      builderMode: 'network',
+      preset: 'all-approved-tv',
+      networkId: 'nickelodeon',
+      eraStartYear: '1991',
+      eraEndYear: '2026',
+      selectionMode: 'automatic',
+      airtime: 'all-day',
+    })
+
+    const response = await app.request('/channels/auto-build', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body,
+    })
+
+    expect(response.status).toBe(303)
+    expect(channels.createAutomatedStation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preset: 'network-copy',
+        networkId: 'nickelodeon',
+        selectionMode: 'automatic',
+      })
+    )
+  })
+
   test('applies a confirmed Auto setup preset to an existing channel', async () => {
     const channels = mock<ChannelService>()
     const changes: Array<{ id: string; mode: string }> = []

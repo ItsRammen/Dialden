@@ -296,7 +296,31 @@ describe('era station templates', () => {
     ).toEqual(['Kim Possible'])
   })
 
-  test('fails closed for ambiguous parent-network labels and non-program collections', () => {
+  test('accepts exact Nickelodeon metadata without admitting Cartoon Network titles', () => {
+    const library = [
+      collection(1, 'Unlisted Nickelodeon Show', {
+        networks: ['Nickelodeon'],
+        firstAirYear: 2006,
+      }),
+      collection(2, 'The Amazing World of Gumball', {
+        networks: ['Cartoon Network'],
+        firstAirYear: 2011,
+      }),
+      collection(3, 'Pokémon', {
+        networks: ['TV Tokyo'],
+        firstAirYear: 1997,
+      }),
+    ]
+
+    expect(
+      analyzeNetworkCopyProfile('nickelodeon', library, {
+        startYear: 1991,
+        endYear: 2026,
+      }).matches.map((match) => match.collection.displayTitle)
+    ).toEqual(['Unlisted Nickelodeon Show'])
+  })
+
+  test('separates curated child brands while rejecting ambiguous Disney and non-program collections', () => {
     const library = [
       collection(1, 'SpongeBob SquarePants', {
         networks: ['Nickelodeon'],
@@ -334,7 +358,7 @@ describe('era station templates', () => {
         startYear: 1994,
         endYear: 2026,
       }).matches.map((match) => match.collection.displayTitle)
-    ).toEqual(['SpongeBob SquarePants'])
+    ).toEqual(['SpongeBob SquarePants', 'Uncatalogued Preschool Show'])
     expect(
       analyzeNetworkCopyProfile('nick-jr', library, {
         startYear: 1994,

@@ -1732,12 +1732,11 @@ function matchesExactNetwork(
 
 function parentNetworkMetadataIsSufficient(id: StationNetworkId): boolean {
   // TMDB often records preschool block programmes only under their parent
-  // linear network. Those labels cannot distinguish Nick from Nick Jr. or
-  // Disney Channel from Playhouse/Disney Junior. Australian ABC labels are
-  // similarly easy to collapse across ABC Kids, ABC3/ME, iview, and ABC
-  // Family. These profiles therefore require a curated title affiliation.
+  // linear network. Known Nick Jr. titles are already excluded through the
+  // cross-profile affiliation map, so an exact Nickelodeon network value can
+  // safely admit legitimate Nick shows that are not in our finite roster.
+  // Disney and Australian ABC labels remain too ambiguous without curation.
   return ![
-    'nickelodeon',
     'disney-channel',
     'abc3-abc-me',
     'abc-family-au',
