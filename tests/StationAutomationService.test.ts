@@ -226,6 +226,54 @@ describe('station automation', () => {
     ).toEqual(["Blue's Clues", "Ryan's Mystery Playdate"])
   })
 
+  test('builds a family-safe public broadcaster mix without admitting general BBC or CBC shows', async () => {
+    const records = [
+      collection(1, 'PBS Family Show', {
+        networks: ['PBS Kids'],
+        genres: ['Kids', 'Family'],
+      }),
+      collection(2, 'CBC Kids Show', {
+        networks: ['CBC Television'],
+        genres: ['Family'],
+      }),
+      collection(3, 'CBBC Show', {
+        networks: ['CBBC'],
+        genres: ['Children'],
+      }),
+      collection(4, 'CBeebies Show', {
+        networks: ['CBeebies'],
+        genres: ['Animation'],
+      }),
+      collection(5, 'BBC News', {
+        networks: ['BBC'],
+        genres: ['News'],
+      }),
+      collection(6, 'CBC Drama', {
+        networks: ['CBC Television'],
+        genres: ['Drama'],
+      }),
+      collection(7, 'PBS Documentary', {
+        networks: ['PBS'],
+        genres: ['Documentary'],
+      }),
+    ]
+    const catalog = await loadStationAutomationCatalog({
+      async getCollections(options) {
+        const offset = options?.offset ?? 0
+        return records.slice(offset, offset + (options?.limit ?? 250))
+      },
+    })
+
+    expect(
+      catalog.presets.find((preset) => preset.id === 'public-kids-mix')
+    ).toMatchObject({ matchedCollections: 4, unofficial: true })
+    expect(
+      selectStationCollections(catalog, { preset: 'public-kids-mix' }).map(
+        (item) => item.displayTitle
+      )
+    ).toEqual(['CBBC Show', 'CBC Kids Show', 'CBeebies Show', 'PBS Family Show'])
+  })
+
   test('includes a review collection when a parent approved one file', async () => {
     const playableFileOnly = collection(9, 'Parent Pick', {
       policyDecision: 'review',
