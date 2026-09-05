@@ -63,6 +63,65 @@ describe('MediaRepository', () => {
     expect(refreshed?.fps).toBeCloseTo(23.976, 3)
   })
 
+  test('the probe phase reports progress rather than freezing the bar', async () => {
+    /* The file loop finishes long before the scan does: probing a large
+       library takes minutes, during which the progress bar previously sat at
+       its final count and looked hung. The probe re-points the same counters
+       at itself, so the bar keeps moving and names the phase. */
+    const { MediaIndexer } = await import('../src/services/MediaIndexer')
+    const events: Array<{ root: string | null; processed: number; discovered: number }> = []
+
+    for (let index = 0; index < 6; index += 1) {
+      await repo.upsertMedia(
+        createInput({ path: `/videos/p${index}.mp4`, filename: `p${index}.mp4` })
+      )
+    }
+
+    /* Progress events are throttled to 200ms, and six in-memory probes finish
+       inside one tick, so the clock is advanced per probe the way the scan
+       progress test does it. Over a real mount each ffprobe takes long enough
+       that the throttle never hides the phase. */
+    let clockMs = 0
+    const indexer = new MediaIndexer(
+      { directory: '/videos', extensions: ['.mp4'] } as never,
+      { directory: '/interludes', extensions: ['.mp4'] } as never,
+      repo,
+      { listFiles: () => [], exists: () => true, getStats: () => null } as never,
+      {
+        getDuration: async () => 60,
+        getMetadata: async () => {
+          clockMs += 250
+          return {
+            durationSeconds: 60, codec: 'h264', width: 1920, height: 1080,
+            fps: 30, bitrateMbps: 8, hasAudio: true, audioCodec: 'aac',
+            pixelFormat: 'yuv420p',
+          }
+        },
+      } as never,
+      undefined,
+      undefined,
+      { nowMs: () => clockMs }
+    )
+    indexer.onScanEvent((event) => {
+      if (event.state.currentRoot === 'media probe') {
+        events.push({
+          root: event.state.currentRoot,
+          processed: event.state.processedFiles,
+          discovered: event.state.discoveredFiles,
+        })
+      }
+    })
+
+    await indexer.scanAll()
+
+    expect(events.length).toBeGreaterThan(0)
+    // The bar is re-scaled to the probe, not left at the file count.
+    expect(events[0]?.discovered).toBe(6)
+    // And it advances rather than standing still.
+    expect(events[events.length - 1]?.processed).toBeGreaterThan(0)
+    expect(await repo.countMissingProbe()).toBe(0)
+  })
+
   test('counts every row still awaiting the probe, not just a page of them', async () => {
     /* The progress figure came from a capped list, so it reported the cap:
        "500 still to go" whether five hundred or twenty thousand remained. */

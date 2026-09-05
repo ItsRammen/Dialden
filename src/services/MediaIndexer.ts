@@ -312,6 +312,22 @@ export class MediaIndexer {
     let updatedTotal = 0
     let exhaustedBudget = false
 
+    /* The file loop has finished but the scan is not over: probing 21k rows
+       takes minutes, and without this the progress bar sits frozen at
+       "22547 / 22547" the whole time, which reads as a hang. Re-point the
+       same counters at the probe so the bar keeps moving. */
+    const pendingAtStart = await this.countMissingProbes()
+    if (pendingAtStart > 0) {
+      this.scanState = {
+        ...this.scanState,
+        discoveredFiles: pendingAtStart,
+        processedFiles: 0,
+        currentRoot: 'media probe',
+        currentFile: 'Reading media details…',
+      }
+      await this.emitScanEvent('library.scan.progress')
+    }
+
     while (Date.now() < deadline) {
       const batch = await this.backfillProbeBatch()
       if (batch === null) return
@@ -384,6 +400,14 @@ export class MediaIndexer {
         )
       }
       updated += 1
+      /* Throttled to 200ms inside emitScanEvent, so a batch of 200 files
+         produces a handful of events rather than two hundred. */
+      this.scanState = {
+        ...this.scanState,
+        processedFiles: this.scanState.processedFiles + 1,
+        currentFile: getFilename(item.path),
+      }
+      await this.emitScanEvent('library.scan.progress')
     }
     return updated
   }

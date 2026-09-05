@@ -757,7 +757,12 @@ export function renderCollectionLibrary(
          function showScan(state) {
            if (!state || !work || !title || !progress || !detail) return;
            work.hidden = false;
-           title.textContent = state.status === 'failed' ? 'Library scan failed' : 'Scanning library';
+           /* The probe is a second phase of the same scan and takes minutes on
+              a large library, so it names itself rather than leaving the bar
+              looking stuck on "Scanning library". */
+           title.textContent = state.status === 'failed'
+             ? 'Library scan failed'
+             : (state.currentRoot === 'media probe' ? 'Reading media details' : 'Scanning library');
            progress.max = Math.max(1, Number(state.discoveredFiles) || 1);
            progress.value = Math.min(progress.max, Number(state.processedFiles) || 0);
            detail.textContent = String(state.processedFiles || 0) + ' / ' + String(state.discoveredFiles || 0) + (state.currentFile ? ' · ' + state.currentFile : '');
