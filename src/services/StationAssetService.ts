@@ -8,6 +8,14 @@ export type StationAssetKind =
   | 'filler-general'
   | 'standby-loop'
 
+/** One part of an ordered interactive bumper, such as Nick Jr's Play With Us. */
+export interface StationAssetSequence {
+  readonly family: 'play-with-us'
+  /** Groups the parts. Stable across a rebuild of the library. */
+  readonly id: string
+  readonly part: 'A' | 'B' | 'C'
+}
+
 export interface StationAssetDescriptor {
   readonly station: string
   readonly kind: StationAssetKind
@@ -16,6 +24,13 @@ export interface StationAssetDescriptor {
   readonly next?: string
   readonly targetSeconds?: number
   readonly variant?: number
+  /** Present only on a part of an ordered sequence; see selectStationInteractiveSequence. */
+  readonly sequence?: StationAssetSequence
+  readonly sourceStyle?: 'ugc-navigation'
+  /** Mentions a NickJr.com address that no longer exists. */
+  readonly legacyWebCta?: boolean
+  /** Says the show starts now, so it only works immediately before that show. */
+  readonly rightNow?: boolean
 }
 
 export interface StationAssetConfiguration {
@@ -161,6 +176,42 @@ export function parseStationAssetFilename(
   return result
 }
 
+/*
+ * The five-part filename contract is unchanged; the exporter simply writes a
+ * richer final code field, and everything before the production code is
+ * metadata. Anything unrecognised is ignored, so an older export still parses.
+ */
+const PRODUCTION_CODE = /-n(?:hd)?\d+-\d+$/
+
+function parseAssetCodeMetadata(
+  station: string,
+  code: string
+): Partial<StationAssetDescriptor> {
+  const label = code.replace(PRODUCTION_CODE, '')
+
+  const sequence = /^play-with-us-([a-z0-9]+(?:-[a-z0-9]+)*)-part-([abc])$/.exec(label)
+  if (sequence) {
+    const subject = sequence[1] as string
+    const part = (sequence[2] as string).toUpperCase() as 'A' | 'B' | 'C'
+    return {
+      sequence: { family: 'play-with-us', id: `${station}-play-with-us-${subject}`, part },
+    }
+  }
+
+  if (label === 'ugc-navigation' || label.startsWith('ugc-navigation-')) {
+    const rest = label.slice('ugc-navigation'.length).replace(/^-/, '')
+    const legacyWebCta = rest === 'web-cta' || rest.startsWith('web-cta-')
+    const cue = legacyWebCta ? rest.slice('web-cta'.length).replace(/^-/, '') : rest
+    return {
+      sourceStyle: 'ugc-navigation',
+      ...(legacyWebCta ? { legacyWebCta: true } : {}),
+      ...(cue === 'right-now' ? { rightNow: true } : {}),
+    }
+  }
+
+  return {}
+}
+
 /** Canonical completed exports from nickstory_toasttv_combined_v5.py. */
 export function parseNickstoryAssetFilename(filename: string): StationAssetDescriptor | null {
   const fields = filename.replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, '').toLowerCase().split('--')
@@ -170,7 +221,8 @@ export function parseNickstoryAssetFilename(filename: string): StationAssetDescr
   const year = fields.pop()
   if (!station || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(station) ||
       !year || !/^(19|20)\d{2}$/.test(year) || !code || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(code)) return null
-  const base = { station: station === 'nickelodeon' ? 'nick' : station }
+  const resolved = station === 'nickelodeon' ? 'nick' : station
+  const base = { station: resolved, ...parseAssetCodeMetadata(resolved, code) }
   const show = (value: string | undefined): value is string =>
     !!value && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value) && value !== 'generic' && !value.startsWith('generic-')
   if (type === 'now-next' && fields.length === 2) {
@@ -266,9 +318,13 @@ export function selectStationFillerAsset(
         entry.item.durationSeconds > 0 &&
         ['filler-general', 'standby-loop', 'ident-general'].includes(entry.descriptor.kind)
     )
-  const fillers = described.filter((entry) => entry.descriptor.kind === 'filler-general')
-  const standby = described.filter((entry) => entry.descriptor.kind === 'standby-loop')
-  const idents = described.filter((entry) => entry.descriptor.kind === 'ident-general')
+  /* A part of an ordered sequence is meaningless on its own -- an unanswered
+     question, or an answer to one nobody heard -- so it never enters the
+     independent rotation. selectStationInteractiveSequence places them. */
+  const standalone = described.filter((entry) => !entry.descriptor.sequence)
+  const fillers = standalone.filter((entry) => entry.descriptor.kind === 'filler-general')
+  const standby = standalone.filter((entry) => entry.descriptor.kind === 'standby-loop')
+  const idents = standalone.filter((entry) => entry.descriptor.kind === 'ident-general')
   const candidates =
     fillers.length > 0
       ? fillers
@@ -287,6 +343,80 @@ export function selectStationFillerAsset(
     pool.filter((entry) => entry.item.durationSeconds === longest).map((entry) => entry.item),
     seed
   )
+}
+
+/**
+ * Chooses one complete interactive sequence and returns its parts in order, or
+ * an empty array when the station has none that can be played.
+ *
+ * The sequence is a single scheduling decision. A asks the question and C
+ * reveals the answer, so a group is only usable when it has both: an A whose
+ * answer never arrives is the bug this exists to prevent, and a C on its own
+ * answers a question nobody was asked. B is a reminder and always optional --
+ * `compact` drops it, which is what ToastTV's current one-asset transitions
+ * want until there are real commercial-break blocks to spread the parts over.
+ */
+export function selectStationInteractiveSequence(
+  items: readonly MediaItem[],
+  station: string,
+  seed: string,
+  options: { compact?: boolean } = {}
+): readonly MediaItem[] {
+  const groups = new Map<string, Map<'A' | 'B' | 'C', MediaItem>>()
+  for (const item of items) {
+    if (item.durationSeconds <= 0) continue
+    const descriptor = parseStationAssetFilename(item.filename)
+    if (descriptor?.station !== station || !descriptor.sequence) continue
+    const group = groups.get(descriptor.sequence.id) ?? new Map()
+    /* Two files claiming the same part is an export fault, not a choice to
+       make at scheduling time; the earlier filename wins so the timeline
+       stays reproducible. */
+    if (!group.has(descriptor.sequence.part)) group.set(descriptor.sequence.part, item)
+    else {
+      const held = group.get(descriptor.sequence.part) as MediaItem
+      if (item.filename.localeCompare(held.filename, 'en-US') < 0) {
+        group.set(descriptor.sequence.part, item)
+      }
+    }
+    groups.set(descriptor.sequence.id, group)
+  }
+
+  const complete = [...groups.entries()]
+    .filter(([, parts]) => parts.has('A') && parts.has('C'))
+    .sort(([left], [right]) => left.localeCompare(right, 'en-US'))
+  if (complete.length === 0) return []
+
+  const chosen = complete[hash(seed) % complete.length] as [string, Map<'A' | 'B' | 'C', MediaItem>]
+  const parts = chosen[1]
+  const order: Array<'A' | 'B' | 'C'> = options.compact ? ['A', 'C'] : ['A', 'B', 'C']
+  const sequence: MediaItem[] = []
+  for (const part of order) {
+    const item = parts.get(part)
+    if (item) sequence.push(item)
+  }
+  return sequence
+}
+
+/** The sequences a station could play, for diagnostics and admin listings. */
+export function describeStationInteractiveSequences(
+  items: readonly MediaItem[],
+  station: string
+): ReadonlyArray<{ id: string; parts: Array<'A' | 'B' | 'C'>; usable: boolean }> {
+  const groups = new Map<string, Set<'A' | 'B' | 'C'>>()
+  for (const item of items) {
+    const descriptor = parseStationAssetFilename(item.filename)
+    if (descriptor?.station !== station || !descriptor.sequence) continue
+    const parts = groups.get(descriptor.sequence.id) ?? new Set<'A' | 'B' | 'C'>()
+    parts.add(descriptor.sequence.part)
+    groups.set(descriptor.sequence.id, parts)
+  }
+  return [...groups.entries()]
+    .map(([id, parts]) => ({
+      id,
+      parts: (['A', 'B', 'C'] as const).filter((part) => parts.has(part)),
+      usable: parts.has('A') && parts.has('C'),
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id, 'en-US'))
 }
 
 function deterministicCandidate(
