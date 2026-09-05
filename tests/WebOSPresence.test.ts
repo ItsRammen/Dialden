@@ -37,6 +37,70 @@ describe('LG webOS presence telemetry', () => {
     expect(preview).toContain('isViewerGuideProgram(data.next)')
   })
 
+  test('never names a station asset on the dock, the banner or a lineup card', () => {
+    /* The station plays far more idents, bumpers and fillers than
+       programmes -- on a real channel over half the timeline -- and each one
+       is titled by its asset filename. The guide already skipped them; the
+       dock, the channel banner and the lineup cards did not, so "Next" read
+       nickelodeon--ident--generic-station-id--2013--NHD16825-01. */
+    const script = readFileSync(join(import.meta.dir, '..', 'clients', 'webos', 'app.js'), 'utf8')
+    const source = functionSource(script, 'isViewerGuideProgram', 'appendUpcomingPrograms')
+
+    const guideDays: Record<string, unknown> = {}
+    const helpers = new Function(
+      'state',
+      'getCachedGuideDay',
+      'localCatalogDayStart',
+      'appendUpcomingPrograms',
+      source + '; return { viewerProgram, viewerNextProgram, channelOsdLabel };'
+    )(
+      { clockOffsetMs: 0 },
+      (channelId: string, dayStart: number) => guideDays[`${channelId}:${dayStart}`] ?? null,
+      (offset: number) => new Date(Date.parse('2026-09-05T00:00:00Z') + offset * 86400000),
+      (cached: { programs?: unknown[] } | null, out: unknown[], now: number) => {
+        for (const program of cached?.programs ?? []) {
+          const item = program as { type: string; scheduledStart: string }
+          if (item.type === 'program' && Date.parse(item.scheduledStart) > now) out.push(item)
+        }
+      }
+    )
+
+    const ident = { type: 'interlude', title: 'nickelodeon--ident--generic-station-id--2013--NHD16825-01' }
+    const show = { type: 'program', title: 'Rocko’s Modern Life' }
+
+    // A break is not something a viewer is shown.
+    expect(helpers.viewerProgram(ident)).toBeNull()
+    expect(helpers.viewerProgram({ type: 'bumper', title: 'x' })).toBeNull()
+    expect(helpers.viewerProgram(show)).toBe(show)
+
+    // next stays the real next item for timing; only the words resolve past it.
+    expect(helpers.viewerNextProgram({ channelId: 'nick', next: show })).toBe(show)
+
+    const later = {
+      type: 'program',
+      title: 'CatDog',
+      scheduledStart: '2026-09-05T12:00:00Z',
+    }
+    guideDays['nick:' + Date.parse('2026-09-05T00:00:00Z')] = {
+      programs: [{ type: 'interlude', title: 'filler', scheduledStart: '2026-09-05T11:00:00Z' }, later],
+    }
+    expect(helpers.viewerNextProgram({ channelId: 'nick', next: ident })).toBe(later)
+
+    // The banner names the programme a break is holding, never the ident.
+    expect(helpers.channelOsdLabel({ channelId: 'nick', program: show }, 'Live')).toBe('Rocko’s Modern Life')
+    expect(helpers.channelOsdLabel({ channelId: 'nick', program: ident, next: ident }, 'Live')).toBe('Up next: CatDog')
+    expect(helpers.channelOsdLabel({ channelId: 'other', program: ident }, 'Live')).toBe('Live')
+
+    // And no surface reaches around the helpers back to a raw title.
+    const dock = functionSource(script, 'renderProgramInfo', 'renderChannelLogo')
+    expect(dock).toContain('viewerNextProgram(data)')
+    expect(dock).toContain('viewerProgram(data.program)')
+    expect(dock).not.toContain('data.next.title')
+    const card = functionSource(script, 'renderChannelScheduleCard', 'setChannelCardState')
+    expect(card).not.toContain('data.program.title')
+    expect(card).not.toContain('data.next.title')
+  })
+
   test('prefers English browser audio tracks without replacing the original fallback', () => {
     const script = readFileSync(
       join(import.meta.dir, '..', 'clients', 'webos', 'app.js'),

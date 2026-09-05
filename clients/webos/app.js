@@ -7,7 +7,7 @@
   var STORAGE_CLIENT_NAME = 'toasttv.clientName.v1';
   var STORAGE_SESSION_OWNER = 'toasttv.sessionOwner.v1';
   var STORAGE_SESSION_OWNER_EPOCH = 'toasttv.sessionOwnerEpoch.v1';
-  var CLIENT_VERSION = '0.7.0';
+  var CLIENT_VERSION = '0.7.1';
   var DEFAULT_SERVER = 'http://TOWER:1993';
   var POLL_INTERVAL_MS = 30000;
   var CHANNEL_REFRESH_INTERVAL_MS = 15000;
@@ -1065,8 +1065,7 @@
     renderProgramInfo();
     // The dock waited for this; it now has a programme to announce.
     showChrome();
-    updateChannelOsdProgram(state.currentNow && state.currentNow.program
-      ? state.currentNow.program.title : 'Live');
+    updateChannelOsdProgram(channelOsdLabel(state.currentNow, 'Live'));
     scheduleChannelOsdHide();
     writeStorage(STORAGE_CHANNEL, probe.channelId);
     retargetLineupSession(probe.channelId, probe.generation);
@@ -1616,14 +1615,18 @@
     var channelState = document.querySelector('[data-channel-state="' + escapeAttribute(channel.id) + '"]');
     var nextTarget = document.querySelector('[data-channel-next="' + escapeAttribute(channel.id) + '"]');
     if (!target) return;
+    var cardNext = viewerNextProgram(data);
     if (!data.program) {
-      target.textContent = data.next ? 'Next: ' + data.next.title : 'Off air';
+      target.textContent = cardNext ? 'Next: ' + cardNext.title : 'Off air';
       setChannelCardState(channelState, stale ? 'UPDATING' : 'OFF AIR', stale ? 'checking' : 'off-air');
-      if (nextTarget) nextTarget.textContent = data.next ? 'Starts ' + formatTime(data.next.scheduledStart) : 'No later program scheduled';
+      if (nextTarget) nextTarget.textContent = cardNext ? 'Starts ' + formatTime(cardNext.scheduledStart) : 'No later program scheduled';
     } else {
-      target.textContent = data.program.title;
+      var onAir = viewerProgram(data.program);
+      target.textContent = onAir
+        ? onAir.title
+        : (cardNext ? 'Up next: ' + cardNext.title : 'Between programmes');
       setChannelCardState(channelState, stale ? 'UPDATING' : 'ON AIR', stale ? 'checking' : 'on-air');
-      if (nextTarget) nextTarget.textContent = data.next ? 'Next: ' + data.next.title : 'Last show scheduled';
+      if (nextTarget) nextTarget.textContent = cardNext ? 'Next: ' + cardNext.title : 'Last show scheduled';
     }
     renderChannelCardLogo(channel.id, data);
     if (state.channels[state.previewChannelIndex] && state.channels[state.previewChannelIndex].id === channel.id) {
@@ -1717,16 +1720,27 @@
     if (!data.program) {
       setChannelCardState(elements.channelPreviewState, 'OFF AIR', 'off-air');
       elements.channelPreviewProgram.textContent = 'This channel is off air';
-      elements.channelPreviewEpisode.textContent = data.next ? 'Programming resumes at ' + formatTime(data.next.scheduledStart) : 'No later program is scheduled.';
+      var resumesAt = viewerNextProgram(data);
+      elements.channelPreviewEpisode.textContent = resumesAt ? 'Programming resumes at ' + formatTime(resumesAt.scheduledStart) : 'No later program is scheduled.';
       elements.channelPreviewTime.textContent = '—';
       renderChannelPreviewUpcoming(channel, data, 'No later program scheduled');
       elements.channelPreviewTimelineFill.style.width = '0%';
       return;
     }
     setChannelCardState(elements.channelPreviewState, 'ON AIR', 'on-air');
-    elements.channelPreviewProgram.textContent = data.program.title;
-    elements.channelPreviewEpisode.textContent = programEpisodeText(data.program) || data.program.collectionTitle || 'Live now';
-    elements.channelPreviewTime.textContent = formatTime(data.program.scheduledStart) + ' – ' + formatTime(data.program.scheduledEnd);
+    /* A break is still on air, so the state stays ON AIR; only the words
+       change to the programme it is holding. */
+    var previewProgram = viewerProgram(data.program) || viewerNextProgram(data);
+    var previewIsBreak = !viewerProgram(data.program);
+    elements.channelPreviewProgram.textContent = previewProgram
+      ? (previewIsBreak ? 'Up next: ' + previewProgram.title : previewProgram.title)
+      : 'Between programmes';
+    elements.channelPreviewEpisode.textContent = previewProgram
+      ? (programEpisodeText(previewProgram) || previewProgram.collectionTitle || 'Live now')
+      : '';
+    elements.channelPreviewTime.textContent = previewProgram
+      ? formatTime(previewProgram.scheduledStart) + ' – ' + formatTime(previewProgram.scheduledEnd)
+      : '—';
     renderChannelPreviewUpcoming(channel, data, 'Last show on the schedule');
     updateChannelPreviewTimeline();
   }
@@ -1752,6 +1766,40 @@
   // Presentation only: keep the authoritative timeline intact for playback.
   function isViewerGuideProgram(program) {
     return program.type !== 'ident' && program.type !== 'bumper' && program.type !== 'interlude';
+  }
+
+  /* The timeline carries every ident, bumper and filler the station plays
+     between programmes, and their titles are asset filenames -- a viewer has
+     no use for either. So nothing that names something on screen names one:
+     the dock, the channel banner and the lineup cards all resolve past a
+     break to the programme it is holding.
+
+     data.next is deliberately left alone. The transition timers key off the
+     true next item, so it has to stay the real one; only the words change. */
+  function viewerProgram(program) {
+    return program && isViewerGuideProgram(program) ? program : null;
+  }
+
+  function viewerNextProgram(data) {
+    if (data && data.next && isViewerGuideProgram(data.next)) return data.next;
+    var channelId = data && data.channelId;
+    if (!channelId) return null;
+    var now = Date.now() + state.clockOffsetMs;
+    var programs = [];
+    appendUpcomingPrograms(getCachedGuideDay(channelId, localCatalogDayStart(0).getTime()), programs, now);
+    if (!programs.length) {
+      appendUpcomingPrograms(getCachedGuideDay(channelId, localCatalogDayStart(1).getTime()), programs, now);
+    }
+    return programs.length ? programs[0] : null;
+  }
+
+  /* The channel banner names what is on the channel. During a break that is
+     the programme coming back, never the ident filling the gap. */
+  function channelOsdLabel(data, fallback) {
+    var program = data && viewerProgram(data.program);
+    if (program) return program.title;
+    var upNext = viewerNextProgram(data);
+    return upNext ? 'Up next: ' + upNext.title : fallback;
   }
 
   function appendUpcomingPrograms(cached, programs, now) {
@@ -2216,7 +2264,7 @@
       return;
     }
     renderProgramInfo();
-    updateChannelOsdProgram(now.program ? now.program.title : 'Off air');
+    updateChannelOsdProgram(channelOsdLabel(now, 'Off air'));
     scheduleChannelOsdHide();
     writeStorage(STORAGE_CHANNEL, channelId);
     if (tunerSwitched && typeof now.branding === 'undefined') {
@@ -2259,7 +2307,7 @@
     detachVideoForTune();
     beginTuning('Resuming the selected channel…');
     applyNowResult(pendingNow, null, true);
-    updateChannelOsdProgram(pendingNow.program.title);
+    updateChannelOsdProgram(channelOsdLabel(pendingNow, 'Live'));
     return true;
   }
 
@@ -2891,7 +2939,7 @@
     state.currentNow = data;
     queuePresenceHeartbeat();
     renderProgramInfo();
-    updateChannelOsdProgram(data.program ? data.program.title : 'Off air');
+    updateChannelOsdProgram(channelOsdLabel(data, 'Off air'));
     scheduleBoundary();
 
     if (!data.program) {
@@ -3166,7 +3214,7 @@
       renderProgramInfo();
       // The dock waited for this; it now has a programme to announce.
       showChrome();
-      updateChannelOsdProgram(state.currentNow && state.currentNow.program ? state.currentNow.program.title : 'Live');
+      updateChannelOsdProgram(channelOsdLabel(state.currentNow, 'Live'));
       scheduleChannelOsdHide();
       writeStorage(STORAGE_CHANNEL, currentChannel().id);
       retargetLineupSession(currentChannel().id, generation);
@@ -3454,21 +3502,36 @@
     elements.playerChannelName.textContent = channel.name;
     elements.playerChannelNumber.textContent = channelLabel(state.channelIndex);
     renderChannelLogo(data, channel);
+    var upNext = viewerNextProgram(data);
     if (!data.program) {
       elements.playerCollection.textContent = 'Off air';
       elements.playerTitle.textContent = 'We’ll be back soon';
       elements.playerEpisode.textContent = '';
       elements.programTimes.textContent = '—';
-      elements.nextTitle.textContent = data.next ? 'Next: ' + data.next.title : 'No later program scheduled';
+      elements.nextTitle.textContent = upNext ? 'Next: ' + upNext.title : 'No later program scheduled';
       elements.timelineFill.style.width = '0%';
       return;
     }
-    var program = data.program;
+    var program = viewerProgram(data.program);
+    if (!program) {
+      /* A break is on air. The dock announces the programme the viewer is
+         waiting for; naming the ident would be worse than saying nothing. */
+      elements.playerCollection.textContent = 'Up next';
+      elements.playerTitle.textContent = upNext ? upNext.title : 'Back shortly';
+      elements.playerEpisode.textContent = upNext ? programEpisodeText(upNext) : '';
+      elements.programTimes.textContent = upNext
+        ? formatTime(upNext.scheduledStart) + ' – ' + formatTime(upNext.scheduledEnd)
+        : '—';
+      // The title already names what is next; a second line would repeat it.
+      elements.nextTitle.textContent = '';
+      updateTimeline();
+      return;
+    }
     elements.playerCollection.textContent = program.collectionTitle || 'Now playing';
     elements.playerTitle.textContent = program.title;
     elements.playerEpisode.textContent = programEpisodeText(program);
     elements.programTimes.textContent = formatTime(program.scheduledStart) + ' – ' + formatTime(program.scheduledEnd);
-    elements.nextTitle.textContent = data.next ? 'Next: ' + data.next.title : 'Last show on the schedule';
+    elements.nextTitle.textContent = upNext ? 'Next: ' + upNext.title : 'Last show on the schedule';
     updateTimeline();
   }
 
