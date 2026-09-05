@@ -25,11 +25,23 @@ import type {
   MediaRootConfig,
 } from '../types'
 import type { IHardwareDetectionService } from './HardwareDetectionService'
+
 import type { HardwareProfile } from '../config/hardwareProfiles'
 import {
   deriveCollectionIdentity,
   type CollectionIdentity,
 } from '../domain/CollectionIdentity'
+
+/*
+ * Probing is ffprobe per file over the media mount, so a scan takes as many
+ * batches as it can inside this budget and the next scan picks up the rest.
+ * Raise TOASTTV_PROBE_BACKFILL_MS to converge a large library in fewer passes.
+ */
+const PROBE_BACKFILL_BATCH = 200
+const PROBE_BACKFILL_BUDGET_MS = (() => {
+  const raw = Number.parseInt(process.env.TOASTTV_PROBE_BACKFILL_MS ?? '', 10)
+  return Number.isFinite(raw) && raw > 0 ? raw : 120_000
+})()
 
 const SCAN_PROGRESS_EVENT_INTERVAL_MS = 200
 
@@ -272,7 +284,7 @@ export class MediaIndexer {
     console.log(
       `Indexed ${total} files (${videoCount} library, ${interludeCount} interludes), removed ${removed} stale`
     )
-    await this.backfillAudioProbes()
+    await this.backfillMediaProbes()
     this.scanState = {
       ...this.scanState,
       status: 'completed',
@@ -285,20 +297,63 @@ export class MediaIndexer {
   }
 
   /**
-   * Rows indexed before audio-presence probing existed stay NULL until this
-   * bounded pass probes them. Each scan converges a slice of the library so
-   * channel workers eventually never need a runtime ffprobe.
+   * Fills in rows indexed before audio, pixel-format or frame-rate probing
+   * existed.
+   *
+   * This used to do a single batch of 80 per scan, which converges a handful of
+   * stragglers but not a library: 21k unprobed rows would have needed 262
+   * scans. It now keeps taking batches until the library is complete or the
+   * time budget runs out, so a few scans finish the job while a single scan
+   * still cannot run away.
    */
-  private async backfillAudioProbes(): Promise<void> {
+  private async backfillMediaProbes(): Promise<void> {
     if (typeof this.repository.listMissingAudioProbe !== 'function') return
+    const deadline = Date.now() + PROBE_BACKFILL_BUDGET_MS
+    let updatedTotal = 0
+    let exhaustedBudget = false
+
+    while (Date.now() < deadline) {
+      const batch = await this.backfillProbeBatch()
+      if (batch === null) return
+      if (batch === 0) break
+      updatedTotal += batch
+    }
+    if (Date.now() >= deadline) exhaustedBudget = true
+
+    if (updatedTotal > 0) {
+      const remaining = await this.countMissingProbes()
+      console.log(
+        `Backfilled media probe for ${updatedTotal} files` +
+          (remaining > 0
+            ? `; ${remaining} still to go${exhaustedBudget ? ' (time budget reached, the next scan continues)' : ''}`
+            : '; library complete')
+      )
+    }
+  }
+
+  /** How many rows still lack one of the probed fields, for the progress line. */
+  private async countMissingProbes(): Promise<number> {
+    if (typeof this.repository.listMissingAudioProbe !== 'function') return 0
+    try {
+      // A full count is not worth a bespoke query; a capped probe is enough to
+      // say whether anything is left.
+      const rest = await this.repository.listMissingAudioProbe(500)
+      return Array.isArray(rest) ? rest.length : 0
+    } catch {
+      return 0
+    }
+  }
+
+  /** One batch. Returns rows updated, 0 when complete, null on a query error. */
+  private async backfillProbeBatch(): Promise<number | null> {
     let pending: Awaited<ReturnType<IMediaRepository['listMissingAudioProbe']>> | undefined
     try {
-      pending = await this.repository.listMissingAudioProbe(80)
+      pending = await this.repository.listMissingAudioProbe(PROBE_BACKFILL_BATCH)
     } catch (error) {
-      console.error('Audio probe backfill query failed', error)
-      return
+      console.error('Media probe backfill query failed', error)
+      return null
     }
-    if (!Array.isArray(pending) || pending.length === 0) return
+    if (!Array.isArray(pending) || pending.length === 0) return 0
     const results = await this.probeParallel(
       pending.map((item) => item.path),
       4
@@ -329,9 +384,7 @@ export class MediaIndexer {
       }
       updated += 1
     }
-    if (updated > 0) {
-      console.log(`Backfilled audio probe for ${updated} files`)
-    }
+    return updated
   }
 
   /**
