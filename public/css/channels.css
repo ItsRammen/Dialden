@@ -1416,34 +1416,94 @@
 }
 
 .channel-improvement-card {
-  padding: 1rem;
   border: 1px solid rgba(0, 214, 201, 0.35);
   border-radius: 0.85rem;
   background: rgba(3, 18, 39, 0.42);
+  overflow: hidden;
 }
 
-.channel-improvement-card > header {
+.channel-improvement-card > summary {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding-bottom: 0.9rem;
+  padding: 0.85rem 3rem 0.85rem 1rem;
+  cursor: pointer;
+  list-style: none;
+  position: relative;
+}
+
+.channel-improvement-card > summary::-webkit-details-marker {
+  display: none;
+}
+
+.channel-improvement-card > summary::after {
+  content: '+';
+  position: absolute;
+  right: 1rem;
+  color: var(--toast-yellow);
+  font-size: 1.35rem;
+  font-weight: 900;
+}
+
+.channel-improvement-card[open] > summary {
   border-bottom: 1px solid rgba(0, 214, 201, 0.25);
 }
 
-.channel-improvement-card h3,
-.channel-improvement-card header p,
+.channel-improvement-card[open] > summary::after {
+  content: '−';
+}
+
+.channel-improvement-identity {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.channel-improvement-identity > strong {
+  font-size: 1.05rem;
+}
+
+.channel-improvement-card summary small,
 .channel-improvement-card h4 {
   margin: 0;
 }
 
-.channel-improvement-card header p,
 .channel-improvement-card small,
 .channel-improvement-empty {
   color: var(--text-secondary);
 }
 
-.channel-improvement-card > header a {
+.channel-improvement-counts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
+
+.channel-improvement-counts > span {
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(0, 214, 201, 0.12);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.channel-improvement-counts > .is-warning {
+  color: var(--toast-yellow);
+}
+
+.channel-improvement-body {
+  padding: 0.85rem 1rem 1rem;
+}
+
+.channel-improvement-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.channel-improvement-actions a {
   color: var(--toast-yellow);
   font-weight: 800;
   white-space: nowrap;
@@ -1477,6 +1537,9 @@
   margin: 0.75rem 0 0;
   padding: 0;
   list-style: none;
+  max-height: 18rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .channel-improvement-columns li {
@@ -1498,13 +1561,13 @@
     grid-template-columns: 1fr;
   }
 
-  .channel-improvement-card > header {
+  .channel-improvement-card > summary {
     align-items: stretch;
     flex-direction: column;
   }
 
-  .channel-improvement-card > header a {
-    white-space: normal;
+  .channel-improvement-counts {
+    justify-content: flex-start;
   }
 }
 

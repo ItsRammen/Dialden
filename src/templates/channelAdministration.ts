@@ -185,13 +185,19 @@ function renderChannelImprovements(
   const profiles = new Map(
     (catalog.networkProfiles ?? []).map((profile) => [profile.id, profile])
   )
+  const sortedChannels = [...automated].sort((left, right) =>
+    left.name.localeCompare(right.name, 'en', {
+      sensitivity: 'base',
+      numeric: true,
+    })
+  )
 
   return `<section class="channel-improvements" id="channel-improvements" aria-labelledby="channel-improvements-title">
     <header class="channel-improvements-heading">
-      <div><p class="channel-admin-eyebrow">Library opportunities</p><h2 id="channel-improvements-title">Channel improvements</h2><p>See what each channel can play today and which curated additions would strengthen its lineup.</p></div>
+      <div><p class="channel-admin-eyebrow">Library opportunities</p><h2 id="channel-improvements-title">Channel improvements</h2><p>Channels and titles are sorted alphabetically. Expand a channel to inspect its lineup and curated additions.</p></div>
     </header>
     <div class="channel-improvement-grid">
-      ${automated.map((channel) => {
+      ${sortedChannels.map((channel) => {
         const references = channel.automation?.collectionRefs ?? []
         const profile = channel.automation?.networkId
           ? profiles.get(channel.automation.networkId)
@@ -234,7 +240,7 @@ function renderChannelImprovements(
         const unavailableCount = followsProfile || followsRecipe
           ? 0
           : references.length - available.length
-        const suggestions = profile?.missingSuggestions.filter((suggestion) =>
+        const suggestions = (profile?.missingSuggestions.filter((suggestion) =>
           startYear === undefined || endYear === undefined
             ? true
             : erasOverlap(
@@ -243,13 +249,23 @@ function renderChannelImprovements(
                 startYear,
                 endYear
               )
-        ) ?? []
+        ) ?? []).sort((left, right) =>
+          left.title.localeCompare(right.title, 'en', {
+            sensitivity: 'base',
+            numeric: true,
+          })
+        )
         const era = startYear !== undefined && endYear !== undefined
           ? ` · ${startYear}–${endYear}`
           : ''
-        return `<article class="channel-improvement-card">
-          <header><div><h3>${escapeHtml(channel.name)}</h3><p>${profile ? `${escapeHtml(profile.name)}${era}` : followsRecipe ? escapeHtml(catalog.presets.find((preset) => preset.id === recipePreset)?.name ?? 'General mix') : 'Hand-picked automated lineup'}</p></div><a href="/channels?builder=${encodeURIComponent(channel.id)}#station-builder">Review lineup</a></header>
-          <div class="channel-improvement-columns">
+        return `<details class="channel-improvement-card">
+          <summary>
+            <span class="channel-improvement-identity"><strong>${escapeHtml(channel.name)}</strong><small>${profile ? `${escapeHtml(profile.name)}${era}` : followsRecipe ? escapeHtml(catalog.presets.find((preset) => preset.id === recipePreset)?.name ?? 'General mix') : 'Hand-picked automated lineup'}</small></span>
+            <span class="channel-improvement-counts"><span>${available.length} available</span><span>${suggestions.length} suggested</span>${unavailableCount > 0 ? `<span class="is-warning">${unavailableCount} unavailable</span>` : ''}</span>
+          </summary>
+          <div class="channel-improvement-body">
+            <div class="channel-improvement-actions"><a href="/channels?builder=${encodeURIComponent(channel.id)}#station-builder">Review lineup</a></div>
+            <div class="channel-improvement-columns">
             <section aria-labelledby="available-${escapeHtml(channel.id)}">
               <h4 id="available-${escapeHtml(channel.id)}">Available now <span>${available.length}</span></h4>
               ${available.length > 0
@@ -270,7 +286,8 @@ function renderChannelImprovements(
                   : '<p class="channel-improvement-empty">Hand-picked channels change only when you review and apply a new selection.</p>'}
             </section>
           </div>
-        </article>`
+          </div>
+        </details>`
       }).join('')}
     </div>
   </section>`

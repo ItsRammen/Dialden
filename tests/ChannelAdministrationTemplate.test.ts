@@ -189,13 +189,28 @@ describe('channel administration template', () => {
     expect(automatic).toContain('and marathon pattern')
   })
 
-  test('shows current channel availability and suggestions outside Auto lineup', () => {
+  test('shows compact, sorted channel improvements outside Auto lineup', () => {
     const markup = renderChannelAdministration(
       {
         channels: [
           {
             id: 'nick-classics',
             name: 'Nick Classics',
+            enabled: true,
+            timezone: 'UTC',
+            slots: [],
+            automation: {
+              preset: 'network-copy',
+              airtime: 'all-day',
+              networkId: 'nickelodeon',
+              eraStartYear: 1995,
+              eraEndYear: 1999,
+              selectionMode: 'automatic',
+            },
+          },
+          {
+            id: 'alpha-nick',
+            name: 'Alpha Nick',
             enabled: true,
             timezone: 'UTC',
             slots: [],
@@ -288,6 +303,14 @@ describe('channel administration template', () => {
     )
 
     expect(markup).toContain('id="channel-improvements"')
+    expect(markup).toContain('<details class="channel-improvement-card">')
+    expect(markup).toContain(
+      '<span>1 available</span><span>1 suggested</span>'
+    )
+    const improvements = markup.slice(markup.indexOf('id="channel-improvements"'))
+    expect(improvements.indexOf('<strong>Alpha Nick</strong>')).toBeLessThan(
+      improvements.indexOf('<strong>Nick Classics</strong>')
+    )
     expect(markup).toContain('Available now <span>1</span>')
     expect(markup).toContain('<strong>CatDog</strong>')
     expect(markup).toContain('52 playable files')
