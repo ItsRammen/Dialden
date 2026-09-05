@@ -35,10 +35,16 @@ echo "  cpu:     $(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2
 ls -1 /dev/dri 2>/dev/null | sed 's/^/  dri:     /'
 
 say "Filters and encoders present"
+# Captured to variables first. Piping into `grep -q` under `set -o pipefail`
+# reports a *successful* match as a failure: grep exits at the first hit, the
+# pipe closes, ffmpeg dies of SIGPIPE and pipefail propagates that status.
+FILTERS="$("$FFMPEG" -hide_banner -filters 2>/dev/null || true)"
+ENCODERS="$("$FFMPEG" -hide_banner -encoders 2>/dev/null || true)"
+DECODERS="$("$FFMPEG" -hide_banner -decoders 2>/dev/null || true)"
 for f in vpp_qsv scale_qsv overlay_qsv hwupload hwdownload; do
-  if "$FFMPEG" -hide_banner -filters 2>/dev/null | grep -qw "$f"; then ok "filter $f"; else no "filter $f"; fi
+  case "$FILTERS" in *" $f "*|*" $f"*) ok "filter $f" ;; *) no "filter $f" ;; esac
 done
-if "$FFMPEG" -hide_banner -encoders 2>/dev/null | grep -qw h264_qsv; then ok "encoder h264_qsv"; else no "encoder h264_qsv"; fi
+case "$ENCODERS" in *h264_qsv*) ok "encoder h264_qsv" ;; *) no "encoder h264_qsv" ;; esac
 
 # A short 4:3 SD clip, the shape that forces pillarboxing in the real graph.
 "$FFMPEG" -v error -y -f lavfi -i testsrc=size=640x480:rate=30:duration=2 \
@@ -69,28 +75,54 @@ done
 
 # Aspect-preserving pad. If none of these work, the graph needs
 # scale_qsv + overlay_qsv onto a generated background instead.
-for expr in \
-  'vpp_qsv=w=1920:h=1080:force_original_aspect_ratio=decrease' \
-  'scale_qsv=w=1440:h=1080,vpp_qsv=w=1920:h=1080' ; do
-  if run -init_hw_device "vaapi=va:$DEVICE" -init_hw_device qsv=qs@va -filter_hw_device qs \
-       -i "$WORK/sd.mp4" -vf "format=nv12,hwupload=extra_hw_frames=16,$expr" \
-       -c:v h264_qsv -frames:v 10 -f null -; then
-    ok "pad path: $expr"
-  else
-    no "pad path: $expr  -> $(tail -1 "$WORK/err")"
-  fi
-done
+# A genuine pillarbox: 640x480 must land as 1440x1080 centred on a 1920x1080
+# black field. Scaling twice is not padding -- it stretches -- so this composites.
+if run -init_hw_device "vaapi=va:$DEVICE" -init_hw_device qsv=qs@va -filter_hw_device qs \
+     -f lavfi -i color=black:size=1920x1080:rate=30:duration=2 -i "$WORK/sd.mp4" \
+     -filter_complex '[0:v]format=nv12,hwupload=extra_hw_frames=16[bg];[1:v]format=nv12,hwupload=extra_hw_frames=16,vpp_qsv=w=1440:h=1080[fg];[bg][fg]overlay_qsv=x=240:y=0' \
+     -c:v h264_qsv -frames:v 10 -f null -; then
+  ok "pillarbox via overlay_qsv onto a generated background"
+else
+  no "pillarbox via overlay_qsv  -> $(tail -1 "$WORK/err")"
+fi
+
+# vpp_qsv's own aspect handling, for completeness -- absent on this build.
+if run -init_hw_device "vaapi=va:$DEVICE" -init_hw_device qsv=qs@va -filter_hw_device qs \
+     -i "$WORK/sd.mp4" -vf 'format=nv12,hwupload=extra_hw_frames=16,vpp_qsv=w=1920:h=1080:scale_mode=hq' \
+     -c:v h264_qsv -frames:v 10 -f null -; then
+  ok "vpp_qsv scale_mode=hq (stretches; does not preserve aspect)"
+else
+  no "vpp_qsv scale_mode=hq  -> $(tail -1 "$WORK/err")"
+fi
 
 say "Q2 — hardware decode per codec"
 # 92%+ of the library is HEVC or H.264. AV1/VP9/MPEG-2/VC-1 are the tail that
 # would need a software fallback if unsupported.
-for codec in h264 hevc av1 vp9 mpeg2video vc1; do
-  if "$FFMPEG" -hide_banner -decoders 2>/dev/null | grep -qE "${codec}_qsv"; then
-    ok "decoder ${codec}_qsv present"
-  else
-    no "decoder ${codec}_qsv absent (software fallback needed for this codec)"
+# Listing decoders is not the question; whether -hwaccel qsv actually decodes a
+# file of that codec is. Each sample is two seconds of synthetic video.
+probe_codec() {
+  local label="$1" encoder="$2"; shift 2
+  # Matroska, not a codec-named extension: ffmpeg picks the muxer from the
+  # suffix, and .av1 / .vp9 / .hevc10 name no format, which previously read as
+  # a missing encoder when the encoder was present all along.
+  if ! "$FFMPEG" -v error -y -f lavfi -i testsrc=size=640x480:rate=30:duration=2 \
+       -c:v "$encoder" "$@" -f matroska "$WORK/s_$label.mkv" >/dev/null 2>"$WORK/err"; then
+    printf '  \033[33mSKIP\033[0m  %s (cannot build a sample: %s)\n' "$label" "$(tail -1 "$WORK/err")"
+    return
   fi
-done
+  if run -hwaccel qsv -hwaccel_output_format qsv -i "$WORK/s_$label.mkv" \
+       -vf 'vpp_qsv=w=1920:h=1080' -c:v h264_qsv -frames:v 20 -f null -; then
+    ok "hw decode $label"
+  else
+    no "hw decode $label (software fallback needed)  -> $(tail -1 "$WORK/err")"
+  fi
+}
+probe_codec h264  libx264 -pix_fmt yuv420p
+probe_codec hevc  libx265 -pix_fmt yuv420p
+probe_codec hevc10 libx265 -pix_fmt yuv420p10le
+probe_codec av1   libsvtav1 -pix_fmt yuv420p
+probe_codec vp9   libvpx-vp9 -pix_fmt yuv420p
+probe_codec mpeg2 mpeg2video -pix_fmt yuv420p -b:v 2M
 
 if run -hwaccel qsv -hwaccel_output_format qsv -i "$WORK/hd.mp4" \
      -vf 'vpp_qsv=w=1920:h=1080' -c:v h264_qsv -frames:v 10 -f null -; then
@@ -103,7 +135,7 @@ say "Q3 — concurrent QSV session ceiling"
 # The previous attempt died with exit 218 under lineup contention. Six channels
 # each hold several lookahead inputs open, so the ceiling matters more than raw
 # throughput. Find where it actually breaks.
-for n in 1 2 4 6 8 12 16; do
+for n in 1 2 4 6 8 12 16 24 32 48; do
   pids=()
   for _ in $(seq "$n"); do
     "$FFMPEG" -v error -hwaccel qsv -hwaccel_output_format qsv -i "$WORK/hd.mp4" \

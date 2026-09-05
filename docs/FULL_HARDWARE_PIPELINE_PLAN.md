@@ -71,23 +71,58 @@ hardware limit; it is caution left from the failed experiment. The 10-bit
 exclusion **is** correct for H.264 — Intel has no Hi10P decode — so the gate
 must become per-codec rather than being dropped.
 
-## Open questions that shape the design
+## Measured answers
 
-These are settled by step 2, before any pipeline code is written.
+All three questions are settled, on the real box: `jellyfin-ffmpeg 8.1.2`,
+Raptor Lake-P / Iris Xe, `/dev/dri/renderD128`. `scripts/qsv-capability-probe.sh`
+reproduces this.
 
-1. **Can `vpp_qsv` pad?** Stock `vpp_qsv` scales but does not letterbox the way
-   software `pad` does. `jellyfin-ffmpeg8` carries extra QSV patches and may
-   support scale+pad in one pass. If it cannot, the fallback is `scale_qsv`
-   plus `overlay_qsv` onto a generated background — buildable, but more graph.
-2. **`concat` with hardware frames.** The filter needs uniform frame types. One
-   software-decoded item in a lookahead window poisons the whole graph, so the
-   pipeline needs an explicit rule: all-hardware per append window, or
-   `hwupload` the odd one out. This is the backbone of the design, not a detail.
-3. **How many QSV sessions does the box sustain?** A full-hardware path uses
-   *more* sessions per channel (decode + VPP + encode), not fewer. The ceiling
-   must be measured, not assumed.
-4. **10-bit HEVC → 8-bit H.264.** If any of that content is HDR, a straight
-   format conversion without tone-mapping produces washed-out output.
+**The full-hardware graph works, pillarbox included.** Frames never need to
+leave the GPU, even for the 41% of the library that is not 16:9 1080p:
+
+```text
+-hwaccel qsv -hwaccel_output_format qsv
+  → vpp_qsv=w=…:h=…:scale_mode=hq:format=nv12
+  → overlay_qsv onto a generated background
+  → h264_qsv
+```
+
+`vpp_qsv` has no `force_original_aspect_ratio`, so letterboxing is a composite
+onto a background rather than one filter. `mode=hq` does not exist; the option
+is `scale_mode=hq`.
+
+**`format=nv12` is mandatory, not an optimisation.** A 10-bit source decodes to
+P010, and handing that to `h264_qsv` produces *zero packets and no error
+message* — the run simply reports that nothing was written. Adding
+`format=nv12` to `vpp_qsv` fixes it outright. This silent-empty-output failure
+is the most likely explanation for exit-218: a graph missing the conversion
+looks like an inexplicable crash rather than a missing option.
+
+**Hardware decode covers effectively the whole library:**
+
+| Codec | Hardware decode |
+| --- | --- |
+| H.264 | yes |
+| HEVC 8-bit | yes |
+| HEVC 10-bit | yes, with `format=nv12` |
+| AV1 | yes |
+| VP9 | yes |
+| MPEG-2 | yes |
+
+Only H.264 Hi10P stays software — Intel has no Hi10P decoder, which the
+existing gate already gets right. VC-1 (45 files) and MPEG-4 part 2 (167) were
+not probed and should fall back until they are.
+
+**There is no session ceiling to budget for.** 1, 2, 4, 6, 8, 12, 16, 24, 32
+and 48 concurrent full-hardware sessions all ran clean. Six channels with a
+few lookahead inputs each is nowhere near that, so exit-218 was not contention
+— it was graph construction. The pipeline needs a *uniform, correct* graph far
+more than it needs a concurrency limit.
+
+**The hybrid is worse than the full path.** Hardware decode with frames
+downloaded to system memory *failed* on 10-bit where the all-GPU graph passed,
+so the "keep the software filters, only replace the decoder" compromise is not
+the safe option it appeared to be.
 
 ## Steps
 
@@ -105,17 +140,11 @@ is what later allows `fps=30` to be skipped for sources already at 30.
 - add `backfillVideoProbes()` next to `backfillAudioProbes()`, bounded per run
 - verify the counts fall on a real scan
 
-### 2. Capability probe on the real box
+### 2. Capability probe on the real box — done
 
-**Must run on the Unraid host or inside the container** — it needs the actual
-`jellyfin-ffmpeg8` build and `/dev/dri/renderD128`. It cannot be run from a
-development machine.
-
-Answers question 1 and part of 3: whether `vpp_qsv` scales and pads in one
-pass, whether hardware decode works per codec, and how many concurrent
-sessions the device sustains before it fails the way it did before.
-
-Output is a short report that decides the graph shape.
+`scripts/qsv-capability-probe.sh`, run inside the container. Results above.
+It must be side-loaded with `docker cp`: `.dockerignore` excludes `scripts`,
+so the image never carries it.
 
 ### 3. The pipeline, behind the flag
 
@@ -125,16 +154,21 @@ Only once 1 and 2 are done.
   `vpp_qsv` scale/pad/fps → `h264_qsv` encode, frames never leaving the GPU
 - selected by a new `TOASTTV_TRANSCODING_MODE` value; the existing pipeline
   stays untouched and the flag is the rollback
-- an explicit concurrency ceiling with software fallback when exhausted
-- per-codec eligibility replacing the H.264-only gate, keeping the Hi10P
-  exclusion for H.264 only
+- `format=nv12` on every `vpp_qsv`, without exception — its absence is silent
+- per-codec eligibility replacing the H.264-only gate: everything except
+  H.264 Hi10P, with VC-1 and MPEG-4 part 2 left on software until probed
+- uniform frames per append window, since `concat` cannot mix hardware and
+  software frames — this is the rule the whole design rests on
 - the factory finally **reads `decodeHint`**
+- no concurrency ceiling: none was found at 48 sessions, so one would be
+  guesswork that hides the real failure mode
 
 ### 4. Bring it up one channel at a time
 
-The previous attempt died under six-channel contention. Prove it at
-concurrency 1, measure, then raise the ceiling. Rolling it out to all six at
-once is how the last attempt failed.
+Still worth doing, but for a different reason than the plan first assumed.
+Contention is not the risk — 48 sessions ran clean. The risk is a graph that
+produces empty output silently, so one channel at a time is about being able
+to see that happen, not about staying under a limit.
 
 ## Cheap wins available regardless
 
