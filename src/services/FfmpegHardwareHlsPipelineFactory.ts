@@ -72,6 +72,7 @@ export class FfmpegHardwareHlsPipelineFactory extends FfmpegContinuousHlsPipelin
       audioStreamIndex: number
       background?: number
       fit: Fit
+      seconds: number
     }> = []
     let inputIndex = 0
 
@@ -83,13 +84,19 @@ export class FfmpegHardwareHlsPipelineFactory extends FfmpegContinuousHlsPipelin
         height
       )
       /* Decoded straight into hardware frames. -hwaccel must precede the input
-         it applies to, so it is repeated rather than set once globally. */
+         it applies to, so it is repeated rather than set once globally.
+
+         Deliberately no -t. On a hardware input feeding a graph with several
+         other hardware inputs, an input duration makes FFmpeg reconcile the
+         streams through a software scaler it cannot apply to qsv frames, and
+         the run dies with "Impossible to convert between the formats supported
+         by the filter ... and the filter auto_scale". One input is fine, which
+         is what made this look like contention for so long. The duration is
+         bounded by trim/atrim in the graph instead, which is measured to work
+         on the same files. -ss is unaffected and stays here. */
       args.push('-hwaccel', 'qsv', '-hwaccel_output_format', 'qsv')
       if (item.loopSource) args.push('-stream_loop', '-1')
       if (item.sourceOffsetSeconds > 0) args.push('-ss', decimal(item.sourceOffsetSeconds))
-      if (item.sourceDurationSeconds !== undefined) {
-        args.push('-t', decimal(item.sourceDurationSeconds))
-      }
       args.push('-i', item.sourcePath)
       const video = inputIndex++
 
@@ -97,11 +104,8 @@ export class FfmpegHardwareHlsPipelineFactory extends FfmpegContinuousHlsPipelin
       if (fit.pad) {
         /* The letterbox field. Generated per item so its clock matches that
            item; overlay_qsv ends the pair with the shorter of the two. */
-        args.push('-f', 'lavfi')
-        if (item.sourceDurationSeconds !== undefined) {
-          args.push('-t', decimal(item.sourceDurationSeconds))
-        }
-        args.push('-i', `color=black:size=${width}x${height}:rate=30`)
+        // Unbounded for the same reason; the trim after the composite ends it.
+        args.push('-f', 'lavfi', '-i', `color=black:size=${width}x${height}:rate=30`)
         background = inputIndex++
       }
 
@@ -111,35 +115,42 @@ export class FfmpegHardwareHlsPipelineFactory extends FfmpegContinuousHlsPipelin
         if (!item.sourceDurationSeconds || item.sourceDurationSeconds <= 0) {
           throw new Error(`Silent schedule item ${item.scheduleItemId} needs a source duration`)
         }
-        args.push('-f', 'lavfi', '-t', decimal(item.sourceDurationSeconds), '-i', 'anullsrc=r=48000:cl=stereo')
+        args.push('-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo')
         audio = inputIndex++
         audioStreamIndex = 0
       }
-      streams.push({ video, audio, audioStreamIndex, ...(background === undefined ? {} : { background }), fit })
+      streams.push({
+        video,
+        audio,
+        audioStreamIndex,
+        ...(background === undefined ? {} : { background }),
+        fit,
+        seconds: item.sourceDurationSeconds as number,
+      })
     }
 
     const chains: string[] = []
-    streams.forEach(({ video, audio, audioStreamIndex, background, fit }, index) => {
+    streams.forEach(({ video, audio, audioStreamIndex, background, fit, seconds }, index) => {
       /* format=nv12 on every pass. Without it a 10-bit source reaches the
          encoder as P010 and the whole run produces nothing, silently. */
       const scaled = `[fitted${index}]`
+      const bound = `trim=duration=${decimal(seconds)},setpts=PTS-STARTPTS`
       chains.push(
-        `[${video}:v:0]vpp_qsv=w=${fit.width}:h=${fit.height}:scale_mode=hq:format=nv12,` +
-          `setpts=PTS-STARTPTS${scaled}`
+        `[${video}:v:0]vpp_qsv=w=${fit.width}:h=${fit.height}:scale_mode=hq:format=nv12${scaled}`
       )
       if (fit.pad && background !== undefined) {
         chains.push(
           `[${background}:v:0]format=nv12,hwupload=extra_hw_frames=16[bg${index}]`
         )
         chains.push(
-          `[bg${index}]${scaled}overlay_qsv=x=${fit.x}:y=${fit.y}:shortest=1[v${index}]`
+          `[bg${index}]${scaled}overlay_qsv=x=${fit.x}:y=${fit.y}:shortest=1,${bound}[v${index}]`
         )
       } else {
-        chains.push(`${scaled}null[v${index}]`)
+        chains.push(`${scaled}${bound}[v${index}]`)
       }
       chains.push(
         `[${audio}:a:${audioStreamIndex}]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,` +
-          `aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS[a${index}]`
+          `aresample=async=1:first_pts=0,atrim=duration=${decimal(seconds)},asetpts=PTS-STARTPTS[a${index}]`
       )
     })
 
@@ -214,6 +225,14 @@ export function fitWithin(
 
 function isHardwareItem(item: ChannelTimelinePosition): boolean {
   if (item.decodeHint !== 'hw') return false
+  /* A duration is required because the bound is a trim in the graph rather
+     than -t on the input; without one the item would run to end of file. */
+  if (
+    typeof item.sourceDurationSeconds !== 'number' ||
+    !(item.sourceDurationSeconds > 0)
+  ) {
+    return false
+  }
   // Geometry has to be known: the letterbox offset is fixed at build time.
   return (
     typeof item.sourceWidth === 'number' &&

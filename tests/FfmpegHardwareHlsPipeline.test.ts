@@ -159,14 +159,40 @@ describe('hardware HLS pipeline', () => {
 
     expect(command.join(' ')).toContain('anullsrc=r=48000:cl=stereo')
     expect(command.join(' ')).toContain('-ss 12.5')
+    // The synthesized silence is bounded in the graph like everything else.
+    expect(graph(command)).toContain('atrim=duration=30')
   })
 
-  test('a silent source with no duration is still refused', () => {
-    expect(() =>
-      factory().command(
-        request([item({ hasAudio: false, sourceDurationSeconds: undefined })])
-      )
-    ).toThrow('needs a source duration')
+  test('bounds each item in the graph rather than with an input -t', () => {
+    /* Measured on the deployed box: an input duration on a hardware input,
+       in a graph with other hardware inputs, makes FFmpeg reconcile through a
+       software scaler it cannot apply to qsv frames, and nothing is written.
+       One input alone is fine, which is why this read as contention for so
+       long. trim/atrim in the graph produces real segments on the same files. */
+    const command = factory().command(
+      request([
+        item({ sourceDurationSeconds: 30 }),
+        item({ scheduleItemId: 'b', sourceWidth: 640, sourceHeight: 480, sourceDurationSeconds: 12 }),
+      ])
+    )
+    const line = command.join(' ')
+
+    expect(line).not.toContain('-t ')
+    expect(graph(command)).toContain('trim=duration=30')
+    expect(graph(command)).toContain('atrim=duration=30')
+    expect(graph(command)).toContain('trim=duration=12')
+    // -ss still belongs on the input; only the duration moved.
+    expect(
+      factory().command(request([item({ sourceOffsetSeconds: 8 })])).join(' ')
+    ).toContain('-ss 8')
+  })
+
+  test('an item with no duration is not eligible', () => {
+    // The bound is a trim in the graph, so a duration is required for it.
+    const unbounded = request([item({ sourceDurationSeconds: undefined })])
+
+    expect(factory().eligible(unbounded)).toBe(false)
+    expect(factory().command(unbounded).join(' ')).not.toContain('-hwaccel qsv')
   })
 })
 
