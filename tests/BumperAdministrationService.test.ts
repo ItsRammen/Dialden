@@ -56,7 +56,7 @@ describe('BumperAdministrationService', () => {
       }),
       media(2, '/media/nick__bumper-typo__v01.mp4'),
       media(3, '/media/Old Nick Bumper.mp4'),
-      media(4, '/media/SpongeBob S01E01.mp4'),
+      media(4, '/media/SpongeBob S01E01.mp4', { rootId: 'tv', libraryKind: 'tv' }),
     ])
     const result = await new BumperAdministrationService(library, true).scan()
 
@@ -66,6 +66,25 @@ describe('BumperAdministrationService', () => {
       'Structured filename does not match the contract'
     )
     expect(result.items[1]?.issues).toContain('No station or show matching information')
+  })
+
+  test('keeps TV episode names out of Station Assets regardless of words or separators', async () => {
+    const library = mock<MediaService>()
+    const titles = [
+      'The Angry Beavers - S03E43 - Ugly Roomers____.mkv',
+      'A Man on the Inside - S01E04 - The Curious Incident.mkv',
+      'Adventure Time - S07E18 - President Porpoise is Missing!.mkv',
+      'American Dad! - S09E16 - The Boring Identity.mkv',
+      'A Show - The Bumper Episode.mkv',
+      'nickelodeon--ident--generic--2008--CODE.mp4',
+    ]
+    library.getAll.mockResolvedValue([
+      ...titles.map((title, index) => media(index, '/tv/' + title, { rootId: 'tv', libraryKind: 'tv' })),
+      media(10, '/interludes/unclassified.mp4'),
+      media(11, '/tv/explicitly-marked.mp4', { rootId: 'tv', isInterlude: true, mediaType: 'interlude' }),
+    ])
+    const result = await new BumperAdministrationService(library, true).scan()
+    expect(result.items.map((item) => item.media.id).sort()).toEqual([10, 11])
   })
 
   test('distinguishes a missing mount, a file mapping, and an empty connected folder', async () => {

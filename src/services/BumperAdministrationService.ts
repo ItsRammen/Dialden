@@ -349,8 +349,7 @@ function isBumperCandidate(item: MediaItem): boolean {
   return (
     item.mediaType !== 'video' ||
     item.isInterlude === true ||
-    looksLikeStationAssetFilename(item.filename) ||
-    /(?:bumper|ident|interlude|filler|standby|up[ ._-]*next)/iu.test(item.filename)
+    item.rootId === 'interludes'
   )
 }
 
