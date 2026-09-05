@@ -64,8 +64,9 @@ The current eligibility gate accepts H.264, 8-bit, known pixel format only —
 **760 files, 3.4%** — and `pixel_format` is missing on **21,358 rows (94.7%)**,
 so almost everything fails closed regardless.
 
-On a 13th-gen (Raptor Lake, UHD 770) media engine, HEVC 8/10-bit, VP9, AV1,
-MPEG-2 and VC-1 decode are all supported. The H.264-only restriction is not a
+The server is 13th-gen (Raptor Lake, UHD 770), whose media engine decodes
+HEVC 8/10-bit, VP9, AV1, MPEG-2 and VC-1 — so roughly 99% of the library is
+hardware-decodable, not the 3.4% the gate allows. The H.264-only restriction is not a
 hardware limit; it is caution left from the failed experiment. The 10-bit
 exclusion **is** correct for H.264 — Intel has no Hi10P decode — so the gate
 must become per-codec rather than being dropped.

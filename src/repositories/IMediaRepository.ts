@@ -258,4 +258,14 @@ export interface IMediaRepository {
     hasAudio: boolean,
     audioCodec: string | null
   ): Promise<void>
+
+  /**
+   * Persist the video half of the same probe. Optional so an older repository
+   * implementation keeps working; the caller checks before using it.
+   */
+  updateVideoProbe?(
+    id: number,
+    pixelFormat: string | null,
+    fps: number | null
+  ): Promise<void>
 }

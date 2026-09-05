@@ -127,7 +127,7 @@ CREATE INDEX IF NOT EXISTS idx_collections_metadata
 const MEDIA_COLUMNS = `
   id, path, filename, duration_seconds, is_interlude, media_type,
   date_start, date_end, codec, width, height, warning, mtime, compatibility,
-  has_audio, audio_codec, pixel_format,
+  has_audio, audio_codec, pixel_format, fps,
   root_id, relative_path, library_kind, collection_title,
   policy_enabled, playback_override, root_available,
   collection_id,
@@ -177,6 +177,7 @@ const MEDIA_UPSERT_UPDATE = `
   has_audio = COALESCE(excluded.has_audio, media.has_audio),
   audio_codec = COALESCE(excluded.audio_codec, media.audio_codec),
   pixel_format = COALESCE(excluded.pixel_format, media.pixel_format),
+  fps = COALESCE(excluded.fps, media.fps),
   root_id = excluded.root_id,
   relative_path = excluded.relative_path,
   library_kind = excluded.library_kind,
@@ -192,12 +193,12 @@ const MEDIA_UPSERT_SQL = `
   INSERT INTO media (
     path, filename, duration_seconds, is_interlude, media_type,
     date_start, date_end, codec, width, height, warning, mtime, compatibility,
-    has_audio, audio_codec, pixel_format,
+    has_audio, audio_codec, pixel_format, fps,
     root_id, relative_path, library_kind, collection_title,
     policy_enabled, playback_override, root_available,
     collection_id, season_number, episode_number, episode_title
   )
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(path) DO UPDATE SET
     ${MEDIA_UPSERT_UPDATE}
   ON CONFLICT(root_id, relative_path) DO UPDATE SET
@@ -319,6 +320,15 @@ export class MediaRepository implements IMediaRepository {
     if (!hasPixelFormat) {
       this.db.exec(`ALTER TABLE media ADD COLUMN pixel_format TEXT`)
       console.log('Migrated database to include pixel_format column')
+    }
+
+    /* Source frame rate. Probed alongside the pixel format and stored so the
+       pipeline can skip a normalising fps filter when it would be a no-op.
+       Rows are filled by the probe backfill rather than on insert. */
+    const hasFps = columns.some((c) => c.name === 'fps')
+    if (!hasFps) {
+      this.db.exec(`ALTER TABLE media ADD COLUMN fps REAL`)
+      console.log('Migrated database to include fps column')
     }
 
     // Root-aware library identity and default-deny playback policy. Nullable
@@ -1460,6 +1470,7 @@ export class MediaRepository implements IMediaRepository {
             : 0,
         item.audioCodec ?? null,
         item.pixelFormat ?? null,
+        item.fps ?? null,
         item.rootId ?? 'legacy',
         item.relativePath ?? item.path,
         item.libraryKind ?? 'other',
@@ -1838,6 +1849,7 @@ export class MediaRepository implements IMediaRepository {
           : Boolean(row.has_audio),
       audioCodec: (row.audio_codec as string) ?? null,
       pixelFormat: (row.pixel_format as string) ?? null,
+      fps: row.fps === null || row.fps === undefined ? null : Number(row.fps),
       rootId: (row.root_id as string) ?? 'legacy',
       relativePath: (row.relative_path as string) ?? (row.path as string),
       libraryKind: this.normalizeLibraryKind(row.library_kind),
@@ -1996,6 +2008,7 @@ export class MediaRepository implements IMediaRepository {
               : 0,
           item.audioCodec ?? null,
           item.pixelFormat ?? null,
+          item.fps ?? null,
           item.rootId ?? 'legacy',
           item.relativePath ?? item.path,
           item.libraryKind ?? 'other',
@@ -2140,7 +2153,8 @@ export class MediaRepository implements IMediaRepository {
     const rows = this.db
       .prepare(
         `SELECT ${MEDIA_COLUMNS} FROM media
-         WHERE (has_audio IS NULL OR pixel_format IS NULL) AND root_available = 1
+         WHERE (has_audio IS NULL OR pixel_format IS NULL OR fps IS NULL)
+           AND root_available = 1
          ORDER BY id LIMIT ?`
       )
       .all(bounded) as Array<Record<string, unknown>>
@@ -2156,6 +2170,31 @@ export class MediaRepository implements IMediaRepository {
     this.db
       .prepare('UPDATE media SET has_audio = ?, audio_codec = ? WHERE id = ?')
       .run(hasAudio ? 1 : 0, audioCodec, id)
+  }
+
+  /**
+   * Persists the video half of the same probe.
+   *
+   * listMissingAudioProbe() has always selected rows missing the pixel format
+   * as well as the audio flag, and the probe has always returned both -- but
+   * only the audio half was written back. A row with known audio and no pixel
+   * format was therefore re-probed on every scan and never converged, which is
+   * why the column is empty on almost the whole library. Writing both closes
+   * the loop, and COALESCE keeps a known value when a later probe comes back
+   * empty for a file ffprobe cannot read.
+   */
+  async updateVideoProbe(
+    id: number,
+    pixelFormat: string | null,
+    fps: number | null
+  ): Promise<void> {
+    if (!this.db) throw new Error('Repository not initialized')
+    this.db
+      .prepare(
+        `UPDATE media SET pixel_format = COALESCE(?, pixel_format),
+                          fps = COALESCE(?, fps) WHERE id = ?`
+      )
+      .run(pixelFormat, fps, id)
   }
 }
 

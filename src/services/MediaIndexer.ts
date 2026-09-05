@@ -307,12 +307,26 @@ export class MediaIndexer {
     for (let index = 0; index < pending.length; index++) {
       const item = pending[index]
       const metadata = results[index]
-      if (!item || !metadata || typeof metadata.hasAudio !== 'boolean') continue
-      await this.repository.updateAudioProbe(
-        item.id,
-        metadata.hasAudio,
-        metadata.audioCodec
-      )
+      if (!item || !metadata) continue
+      if (typeof metadata.hasAudio === 'boolean') {
+        await this.repository.updateAudioProbe(
+          item.id,
+          metadata.hasAudio,
+          metadata.audioCodec
+        )
+      }
+      /* The same probe already carries the pixel format and frame rate. They
+         were being discarded, so rows selected for a missing pixel format were
+         re-probed on every scan without ever converging. */
+      if (typeof this.repository.updateVideoProbe === 'function') {
+        await this.repository.updateVideoProbe(
+          item.id,
+          metadata.pixelFormat ?? null,
+          typeof metadata.fps === 'number' && Number.isFinite(metadata.fps)
+            ? metadata.fps
+            : null
+        )
+      }
       updated += 1
     }
     if (updated > 0) {
@@ -537,6 +551,9 @@ export class MediaIndexer {
         hasAudio: metadata.hasAudio,
         audioCodec: metadata.audioCodec,
         pixelFormat: metadata.pixelFormat ?? null,
+        fps: typeof metadata.fps === 'number' && Number.isFinite(metadata.fps)
+          ? metadata.fps
+          : null,
         mtime: probeFailed || !descriptor.shouldProbe
           ? (descriptor.existing?.mtime ?? null)
           : descriptor.mtime,

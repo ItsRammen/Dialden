@@ -349,7 +349,7 @@ export function renderSettings(props: SettingsProps): string {
       </div>
     </div>
     
-
+    
     <script>
       ${getUpdateScript()}
     </script>

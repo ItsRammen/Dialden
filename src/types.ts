@@ -270,6 +270,8 @@ export interface MediaItem {
   readonly audioCodec?: string | null
   /** FFmpeg pixel format (e.g. yuv420p, yuv420p10le). Null until probed. */
   readonly pixelFormat?: string | null
+  /** Source frame rate, so a normalising fps filter can be skipped when it is a no-op. */
+  readonly fps?: number | null
   // Root-aware library identity and kid-safe playback policy.
   readonly rootId?: string
   readonly relativePath?: string

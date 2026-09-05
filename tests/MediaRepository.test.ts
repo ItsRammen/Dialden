@@ -40,6 +40,45 @@ describe('MediaRepository', () => {
     await repo.close()
   })
 
+  test('a probed row stops being offered for backfill once both halves are stored', async () => {
+    /* listMissingAudioProbe has always selected rows missing the pixel format
+       as well as the audio flag, but only the audio half was written back, so
+       such a row was re-probed on every scan and never converged. That is why
+       pixel_format was empty on nearly the whole library. */
+    await repo.upsertMedia(
+      createInput({ path: '/videos/legacy.mp4', filename: 'legacy.mp4' })
+    )
+    const [stored] = await repo.getAll()
+    const id = stored?.id ?? 0
+
+    // A legacy row: audio already known, video half never recorded.
+    await repo.updateAudioProbe(id, true, 'aac')
+    expect((await repo.listMissingAudioProbe(10)).map((item) => item.id)).toEqual([id])
+
+    await repo.updateVideoProbe(id, 'yuv420p', 23.976)
+
+    expect(await repo.listMissingAudioProbe(10)).toEqual([])
+    const [refreshed] = await repo.getAll()
+    expect(refreshed?.pixelFormat).toBe('yuv420p')
+    expect(refreshed?.fps).toBeCloseTo(23.976, 3)
+  })
+
+  test('a probe that comes back empty does not erase what is already known', async () => {
+    await repo.upsertMedia(
+      createInput({ path: '/videos/known.mp4', filename: 'known.mp4' })
+    )
+    const [stored] = await repo.getAll()
+    const id = stored?.id ?? 0
+    await repo.updateVideoProbe(id, 'yuv420p10le', 25)
+
+    // ffprobe failing on a later pass must not clear a good value.
+    await repo.updateVideoProbe(id, null, null)
+
+    const [refreshed] = await repo.getAll()
+    expect(refreshed?.pixelFormat).toBe('yuv420p10le')
+    expect(refreshed?.fps).toBe(25)
+  })
+
   test('initializes with correct schema', async () => {
     const settings = await repo.getAllSettings()
     expect(settings).toEqual({})
