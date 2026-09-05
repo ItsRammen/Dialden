@@ -35,6 +35,11 @@ import type {
  * engine, or has no measured geometry, the entire window falls back to the
  * software pipeline. That is the rule the design rests on.
  */
+/** The broadcast frame rate the whole lineup is normalised to, as in the
+ *  software pipeline's fps=30. The GOP and the segment length both derive
+ *  from it, so it is one constant rather than three literals. */
+const TARGET_FPS = 30
+
 export class FfmpegHardwareHlsPipelineFactory extends FfmpegContinuousHlsPipelineFactory {
   /** True when every item in the window can run on the media engine. */
   eligible(request: ChannelPipelineRequest): boolean {
@@ -135,8 +140,13 @@ export class FfmpegHardwareHlsPipelineFactory extends FfmpegContinuousHlsPipelin
          encoder as P010 and the whole run produces nothing, silently. */
       const scaled = `[fitted${index}]`
       const bound = `trim=duration=${decimal(seconds)},setpts=PTS-STARTPTS`
+      /* framerate is the hardware equivalent of the software chain's fps=30.
+         Without it the graph reaches the muxer carrying no frame rate, FFmpeg
+         assumes 25 and a 60-frame GOP becomes a 2.4s segment against a 2s
+         target -- which skews the live edge and the playlist window. */
       chains.push(
-        `[${video}:v:0]vpp_qsv=w=${fit.width}:h=${fit.height}:scale_mode=hq:format=nv12${scaled}`
+        `[${video}:v:0]vpp_qsv=w=${fit.width}:h=${fit.height}:scale_mode=hq:` +
+          `format=nv12:framerate=${TARGET_FPS}${scaled}`
       )
       if (fit.pad && background !== undefined) {
         chains.push(
@@ -162,7 +172,7 @@ export class FfmpegHardwareHlsPipelineFactory extends FfmpegContinuousHlsPipelin
     chains.push('[joinedv]realtime=speed=1[outv]')
     chains.push('[joineda]arealtime=speed=1[outa]')
 
-    const gop = Math.max(30, Math.round(request.profile.segmentSeconds * 30))
+    const gop = Math.max(TARGET_FPS, Math.round(request.profile.segmentSeconds * TARGET_FPS))
     this.lastStartNumber = Math.max(
       this.lastStartNumber + 1_000,
       Math.floor(this.now() / 1_000) * 1_000
@@ -178,6 +188,7 @@ export class FfmpegHardwareHlsPipelineFactory extends FfmpegContinuousHlsPipelin
     args.push(
       '-filter_complex', chains.join(';'),
       '-map', '[outv]', '-map', '[outa]',
+      '-r', String(TARGET_FPS),
       '-c:v', 'h264_qsv',
       '-preset', 'veryfast',
       '-global_quality', '23',

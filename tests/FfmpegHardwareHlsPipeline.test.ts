@@ -107,6 +107,18 @@ describe('hardware HLS pipeline', () => {
     expect(command.join(' ')).toContain('color=black:size=1920x1080:rate=30')
   })
 
+  test('states the broadcast frame rate rather than letting it be inferred', () => {
+    /* Without it the graph reaches the muxer carrying no frame rate, FFmpeg
+       assumes 25, and a 60-frame GOP yields a 2.4s segment against a 2s
+       target -- observed on the deployed box before this was added. */
+    const command = factory().command(request([item()]))
+
+    expect(graph(command)).toContain('framerate=30')
+    expect(command.join(' ')).toContain('-r 30')
+    // The GOP is derived from the same rate, so segments land on the target.
+    expect(command.join(' ')).toContain('-g 60')
+  })
+
   test('a source that already fills the frame is not composited', () => {
     const chains = graph(factory().command(request([item()])))
 
