@@ -66,7 +66,7 @@ export function renderSettings(props: SettingsProps): string {
             <div>
               <p class="settings-card-kicker">Channel identity</p>
               <h2>Default channel logo</h2>
-              <p class="settings-card-description">Shown only in ToastTV app menus and programme information. Logos are never burned into the video.</p>
+              <p class="settings-card-description">Shown only in Dialden app menus and programme information. Logos are never burned into the video.</p>
             </div>
             <label class="toggle" aria-label="Enable default channel logo">
               <input type="checkbox" id="logoEnabled" name="logoEnabled" value="true" ${config.logo.enabled ? 'checked' : ''}>
@@ -271,13 +271,13 @@ export function renderSettings(props: SettingsProps): string {
             <div class="form-group">
               <label for="mpvSocket">IPC socket path</label>
               <input type="text" id="mpvSocket" name="mpvSocket" value="${escapeHtml(config.mpv.ipcSocket)}">
-              <span class="hint">Used when ToastTV controls a local MPV process.</span>
+              <span class="hint">Used when Dialden controls a local MPV process.</span>
             </div>
           </section>`}
 
           <section class="settings-card" id="about">
             <div class="card-header">
-              <div><p class="settings-card-kicker">ToastTV</p><h3>Version and updates</h3></div>
+              <div><p class="settings-card-kicker">Dialden</p><h3>Version and updates</h3></div>
             </div>
             
             <div class="form-group">
@@ -339,7 +339,7 @@ export function renderSettings(props: SettingsProps): string {
       <div class="update-modal-backdrop" onclick="closeUpdateModal()"></div>
       <div class="update-modal-content">
         <div class="terminal-header">
-          <span class="terminal-title">⬤ ToastTV Update</span>
+          <span class="terminal-title">⬤ Dialden Update</span>
           <button class="terminal-close" id="terminal-close-btn" onclick="closeUpdateModal()">✕</button>
         </div>
         <div class="terminal-body" id="terminal-body">
@@ -447,7 +447,7 @@ function renderTranscodingStatus(
       </dl>
       ${status.fallbackReason ? `<p class="settings-restart-note" role="status">Fallback reason: ${escapeHtml(status.fallbackReason)}</p>` : ''}
       ${renderTranscodingDiagnostics(status, candidates, attempts)}
-      <p class="hint">Read-only container setting. Change <code>TOASTTV_TRANSCODING_MODE</code> in the deployment environment, then restart ToastTV.</p>
+      <p class="hint">Read-only container setting. Change <code>TOASTTV_TRANSCODING_MODE</code> in the deployment environment, then restart Dialden.</p>
     </div>
   `
 }
@@ -462,7 +462,7 @@ function renderTranscodingDiagnostics(
   const guidance = status.hardwareAcceleration
     ? 'The render node is accessible and the one-frame Intel QSV encode test passed.'
     : candidates.length === 0
-      ? 'No DRM render node was discovered inside the container. Map the host /dev/dri directory into the container at /dev/dri, then restart ToastTV.'
+      ? 'No DRM render node was discovered inside the container. Map the host /dev/dri directory into the container at /dev/dri, then restart Dialden.'
       : 'The container can see a render node, but QSV did not start. Check the node group permissions and Intel media-driver support shown in the server log.'
 
   return `<details class="settings-transcoding-diagnostics" ${status.hardwareAcceleration ? '' : 'open'}>
@@ -496,7 +496,7 @@ function renderTranscodingDiagnostics(
               .join('')}</ul>`
           : ''
       }
-      <p class="hint"><strong>This check runs inside the server container at startup, so the browser developer console stays empty.</strong> In Unraid, open Docker → ToastTV → Logs. With Compose, run <code>docker compose logs toasttv</code>.</p>
+      <p class="hint"><strong>This check runs inside the server container at startup, so the browser developer console stays empty.</strong> In Unraid, open Docker → your container → Logs. With Compose, run <code>docker compose logs toasttv</code>.</p>
     </div>
   </details>`
 }

@@ -40,7 +40,7 @@ export function renderLayout(
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${escapeHtml(title)} · ToastTV Admin</title>
+  <title>${escapeHtml(title)} · Dialden Admin</title>
   <link rel="stylesheet" href="/style.css">
   <script src="/js/admin.js" defer></script>
   <link rel="manifest" href="/manifest.json">
@@ -53,9 +53,9 @@ export function renderLayout(
 <body class="app-shell">
   <a class="skip-link" href="#main-content">Skip to content</a>
   <header class="navbar">
-    <a href="/" class="logo" aria-label="ToastTV administration overview">
-      <img src="/logo" alt="" class="nav-logo" onerror="this.style.display='none'">
-      <span class="brand-copy"><strong>ToastTV</strong><small>Administration</small></span>
+    <a href="/" class="logo" aria-label="Dialden administration overview">
+      <img src="/app-icon.png" alt="" class="nav-logo" onerror="this.style.display='none'">
+      <span class="brand-copy"><strong>Dialden</strong><small>Administration</small></span>
     </a>
     <nav class="nav-links" aria-label="Primary navigation">
       ${navLink('dashboard', '/', 'Overview')}
@@ -68,7 +68,7 @@ export function renderLayout(
     ${content}
   </main>
   <footer class="app-footer">
-    <span>ToastTV Server</span><span class="footer-separator" aria-hidden="true">·</span><span>v${appVersion}</span>${updateDot}
+    <span>Dialden Server</span><span class="footer-separator" aria-hidden="true">·</span><span>v${appVersion}</span>${updateDot}
   </footer>
   <div id="toast-container" role="status" aria-live="polite" aria-atomic="true"></div>
 </body>

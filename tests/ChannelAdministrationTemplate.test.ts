@@ -1022,7 +1022,7 @@ describe('channel administration template', () => {
     expect(legacySuggestion).not.toContain('hidden')
     expect(legacySuggestion).toContain('carried 1999–2002 · produced 1980–1982')
     expect(laterSuggestion).toContain('hidden')
-    expect(networkPanel).toContain('ToastTV never downloads, streams, or links to media')
+    expect(networkPanel).toContain('Dialden never downloads, streams, or links to media')
     expect(networkPanel).toContain('Dayparts and week at a glance')
     expect(networkPanel).toContain('role="table"')
     expect(networkPanel).toContain('06:00–09:00')

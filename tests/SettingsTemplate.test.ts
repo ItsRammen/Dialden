@@ -168,7 +168,7 @@ describe('settings template', () => {
     expect(html).toContain('Fallback reason: QSV smoke test failed')
     expect(html).toContain('Exit 234')
     expect(html).toContain('No VA display found')
-    expect(html).toContain('Docker → ToastTV → Logs')
+    expect(html).toContain('Docker → your container → Logs')
   })
 
   test('explains when the container has no mapped render nodes', () => {

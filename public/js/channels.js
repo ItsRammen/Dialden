@@ -310,7 +310,7 @@
           if (pickerDescription) {
             pickerDescription.textContent = explicitMode
               ? 'Every checked title is included; unchecked titles stay out.'
-              : 'These titles currently match. ToastTV follows the strict network and era rules as your playable library changes.'
+              : 'These titles currently match. Dialden follows the strict network and era rules as your playable library changes.'
           }
           Array.prototype.forEach.call(
             panel.querySelectorAll('[data-explicit-action]'),
@@ -342,7 +342,7 @@
         lineupStatus.classList.toggle('is-explicit', explicitMode)
         lineupStatus.textContent = explicitMode
           ? 'Choose at least one title. An empty hand-picked lineup cannot be saved.'
-          : 'ToastTV recalculates this strict lineup during library refreshes using the selected network and era.'
+          : 'Dialden recalculates this strict lineup during library refreshes using the selected network and era.'
       }
     }
 

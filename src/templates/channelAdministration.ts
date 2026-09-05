@@ -408,11 +408,11 @@ function renderBrandingSummary(
   const hasCustomLogo = channel ? uploadedLogoIds.has(channel.id) : false
   const summary =
     branding.mode === 'off'
-      ? 'Logo hidden in ToastTV apps.'
+      ? 'Logo hidden in Dialden apps.'
       : branding.mode === 'inherit'
-        ? 'Using the global logo in ToastTV app menus.'
+        ? 'Using the global logo in Dialden app menus.'
         : hasCustomLogo
-          ? 'Using this channel’s custom logo in ToastTV app menus.'
+          ? 'Using this channel’s custom logo in Dialden app menus.'
           : 'Custom app logo selected, but no image has been uploaded yet.'
   const status = branding.mode === 'off' ? 'Hidden' : 'App menus only'
   const image =
@@ -444,13 +444,13 @@ function renderBrandingEditor(
   return `<section class="channel-branding-dialog" data-branding-editor>
     <header>
       <div><p class="channel-admin-eyebrow">Channel identity</p><h2>${escapeHtml(channel.name)} logo</h2></div>
-      <p>Choose the logo shown by ToastTV clients when the channel menu or programme information is open. Video remains clean.</p>
+      <p>Choose the logo shown by Dialden clients when the channel menu or programme information is open. Video remains clean.</p>
     </header>
     ${renderBuilderNavigation(channel, 'branding')}
     <form method="post" enctype="multipart/form-data" action="/channels/${encodeURIComponent(channel.id)}/branding">
     <div class="channel-branding-section-heading">
       <strong>Logo shown in apps</strong>
-      <small>This controls channel artwork in ToastTV clients.</small>
+      <small>This controls channel artwork in Dialden clients.</small>
     </div>
     <div class="channel-branding-modes">
       ${brandingMode('inherit', 'Global logo', 'Show the logo configured in Settings.', branding.mode)}
@@ -618,7 +618,7 @@ function renderAutomationBuilder(
       catalog.truncated
         ? `<div class="channel-auto-empty">
             <strong>The playable catalog is too large for safe automation.</strong>
-            <p>ToastTV found more than 5,000 playable collections. Reduce or block unused collections before building a channel.</p>
+            <p>Dialden found more than 5,000 playable collections. Reduce or block unused collections before building a channel.</p>
           </div>`
           : `<form method="post" action="/channels/auto-build" class="channel-auto-form">
             ${target ? `<input type="hidden" name="targetChannelId" value="${escapeHtml(target.id)}">` : ''}
@@ -770,7 +770,7 @@ function renderAfterHoursHandoff(
           ? 'Locked handoff active. No adult programmes are selected or played.'
           : 'Off — Cartoon Network keeps its ordinary schedule.'
     }</p>
-    <aside><strong>Why it is locked:</strong> Adult Swim is a young-adult service. No adult programmes are selected or played; ToastTV will not schedule that catalog on a child-focused server without a real PIN/profile gate. This option reproduces the timed sign-off safely.</aside>
+    <aside><strong>Why it is locked:</strong> Adult Swim is a young-adult service. No adult programmes are selected or played; Dialden will not schedule that catalog on a child-focused server without a real PIN/profile gate. This option reproduces the timed sign-off safely.</aside>
   </section>`
 }
 
@@ -779,7 +779,7 @@ function renderUnavailableSelections(
 ): string {
   if (references.length === 0) return ''
   return `<aside class="channel-unavailable-selections" role="note">
-    <div><strong>${countLabel(references.length, 'saved title')} currently unavailable</strong><p>These saved library references are not playable now, so they cannot appear as checkboxes. ToastTV keeps them when you apply the same network, era, and hand-picked mode; changing any of those rebuilds eligibility and may remove them.</p></div>
+    <div><strong>${countLabel(references.length, 'saved title')} currently unavailable</strong><p>These saved library references are not playable now, so they cannot appear as checkboxes. Dialden keeps them when you apply the same network, era, and hand-picked mode; changing any of those rebuilds eligibility and may remove them.</p></div>
     <ul>${references.map((reference) => `<li><code>${escapeHtml(reference.identityKey)}</code><small>${escapeHtml(reference.libraryKind)} · ${escapeHtml(reference.rootId)}</small></li>`).join('')}</ul>
   </aside>`
 }
@@ -893,7 +893,7 @@ function renderLineupMode(mode: 'automatic' | 'explicit'): string {
         <span><strong>Hand-picked lineup</strong><small>Include only the titles you check below. New eligible titles are not added automatically.</small></span>
       </label>
     </div>
-    <p class="channel-lineup-mode-status ${mode === 'explicit' ? 'is-explicit' : ''}" data-lineup-mode-status role="status">${mode === 'automatic' ? 'ToastTV recalculates this strict lineup during library refreshes using the selected network and era.' : 'Choose at least one title. An empty hand-picked lineup cannot be saved.'}</p>
+    <p class="channel-lineup-mode-status ${mode === 'explicit' ? 'is-explicit' : ''}" data-lineup-mode-status role="status">${mode === 'automatic' ? 'Dialden recalculates this strict lineup during library refreshes using the selected network and era.' : 'Choose at least one title. An empty hand-picked lineup cannot be saved.'}</p>
   </fieldset>`
 }
 
@@ -927,7 +927,7 @@ function renderNetworkProfile(
     ${renderNetworkIdentityNotice(profile)}
     ${renderNetworkWeek(profile)}
     <section class="channel-network-library" aria-labelledby="owned-${escapeHtml(profile.id)}">
-      <header><div><h4 id="owned-${escapeHtml(profile.id)}">Eligible titles you own</h4><p data-picker-description>${lineupMode === 'automatic' ? 'These titles currently match. ToastTV follows the strict network and era rules as your playable library changes.' : 'Every checked title is included; unchecked titles stay out.'}</p></div><strong data-selection-count aria-live="polite">${lineupMode === 'automatic' ? `${eligibleMatches.length} eligible automatically` : `${selectedCount} of ${eligibleMatches.length} selected`}</strong></header>
+      <header><div><h4 id="owned-${escapeHtml(profile.id)}">Eligible titles you own</h4><p data-picker-description>${lineupMode === 'automatic' ? 'These titles currently match. Dialden follows the strict network and era rules as your playable library changes.' : 'Every checked title is included; unchecked titles stay out.'}</p></div><strong data-selection-count aria-live="polite">${lineupMode === 'automatic' ? `${eligibleMatches.length} eligible automatically` : `${selectedCount} of ${eligibleMatches.length} selected`}</strong></header>
       ${renderTitlePickerToolbar(`network-${profile.id}`, catalogSearch, lineupMode === 'automatic')}
       <div class="channel-title-grid" data-title-list>
         ${profile.matches.map((match) => {
@@ -956,7 +956,7 @@ function renderNetworkProfile(
       <p class="channel-title-empty" data-title-filter-empty hidden>No eligible owned title matches this search.</p>
     </section>
     <section class="channel-network-wishlist" aria-labelledby="wishlist-${escapeHtml(profile.id)}">
-      <header><div><h4 id="wishlist-${escapeHtml(profile.id)}">Network acquisition suggestions</h4><p>Wishlist only—ToastTV never downloads, streams, or links to media.</p></div></header>
+      <header><div><h4 id="wishlist-${escapeHtml(profile.id)}">Network acquisition suggestions</h4><p>Wishlist only—Dialden never downloads, streams, or links to media.</p></div></header>
       <div class="channel-wishlist-grid">
         ${profile.missingSuggestions.map((suggestion) => {
           const visible = erasOverlap(
@@ -1050,7 +1050,7 @@ function renderGeneralMixBuilder(
           <span><strong>${escapeHtml(preset.name)}</strong><small>${escapeHtml(preset.description)} ${countLabel(preset.matchedCollections, 'matching title')}${preset.unofficial ? ' · Unofficial personal mix' : ''}</small></span>
         </label>`).join('')}
       </div>
-      <p class="channel-auto-disclaimer"><strong>Recipe-based personal channel.</strong> ToastTV uses approved TMDB metadata and refreshes this lineup deterministically when your playable library changes. It does not claim to reproduce any broadcaster feed.</p>
+      <p class="channel-auto-disclaimer"><strong>Recipe-based personal channel.</strong> Dialden uses approved TMDB metadata and refreshes this lineup deterministically when your playable library changes. It does not claim to reproduce any broadcaster feed.</p>
     </fieldset>
   </section>`
 }

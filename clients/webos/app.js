@@ -472,7 +472,7 @@
     }
 
     elements.serverInput.value = normalized;
-    setSetupMessage(automatic ? 'Finding your ToastTV server…' : 'Connecting…');
+    setSetupMessage(automatic ? 'Finding your Dialden server…' : 'Connecting…');
     elements.connectButton.disabled = true;
     requestJson(normalized + '/api/v1/channels', 7000, function (error, data, timing) {
       if (attemptId !== state.connectSerial) return;
@@ -481,21 +481,21 @@
         if (automatic) {
           showBootMessage(
             state.reconnectAttempt < 2
-              ? 'Looking for ToastTV — reconnecting…'
+              ? 'Looking for Dialden — reconnecting…'
               : 'Server unavailable — still reconnecting…',
             true
           );
           scheduleStartupReconnect(normalized);
         } else {
           activateView('setup');
-          setSetupMessage('Could not reach ToastTV. Check the address and make sure the server is running.');
+          setSetupMessage('Could not reach Dialden. Check the address and make sure the server is running.');
           focusNode(elements.connectButton);
         }
         return;
       }
       if (!isChannelList(data)) {
         activateView('setup');
-        setSetupMessage('That server answered, but it is not a compatible ToastTV server.');
+        setSetupMessage('That server answered, but it is not a compatible Dialden server.');
         focusNode(elements.connectButton);
         return;
       }
@@ -753,7 +753,7 @@
   function logTunerStatus(level, message) {
     try {
       var target = console && console[level];
-      if (typeof target === 'function') target.call(console, '[ToastTV Tuner] ' + message);
+      if (typeof target === 'function') target.call(console, '[Dialden Tuner] ' + message);
     } catch (ignore) {}
   }
 
@@ -1317,7 +1317,7 @@
 
   function normalizeServerUrl(value) {
     var raw = String(value || '').replace(/^\s+|\s+$/g, '');
-    if (!raw) throw new Error('Enter the ToastTV server address.');
+    if (!raw) throw new Error('Enter the Dialden server address.');
     if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) raw = 'http://' + raw;
 
     var match = /^(https?):\/\/([^\/?#]+)\/?$/i.exec(raw);
@@ -1370,7 +1370,7 @@
         var payload = null;
         try { payload = xhr.responseText ? JSON.parse(xhr.responseText) : null; } catch (ignore) {}
         if (xhr.status >= 200 && xhr.status < 300) finish(null, payload);
-        else finish(new Error('ToastTV returned HTTP ' + xhr.status), payload);
+        else finish(new Error('Dialden returned HTTP ' + xhr.status), payload);
       };
       xhr.onerror = function () { finish(new Error('Network error')); };
       xhr.ontimeout = function () { finish(new Error('Connection timed out')); };
@@ -1396,7 +1396,7 @@
       xhr.onreadystatechange = function () {
         if (xhr.readyState !== 4) return;
         if (xhr.status >= 200 && xhr.status < 300) finish(null, xhr.responseText || '');
-        else finish(new Error('ToastTV returned HTTP ' + xhr.status), xhr.responseText || '');
+        else finish(new Error('Dialden returned HTTP ' + xhr.status), xhr.responseText || '');
       };
       xhr.onerror = function () { finish(new Error('Network error')); };
       xhr.ontimeout = function () { finish(new Error('Connection timed out')); };
@@ -1425,7 +1425,7 @@
         var data = null;
         try { data = xhr.responseText ? JSON.parse(xhr.responseText) : null; } catch (ignore) {}
         if (xhr.status >= 200 && xhr.status < 300) finish(null, data);
-        else finish(new Error('ToastTV returned HTTP ' + xhr.status), data);
+        else finish(new Error('Dialden returned HTTP ' + xhr.status), data);
       };
       xhr.onerror = function () { finish(new Error('Network error')); };
       xhr.ontimeout = function () { finish(new Error('Connection timed out')); };
@@ -1675,7 +1675,7 @@
     elements.channelPreviewMonogram.textContent = 'TV';
     setChannelCardState(elements.channelPreviewState, 'OFFLINE', 'unavailable');
     elements.channelPreviewProgram.textContent = 'There is nothing to watch yet';
-    elements.channelPreviewEpisode.textContent = 'Add or enable a channel on the ToastTV server, then refresh this screen.';
+    elements.channelPreviewEpisode.textContent = 'Add or enable a channel on the Dialden server, then refresh this screen.';
     elements.channelPreviewTime.textContent = '—';
     setChannelPreviewUpcoming([], 'Waiting for a channel lineup');
     elements.channelPreviewTimelineFill.style.width = '0%';
@@ -1708,7 +1708,7 @@
     if (data.error) {
       setChannelCardState(elements.channelPreviewState, 'UNAVAILABLE', 'unavailable');
       elements.channelPreviewProgram.textContent = 'Schedule unavailable';
-      elements.channelPreviewEpisode.textContent = 'ToastTV will check this channel again automatically.';
+      elements.channelPreviewEpisode.textContent = 'Dialden will check this channel again automatically.';
       elements.channelPreviewTime.textContent = '—';
       renderChannelPreviewUpcoming(channel, data, 'Try refreshing the lineup in a moment.');
       elements.channelPreviewTimelineFill.style.width = '0%';
@@ -2834,7 +2834,7 @@
         return;
       }
       if (!isNowResult(data)) {
-        showPlaybackError('Incompatible server response', 'Update the ToastTV server and try this channel again.');
+        showPlaybackError('Incompatible server response', 'Update the Dialden server and try this channel again.');
         return;
       }
       if (data.channelId !== channel.id) {
@@ -3361,7 +3361,7 @@
     if (state.tuning && state.previousTune) {
       showPlaybackError(
         'The switched channel could not start',
-        'ToastTV is returning to the previous channel.'
+        'Dialden is returning to the previous channel.'
       );
       return;
     }
@@ -4595,7 +4595,7 @@
       state.tuning = false;
       showPlaybackError(
         'This channel could not be prepared',
-        'ToastTV could not start the normalized live stream. Check the server dashboard for the FFmpeg or source-file error, then retry.'
+        'Dialden could not start the normalized live stream. Check the server dashboard for the FFmpeg or source-file error, then retry.'
       );
       return;
     }
@@ -5045,7 +5045,7 @@
       var switchAcceptedMs = metrics.preparedAt ? metrics.preparedAt - metrics.requestedAt : 0;
       var metadataReadyMs = metrics.metadataAt ? metrics.metadataAt - metrics.requestedAt : 0;
       try {
-        console.log('[ToastTV Tune] channel=' + metrics.channelId + ' src=' + metrics.src +
+        console.log('[Dialden Tune] channel=' + metrics.channelId + ' src=' + metrics.src +
           ' switchAcceptedMs=' + switchAcceptedMs + ' metadataReadyMs=' + metadataReadyMs +
           ' stableSource=true sourceReloaded=false');
       } catch (ignoreTunerLog) {}
@@ -5057,7 +5057,7 @@
       ? metrics.firstFrameAt - metrics.attachedAt : 0;
     var firstFrameMs = metrics.firstFrameAt - metrics.requestedAt;
     try {
-      console.log('[ToastTV Tune] channel=' + metrics.channelId + ' src=' + (metrics.src || '?') +
+      console.log('[Dialden Tune] channel=' + metrics.channelId + ' src=' + (metrics.src || '?') +
         ' prepareMs=' + prepareMs + ' attachMs=' + attachMs +
         ' frameAfterAttachMs=' + frameAfterAttachMs + ' firstFrameMs=' + firstFrameMs +
         (metrics.src === 'session-tuner'

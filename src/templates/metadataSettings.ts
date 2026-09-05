@@ -124,7 +124,7 @@ export function renderMetadataSettings(
                    spellcheck="false"
                    placeholder="${config.configured ? 'Leave blank to keep the current key' : 'Paste your TMDB v3 API key'}"
                    ${errors.tmdbApiKey ? 'aria-invalid="true" aria-describedby="tmdbApiKey-error"' : ''}>
-            <span class="hint">The key is stored server-side in ToastTV appdata. It is never sent back to this page or to TV clients.</span>
+            <span class="hint">The key is stored server-side in Dialden appdata. It is never sent back to this page or to TV clients.</span>
             ${renderFieldError('tmdbApiKey', errors.tmdbApiKey)}
           </div>
 
@@ -174,7 +174,7 @@ export function renderMetadataSettings(
                      autocapitalize="characters"
                      placeholder="US"
                      ${errors.preferredRatingRegion ? 'aria-invalid="true" aria-describedby="preferredRatingRegion-error"' : ''}>
-              <span class="hint">ToastTV tries this two-letter country code first.</span>
+              <span class="hint">Dialden tries this two-letter country code first.</span>
               ${renderFieldError(
                 'preferredRatingRegion',
                 errors.preferredRatingRegion
@@ -558,7 +558,7 @@ function renderAssistantCard(options: MetadataSettingsRenderOptions): string {
         <div class="form-group">
           <label for="assistantApiKey">API key</label>
           <input type="password" id="assistantApiKey" name="apiKey" value="" autocomplete="new-password" spellcheck="false" placeholder="${assistant.configured ? 'Leave blank to keep the current key' : 'Paste the provider API key'}">
-          <span class="hint">Stored server-side in ToastTV appdata. It is never sent back to this page.</span>
+          <span class="hint">Stored server-side in Dialden appdata. It is never sent back to this page.</span>
         </div>
 
         ${

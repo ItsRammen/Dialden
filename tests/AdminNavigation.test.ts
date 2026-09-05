@@ -23,7 +23,7 @@ describe('admin navigation', () => {
 
   test('escapes page titles and allows navigation independent of their wording', () => {
     const html = renderLayout('<Review>', '', { activeSection: 'library' })
-    expect(html).toContain('<title>&lt;Review&gt; · ToastTV Admin</title>')
+    expect(html).toContain('<title>&lt;Review&gt; · Dialden Admin</title>')
     expect(html).toContain('href="/library" aria-current="page"')
   })
 

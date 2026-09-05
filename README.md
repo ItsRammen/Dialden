@@ -1,6 +1,11 @@
-# ToastTV Other
+<p align="center">
+  <img src="branding/dialden/dialden-icon.png" width="160" height="160" alt="Dialden television logo">
+</p>
 
-ToastTV Other turns a local TV and movie collection into continuously scheduled
+<h1 align="center">Dialden</h1>
+<p align="center"><strong>Your library. Your channels.</strong></p>
+
+Dialden turns a local TV and movie collection into continuously scheduled
 home channels. It provides a browser administration UI, deterministic channel
 guides, station bumpers and fillers, direct media delivery, continuous HLS, and
 an LG webOS client.
@@ -10,8 +15,16 @@ other trusted home-LAN deployments. It keeps programme libraries read-only and
 stores its database, metadata, artwork, schedules, and configuration in
 persistent appdata.
 
-> ToastTV currently has no login or parent-account boundary. Do not expose the
+> Dialden currently has no login or parent-account boundary. Do not expose the
 > administration port to the public internet or an untrusted network.
+
+## About the name
+
+Dialden was previously called **ToastTV Other** and is built on
+[yvg/toasttv](https://github.com/yvg/toasttv). The new identity appears in the
+admin interface and LG app. Existing Docker image names, environment variables,
+appdata paths, repository links, and the webOS application ID remain compatible;
+you do not need to move your library or recreate your configuration.
 
 ## What it does
 
@@ -42,7 +55,7 @@ wget -O /boot/config/plugins/dockerMan/templates-user/my-toasttv-other.xml \
   https://raw.githubusercontent.com/ItsRammen/ToatTV_Other/main/templates/toasttv.xml
 ```
 
-Open **Docker → Add Container → ToastTV Other** and configure these paths:
+Open **Docker → Add Container → ToastTV Other** (the existing template name) and configure these paths:
 
 | Name | Example host path | Container path | Access |
 | --- | --- | --- | --- |
@@ -64,7 +77,7 @@ Update**. A restart alone does not recreate a container from a newer image.
 Older templates called the fourth mount **Interludes** and mounted it read-only.
 To enable uploads and generated bumpers:
 
-1. Edit the ToastTV container.
+1. Edit the Dialden container.
 2. Rename the entry to **Station Assets**.
 3. Keep its container path as `/media/interludes`.
 4. Use a dedicated host directory and change access to **Read/Write**.
@@ -108,7 +121,7 @@ Assets** and either:
 - design a simple H.264/AAC bumper in the browser; or
 - scan existing clips, preview their canonical names, and configure them.
 
-ToastTV files new assets into the appropriate station/category directory,
+Dialden files new assets into the appropriate station/category directory,
 avoids overwriting an existing variant, indexes the result, and applies the
 chosen playback decision.
 
@@ -140,7 +153,7 @@ station/show matching until configured in the manager.
 Open **Settings → Playback and scheduling → Station assets** to enable scheduled
 breaks and choose the number of programmes between them.
 
-At a normal transition ToastTV prefers:
+At a normal transition Dialden prefers:
 
 1. An exact now/next bumper.
 2. A same-show “more” bumper.
@@ -186,7 +199,7 @@ files. New configurations should use `TOASTTV_STATION_ASSETS_PATH`.
 The Compose file refuses to create missing source directories. Create the three
 host library paths before starting it. Docker Desktop may not expose a mapped
 Windows SMB drive to its Linux VM even when Windows can browse it; for media
-stored on Unraid, running ToastTV directly on Unraid is more reliable.
+stored on Unraid, running Dialden directly on Unraid is more reliable.
 
 ## First-run configuration
 
