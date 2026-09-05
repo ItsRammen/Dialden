@@ -1,4 +1,5 @@
 import { Hono, type Context } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
 import type { CollectionLibraryService } from '../services/CollectionLibraryService'
 import type { BumperAdministrationService } from '../services/BumperAdministrationService'
 import {
@@ -84,23 +85,46 @@ export function createBumperAdministrationController(
     }
   })
 
+  controller.use('/library/bumpers/upload', bodyLimit({
+    maxSize: MAX_BUMPER_UPLOAD_BYTES + 1024 * 1024,
+    onError: (c) => c.text('Upload batch exceeds the 512 MB limit. Use fewer or smaller clips.', 413),
+  }))
+
   controller.post('/library/bumpers/upload', async (c) => {
     if (!deps.writable) return c.text('The Station Assets library is read-only', 403)
-    const body = await c.req.parseBody()
     try {
-      const file = body['file']
-      if (!(file instanceof File)) throw new Error('Choose a bumper video to upload')
-      if (file.size > MAX_BUMPER_UPLOAD_BYTES) {
-        throw new Error('Bumper uploads are limited to 512 MB')
+      const body = await c.req.parseBody({ all: true })
+      const selected = body['file']
+      const files = Array.isArray(selected) ? selected : [selected]
+      if (files.length === 0 || files.some((file) => !(file instanceof File) || !file.name || file.size === 0)) {
+        throw new Error('Choose one or more non-empty bumper videos to upload')
       }
-      await deps.bumpers.upload(
-        file.name,
-        new Uint8Array(await file.arrayBuffer()),
-        parseConfiguration(body),
-        parsePlayback(body['playback'])
-      )
-      await deps.refreshSchedules?.()
-      return c.redirect('/library/bumpers?notice=uploaded', 303)
+      const uploads = files as File[]
+      if (uploads.length > 50) throw new Error('Upload up to 50 clips at a time')
+      if (uploads.reduce((total, file) => total + file.size, 0) > MAX_BUMPER_UPLOAD_BYTES) {
+        throw new Error('Each upload batch is limited to 512 MB total')
+      }
+      const configuration = parseConfiguration(body)
+      const playback = parsePlayback(body['playback'])
+      let imported = 0
+      const failures: string[] = []
+      for (const file of uploads) {
+        try {
+          await deps.bumpers.upload(file.name, new Uint8Array(await file.arrayBuffer()), configuration, playback)
+          imported++
+        } catch (error) {
+          failures.push(`${file.name}: ${errorMessage(error, 'Import failed')}`)
+        }
+      }
+      if (imported > 0) {
+        try { await deps.refreshSchedules?.() } catch {
+          failures.push('Clips were saved, but schedules could not refresh. Scan again to retry.')
+        }
+      }
+      return renderPage(c, deps, {
+        kind: failures.length ? 'warning' : 'success',
+        message: `Imported ${imported} of ${uploads.length} clips.${failures.length ? ' ' + failures.join(' · ') : ' Named, configured, and indexed.'}`,
+      }, failures.length ? 400 : 200)
     } catch (error) {
       return renderPage(c, deps, {
         kind: 'warning',
@@ -142,9 +166,10 @@ async function renderPage(
   status: 200 | 400 | 500 = 200,
   preview?: { id: number; filename: string }
 ) {
-  const [scan, collections] = await Promise.all([
+  const [scan, collections, directory] = await Promise.all([
     deps.bumpers.scan(),
     deps.library.list({ kind: 'tv', presentOnly: true, limit: 2000 }),
+    deps.bumpers.directoryStatus(),
   ])
   const requestedFilter = c.req.query('filter') as BumperAdminFilter | undefined
   const filter = requestedFilter && FILTERS.includes(requestedFilter)
@@ -154,7 +179,7 @@ async function renderPage(
   const resolvedNotice = notice ?? (queryNotice === 'saved'
     ? { kind: 'success' as const, message: 'Bumper renamed and configured.' }
     : queryNotice === 'scan'
-      ? { kind: 'success' as const, message: `Scan complete: ${scan.items.length} bumper assets found.` }
+      ? { kind: directory.state === 'ready' ? 'success' as const : 'warning' as const, message: directory.state === 'ready' ? `Scan complete: ${scan.items.length} indexed assets. Check any unavailable-file warnings below.` : `Scan finished, but the asset folder is ${directory.state}. ${directory.message}` }
       : queryNotice === 'uploaded'
         ? { kind: 'success' as const, message: 'Bumper uploaded, named, marked, and indexed.' }
         : queryNotice === 'generated'
@@ -169,7 +194,8 @@ async function renderPage(
     scan,
     filter,
     shows,
-    writable: deps.writable,
+    writable: deps.writable && directory.writable,
+    directory,
     ...(preview ? { preview } : {}),
     ...(resolvedNotice ? { notice: resolvedNotice } : {}),
     updateAvailable: deps.updateAvailable?.(),

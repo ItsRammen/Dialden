@@ -68,6 +68,22 @@ describe('BumperAdministrationService', () => {
     expect(result.items[1]?.issues).toContain('No station or show matching information')
   })
 
+  test('distinguishes a missing mount, a file mapping, and an empty connected folder', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'toasttv-bumper-folder-'))
+    directories.push(directory)
+    const library = mock<MediaService>()
+    library.getMediaDirectory.mockReturnValue(directory)
+    const service = new BumperAdministrationService(library, true)
+    expect(await service.directoryStatus()).toMatchObject({ state: 'missing', writable: false })
+    writeFileSync(join(directory, 'interludes'), 'not a folder')
+    expect(await service.directoryStatus()).toMatchObject({ state: 'not-directory', writable: false })
+    rmSync(join(directory, 'interludes'))
+    mkdirSync(join(directory, 'interludes'))
+    expect(await service.directoryStatus()).toMatchObject({ state: 'ready', writable: true })
+    expect(await new BumperAdministrationService(library, false).directoryStatus())
+      .toMatchObject({ state: 'ready', writable: false })
+  })
+
   test('renames, marks, and approves an asset as one configuration operation', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'toasttv-bumper-admin-'))
     directories.push(directory)

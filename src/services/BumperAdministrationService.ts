@@ -1,4 +1,5 @@
-import { lstat, mkdir, rename, unlink, writeFile } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { access, readdir, stat, lstat, mkdir, rename, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, join, resolve, sep } from 'node:path'
 import type { MediaItem } from '../types'
 import type { MediaService } from './MediaService'
@@ -41,6 +42,13 @@ type BumperMediaLibrary = Pick<
   | 'updatePlaybackOverride'
 >
 
+export interface BumperDirectoryStatus {
+  readonly path: string
+  readonly state: 'ready' | 'missing' | 'unreadable' | 'not-directory'
+  readonly writable: boolean
+  readonly message: string
+}
+
 export interface BumperDesign {
   readonly background: string
   readonly foreground: string
@@ -65,6 +73,35 @@ export class BumperAdministrationService {
     private readonly writable: boolean,
     private readonly options: BumperAdministrationOptions = {}
   ) {}
+
+  async directoryStatus(): Promise<BumperDirectoryStatus> {
+    const path = this.stationAssetsRoot()
+    try {
+      if (!(await stat(path)).isDirectory()) {
+        return { path, state: 'not-directory', writable: false, message: 'This path is a file. Map a host folder to this container path.' }
+      }
+      await access(path, constants.R_OK | constants.X_OK)
+      await readdir(path)
+    } catch (error) {
+      const missing = isMissingFile(error)
+      return {
+        path, state: missing ? 'missing' : 'unreadable', writable: false,
+        message: missing
+          ? 'Folder not found inside ToastTV. In Unraid, add a Path mapping with this container path, then apply the container changes.'
+          : 'ToastTV cannot read this folder. Check the share permissions for the container PUID and PGID, then scan again.',
+      }
+    }
+    let writable = this.writable
+    if (writable) {
+      try { await access(path, constants.W_OK | constants.X_OK) } catch { writable = false }
+    }
+    return {
+      path, state: 'ready', writable,
+      message: writable
+        ? 'Folder is readable and writable. Scan to import videos from this folder and its subfolders.'
+        : 'Folder is readable. Scanning works; uploads and renames require a writable mapping and Station Assets write access.',
+    }
+  }
 
   async scan(refresh = false): Promise<BumperScanResult> {
     if (refresh) await this.media.rescan()

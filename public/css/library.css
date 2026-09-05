@@ -989,3 +989,37 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Keep library inspection compact; intake and editing expand on demand. */
+.bumper-source {
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--border-radius);
+  background: var(--bg-secondary);
+  display: grid;
+  gap: 0.5rem;
+}
+.bumper-source p { margin: 0.5rem 0; color: var(--text-secondary); }
+.bumper-source code, .bumper-upload-selection { overflow-wrap: anywhere; }
+.bumper-source summary, .bumper-editor summary { cursor: pointer; padding: 0.5rem 0; }
+.bumper-fields [hidden], .bumper-upload-preview[hidden] { display: none; }
+.bumper-fields > label { min-width: 0; }
+.bumper-fields input, .bumper-fields select { box-sizing: border-box; min-width: 0; }
+.bumper-upload-selection { color: var(--text-secondary); font-size: 0.85rem; }
+
+.bumper-admin .collection-library-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.65rem;
+}
+.bumper-admin .collection-library-nav a {
+  padding: 0.5rem 0.7rem;
+  border-radius: 7px;
+  text-decoration: none;
+}
+.bumper-admin .collection-library-nav a:hover { background: var(--bg-secondary); }
+.bumper-intake .bumper-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 600px) {
+  .bumper-intake .bumper-fields { grid-template-columns: minmax(0, 1fr); }
+}

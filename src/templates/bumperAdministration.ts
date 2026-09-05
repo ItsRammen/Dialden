@@ -1,4 +1,5 @@
 import type {
+  BumperDirectoryStatus,
   BumperScanItem,
   BumperScanResult,
   BumperScanStatus,
@@ -10,6 +11,7 @@ import { escapeHtml, formatTime } from './utils'
 export type BumperAdminFilter = 'all' | 'attention' | BumperScanStatus
 
 export interface BumperAdministrationViewModel {
+  readonly directory?: BumperDirectoryStatus
   readonly scan: BumperScanResult
   readonly filter: BumperAdminFilter
   readonly shows: readonly string[]
@@ -38,7 +40,7 @@ export function renderBumperAdministration(
         <div>
           <p class="collection-eyebrow">Station continuity</p>
           <h1>Station Assets</h1>
-          <p>Scan, upload, design, name, and approve bumpers, idents, fillers, and standby loops.</p>
+          <p>Import clips, choose when they play, and manage your station identity.</p>
         </div>
         <form method="post" action="/library/bumpers/scan">
           <button class="btn btn-primary" type="submit">Scan bumper files</button>
@@ -54,6 +56,12 @@ export function renderBumperAdministration(
       </nav>
       ${view.notice ? `<div class="bumper-notice bumper-notice-${view.notice.kind}" role="status">${escapeHtml(view.notice.message)}</div>` : ''}
       ${view.writable ? '' : '<div class="bumper-notice bumper-notice-warning">The Station Assets library is read-only. Scanning works, but files cannot be uploaded, generated, renamed, or marked.</div>'}
+      ${view.directory ? `<section class="bumper-source" aria-label="Station assets folder">
+        <strong>${view.directory.state === 'ready' ? 'Folder connected' : 'Folder needs attention'}</strong>
+        <code>${escapeHtml(view.directory.path)}</code>
+        <p>${escapeHtml(view.directory.message)}</p>
+        <details><summary>Unraid folder setup</summary><p>Use a <strong>Path</strong> mapping: your host folder (for example, <code>/mnt/user/Media/Interludes/</code>) → container path <code>${escapeHtml(view.directory.path)}</code>. Use Read/Write access for uploads. Apply the changes in Unraid, then select Scan bumper files. A connected empty folder is detected even when it has no videos.</p><p>Supported files: MP4, MKV, AVI, MOV, and WebM, including subfolders. Other formats are not imported. Files still need a valid duration and playback approval.</p></details>
+      </section>` : ''}
       <section class="bumper-summary" aria-label="Bumper scan summary">
         ${summaryCard('Recognized', view.scan.recognized)}
         ${summaryCard('Needs naming', view.scan.invalid + view.scan.legacy)}
@@ -61,14 +69,15 @@ export function renderBumperAdministration(
         ${summaryCard('Scanned assets', view.scan.items.length)}
       </section>
       <section class="bumper-intake" aria-label="Add bumper assets">
-        <details open>
-          <summary><strong>Upload a finished clip</strong><span>ToastTV names and files it correctly</span></summary>
+        <details>
+          <summary><strong>Upload finished clips</strong><span>Import one clip or a batch with shared settings</span></summary>
           <form method="post" action="/library/bumpers/upload" enctype="multipart/form-data" data-bumper-form data-new-bumper>
-            <label class="bumper-file-field">Video file<input type="file" name="file" accept="video/mp4,video/x-matroska,video/quicktime,video/webm,video/x-msvideo" required${view.writable ? '' : ' disabled'}></label>
+            <label class="bumper-file-field">Video files<input type="file" name="file" multiple accept=".mp4,.mkv,.mov,.webm,.avi" required${view.writable ? '' : ' disabled'}></label>
+            <p class="bumper-upload-selection" data-upload-selection aria-live="polite">Up to 50 clips, 512 MB total. Shared settings apply to every clip; variants advance automatically.</p>
             <video class="bumper-upload-preview" data-upload-preview controls hidden preload="metadata"></video>
             ${renderNewAssetFields(false)}
             <div class="bumper-live-name"><span>Destination filename</span><code data-generated-name>Complete the fields to preview the name</code><small>An occupied variant automatically advances to the next available number.</small></div>
-            <div class="bumper-actions"><span></span><button class="btn btn-primary" type="submit"${view.writable ? '' : ' disabled'}>Upload and configure</button></div>
+            <div class="bumper-actions"><span></span><button class="btn btn-primary" type="submit"${view.writable ? '' : ' disabled'}>Import clips</button></div>
           </form>
         </details>
         <details>
@@ -101,7 +110,7 @@ export function renderBumperAdministration(
         ${view.shows.map((show) => `<option value="${escapeHtml(show)}"></option>`).join('')}
       </datalist>
       <section class="bumper-assets" aria-label="Bumper assets">
-        ${visible.length > 0 ? visible.map((item) => renderAsset(item, view)).join('') : '<p class="collection-empty">No bumper assets match this filter.</p>'}
+        ${visible.length > 0 ? visible.map((item) => renderAsset(item, view)).join('') : `<p class="collection-empty">${view.scan.items.length ? 'No assets match this filter. Choose All to see the library.' : 'No clips indexed yet. Scan your connected folder or upload finished clips, then configure their station and playback.'}</p>`}
       </section>
       <p class="bumper-contract-link"><a href="/library/interludes">View all asset files</a>. Filenames follow <code>station__type__details__target-08s__v01.mp4</code>.</p>
     </div>
@@ -156,11 +165,23 @@ export function renderBumperAdministration(
         let previewUrl = '';
         fileInput?.addEventListener('change', () => {
           if (previewUrl) URL.revokeObjectURL(previewUrl);
-          const file = fileInput.files?.[0];
+          const files = Array.from(fileInput.files || []);
+          const file = files[0];
+          const selection = form.querySelector('[data-upload-selection]');
+          const total = files.reduce((sum, item) => sum + item.size, 0);
+          fileInput.setCustomValidity(files.length > 50 || total > 512 * 1024 * 1024 ? 'Choose up to 50 clips, with a combined size of 512 MB or less.' : '');
+          if (selection) selection.textContent = files.length ? files.length + ' clips · ' + (total / 1024 / 1024).toFixed(1) + ' MB · Previewing ' + file.name : 'Up to 50 clips, 512 MB total.';
           previewUrl = file ? URL.createObjectURL(file) : '';
           if (videoPreview) {
             videoPreview.src = previewUrl;
             videoPreview.hidden = !previewUrl;
+          }
+        });
+        videoPreview?.addEventListener('loadedmetadata', () => {
+          const duration = form.querySelector('[name="targetSeconds"]');
+          if (duration && Number.isFinite(videoPreview.duration)) {
+            duration.value = String(Math.min(3600, Math.max(1, Math.round(videoPreview.duration))));
+            update();
           }
         });
         update();
@@ -174,7 +195,7 @@ export function renderBumperAdministration(
 
 function renderNewAssetFields(designer: boolean): string {
   return `<div class="bumper-fields">
-    <label>Station<input name="station" required value="nick" placeholder="nick"></label>
+    <label>Station<input name="station" required placeholder="Station name"></label>
     <label>Asset type<select name="kind">${KINDS.map((option) => `<option value="${option.value}"${option.value === 'bumper-up-next' ? ' selected' : ''}>${option.label}</option>`).join('')}</select></label>
     <label data-for-kind="bumper-more">Show<input name="show" list="bumper-show-titles" placeholder="SpongeBob SquarePants (1999)"></label>
     <label data-for-kind="bumper-now-next">Now show<input name="now" list="bumper-show-titles" placeholder="SpongeBob SquarePants (1999)"></label>
@@ -205,6 +226,7 @@ function renderAsset(
       </header>
       ${item.issues.length > 0 ? `<ul class="bumper-issues">${item.issues.map((issue) => `<li>${escapeHtml(issue)}</li>`).join('')}</ul>` : '<p class="bumper-ready">Ready for show-aware scheduling.</p>'}
       ${preview ? `<div class="bumper-preview"><strong>Rename preview</strong><code>${escapeHtml(preview)}</code></div>` : ''}
+      <details class="bumper-editor"${preview ? ' open' : ''}><summary>Configure asset</summary>
       <form method="post" action="/library/bumpers/${item.media.id}/configure" data-bumper-form>
         <div class="bumper-fields">
           <label>Station<input name="station" required value="${escapeHtml(descriptor?.station ?? 'nick')}" placeholder="nick"></label>
@@ -221,6 +243,7 @@ function renderAsset(
           <button class="btn btn-primary" name="mode" value="apply" type="submit"${view.writable ? '' : ' disabled'}>Rename and configure</button>
         </div>
       </form>
+      </details>
     </article>
   `
 }
