@@ -10,6 +10,12 @@ export interface SpawnedChannelProcess {
   readonly exited: Promise<number>
   kill(signal?: string): void
   /**
+   * Operating-system process id, when the spawner knows it. Used to attribute
+   * CPU time to the channel that spent it; a spawner in a test does not need
+   * to supply one.
+   */
+  readonly pid?: number
+  /**
    * Bounded tail of the process's stderr, resolved after exit when available.
    * Diagnostics only: a spawner that cannot capture stderr may omit it.
    */
@@ -115,6 +121,7 @@ const BUN_SPAWNER: ChannelProcessSpawner = {
       exited: child.exited,
       kill: (signal = 'SIGTERM') => child.kill(signal as NodeJS.Signals),
       stderrTail: collectStderrTail(child.stderr),
+      pid: child.pid,
     }
   },
 }
