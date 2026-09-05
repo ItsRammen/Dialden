@@ -647,7 +647,13 @@ describe('ChannelController', () => {
     })
 
     expect(response.status).toBe(303)
-    expect(logos.save).toHaveBeenCalledWith('kids-club', expect.any(File))
+    expect(logos.save).toHaveBeenCalledWith(
+      'kids-club',
+      expect.any(File),
+      undefined,
+      // Repaired on the way in unless the uploader opts out.
+      { keepBackground: false }
+    )
     expect(channels.update).toHaveBeenCalledWith(
       'kids-club',
       expect.objectContaining({
@@ -717,7 +723,13 @@ describe('ChannelController', () => {
     expect(response.headers.get('location')).toBe(
       '/channels?changed=updated&edit=kids-club#editor'
     )
-    expect(logos.save).toHaveBeenCalledWith('kids-club', expect.any(File))
+    expect(logos.save).toHaveBeenCalledWith(
+      'kids-club',
+      expect.any(File),
+      undefined,
+      // Repaired on the way in unless the uploader opts out.
+      { keepBackground: false }
+    )
     expect(channels.update).toHaveBeenCalledWith(
       'kids-club',
       expect.objectContaining({

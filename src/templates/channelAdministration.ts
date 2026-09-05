@@ -467,6 +467,7 @@ function renderBrandingEditor(
       </div>
       <div class="channel-branding-fields">
         <label>Custom app logo <input type="file" name="brandingLogo" accept="image/png" data-logo-file><small>Transparent PNG, up to 5 MB. Selecting a file updates the preview before saving.</small></label>
+        <label class="channel-branding-keep-background"><input type="checkbox" name="brandingKeepBackground" value="true"> Keep the uploaded background<small>Logos saved from stock-image sites often have a white card or the editor's transparency checkerboard baked in, which shows as a bright box on the app's dark background. That is removed automatically. Tick this for a logo that is genuinely meant to sit on a solid card.</small></label>
       </div>
     </div>
     <div class="channel-branding-schedule-assets">

@@ -430,11 +430,12 @@ export function createChannelController({
   controller.post('/channels/:id', async (c) => {
     try {
       const id = c.req.param('id')
-      const { channel: input, logo, scheduledLogos } = await readFormChannel(c.req.raw)
-      if (logo && logos) await logos.save(id, logo)
+      const { channel: input, logo, scheduledLogos, keepBackground } =
+        await readFormChannel(c.req.raw)
+      if (logo && logos) await logos.save(id, logo, undefined, { keepBackground })
       if (logos) {
         for (const scheduled of scheduledLogos) {
-          await logos.save(id, scheduled.file, scheduled.id)
+          await logos.save(id, scheduled.file, scheduled.id, { keepBackground })
         }
       }
       const existing = channels
@@ -493,14 +494,15 @@ export function createChannelController({
         { ...existing, branding },
       ])[0] as LibraryChannelPolicy
       const logo = data.get('brandingLogo')
+      const keepBackground = readKeepLogoBackground(data)
       if (logo instanceof File && logo.size > 0) {
         if (!logos) throw new Error('Channel logo storage is unavailable')
-        await logos.save(id, logo)
+        await logos.save(id, logo, undefined, { keepBackground })
       }
       if (logos) {
         const scheduledLogos = readScheduledLogos(data)
         for (const scheduled of scheduledLogos) {
-          await logos.save(id, scheduled.file, scheduled.id)
+          await logos.save(id, scheduled.file, scheduled.id, { keepBackground })
         }
       }
       const updated = channels.update(id, candidate)
@@ -878,6 +880,7 @@ async function readFormChannel(
   channel: LibraryChannelPolicy
   logo?: File
   scheduledLogos: Array<{ id: string; file: File }>
+  keepBackground: boolean
 }> {
   const data = await request.formData()
   const marathon = readFormMarathon(data)
@@ -892,7 +895,9 @@ async function readFormChannel(
   }
   const logo = data.get('brandingLogo')
   const scheduledLogos = readScheduledLogos(data)
+  const keepBackground = readKeepLogoBackground(data)
   return {
+    keepBackground,
     channel: validateLibraryChannels([value])[0] as LibraryChannelPolicy,
     ...(logo instanceof File && logo.size > 0 ? { logo } : {}),
     scheduledLogos,
@@ -954,6 +959,17 @@ function normalizeMarathon(value: unknown): ChannelMarathonPolicy | undefined {
     frequency: candidate.frequency as number,
     episodeCount: candidate.episodeCount as number,
   }
+}
+
+/*
+ * Logos are repaired on the way in by default, because the common case is a
+ * file saved with its background painted on. The form sends this only when the
+ * uploader has ticked "keep the uploaded background", so an absent field means
+ * repair -- which is also what every other caller and every existing template
+ * gets without changing.
+ */
+function readKeepLogoBackground(data: ChannelFormData): boolean {
+  return textValue(data.get('brandingKeepBackground')) === 'true'
 }
 
 function readScheduledLogos(
