@@ -7,7 +7,7 @@
 
 import type { MediaFileListFilter, MediaItem, MediaType } from '../types'
 import type { AppConfig } from '../repositories/ConfigRepository'
-import { renderLayout } from './layout'
+import { renderLayout, renderLibraryNavigation } from './layout'
 import { escapeHtml, formatTime } from './utils'
 
 export interface LibraryProps {
@@ -52,7 +52,7 @@ function renderLibraryLink(
              hx-target="#library-content"
              hx-swap="outerHTML"
              hx-push-url="${href}"
-             class="${escapeHtml(className)}"${title ? ` title="${escapeHtml(title)}"` : ''}>${label}</a>`
+             class="${escapeHtml(className)}"${title ? ` title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}"` : ''}>${label}</a>`
 }
 
 /**
@@ -60,7 +60,7 @@ function renderLibraryLink(
  * Used for initial page load.
  */
 export function renderLibrary(props: LibraryProps): string {
-  return renderLayout('Library', renderLibraryContent(props))
+  return renderLayout('File diagnostics · Library', renderLibraryContent(props))
 }
 
 /**
@@ -199,6 +199,7 @@ export function renderLibraryContent(props: LibraryProps): string {
         <span class="library-count">${total.toLocaleString('en-US')} records</span>
       </div>
       
+      ${renderLibraryNavigation('files')}
       <!-- Toolbar -->
       <div class="library-toolbar">
         <div class="search-box">
@@ -218,7 +219,7 @@ export function renderLibraryContent(props: LibraryProps): string {
           <input type="hidden" name="filter" value="${filter}">
           ${
             search
-              ? `<button type="button" class="search-clear"
+              ? `<button type="button" class="search-clear" aria-label="Clear file search"
                               hx-get="${escapeHtml(libraryHref('/partials/library', { ...navigation, search: '', page: 1 }))}"
                               hx-target="#library-content" 
                               hx-swap="outerHTML"

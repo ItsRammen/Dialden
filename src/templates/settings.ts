@@ -8,7 +8,7 @@
 import type { AppConfig } from '../repositories/ConfigRepository'
 import type { FfmpegTranscodingStatus } from '../services/FfmpegTranscodingBackend'
 import type { TierDecision } from '../services/ChannelQualityTierService'
-import { renderLayout } from './layout'
+import { renderLayout, renderSettingsNavigation } from './layout'
 import { escapeHtml } from './utils'
 
 export interface SettingsProps {
@@ -56,6 +56,7 @@ export function renderSettings(props: SettingsProps): string {
         </nav>
       </header>
       
+      ${renderSettingsNavigation('server')}
       <form id="settings-form"
             hx-post="/api/config"
             hx-target="#toast-container"
@@ -120,7 +121,7 @@ export function renderSettings(props: SettingsProps): string {
               <span class="hint">Quota resets at this hour each day</span>
             </div>
             
-            <p class="card-note">Intro, outro, and off-air screens are managed in the <a href="/library">Library</a>.</p>
+            <p class="card-note">Intro, outro, and off-air screens are managed in <a href="/library/files">File diagnostics</a>.</p>
           </section>
 
           <section class="settings-card">
@@ -142,7 +143,7 @@ export function renderSettings(props: SettingsProps): string {
                   )
                   .join('')}
               </select>
-              <span class="hint">Schedule a bumper or ident after every N programmes</span>
+              <span class="hint">Schedule a bumper or ident after every N programmes. <a href="/library/bumpers">Manage station assets</a>.</span>
             </div>
           </section>
 
@@ -212,6 +213,12 @@ export function renderSettings(props: SettingsProps): string {
               <span class="hint">Filesystem changes are watched immediately. This fallback catches events missed by Docker bind mounts.</span>
             </div>
             ${renderLibraryMonitoring(props.libraryMonitoring)}
+            <input type="hidden" name="stationAssetsSettingPresent" value="true">
+            <div class="setting-row settings-toggle-row">
+              <div><label for="stationAssetsWritable">Allow station asset changes</label><span class="hint">Upload, generate, rename, and configure bumpers. The folder must also be writable. TV and movie permissions are unchanged.</span></div>
+              <label class="toggle" aria-label="Allow station asset changes"><input type="checkbox" id="stationAssetsWritable" name="stationAssetsWritable" value="true" ${config.library.stationAssetsWritable ? 'checked' : ''}><span class="toggle-slider"></span></label>
+            </div>
+            <p class="card-note"><a href="/library/bumpers">Open Station Assets</a> to check folder access.</p>
             <div class="settings-card-actions">
               <button type="button" class="btn btn-secondary"
                     hx-post="/api/rescan"
@@ -319,6 +326,7 @@ export function renderSettings(props: SettingsProps): string {
         </section>
         
         <div class="form-actions-sticky">
+          <span id="settings-save-status" role="status" aria-live="polite">No unsaved changes</span>
           <button type="submit" class="btn btn-primary btn-large">
             Save settings
           </button>
@@ -341,7 +349,7 @@ export function renderSettings(props: SettingsProps): string {
       </div>
     </div>
     
-    <link rel="stylesheet" href="/css/settings.css">
+
     <script>
       ${getUpdateScript()}
     </script>

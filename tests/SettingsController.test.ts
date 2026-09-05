@@ -35,6 +35,18 @@ describe('SettingsController', () => {
     app.route('/', controller)
   })
 
+  test('saves station asset access and preserves it for older form submissions', async () => {
+    for (const enabled of [true, false]) {
+      const body = new FormData()
+      body.set('stationAssetsSettingPresent', 'true')
+      if (enabled) body.set('stationAssetsWritable', 'true')
+      expect((await app.request('/api/config', { method: 'POST', body })).status).toBe(200)
+      expect(configService.update.mock.calls.at(-1)?.[0].library?.stationAssetsWritable).toBe(enabled)
+    }
+    await app.request('/api/config', { method: 'POST', body: new FormData() })
+    expect(configService.update.mock.calls.at(-1)?.[0].library).not.toHaveProperty('stationAssetsWritable')
+  })
+
   test('POST /api/config parses form data correctly', async () => {
     const formData = new FormData()
     formData.append('serverPort', '8080')

@@ -1,4 +1,4 @@
-import { renderLayout } from './layout'
+import { renderLayout, renderLibraryNavigation } from './layout'
 import { escapeHtml } from './utils'
 
 export type CollectionLibraryKind = 'tv' | 'movie' | 'interlude'
@@ -691,28 +691,22 @@ export function renderCollectionLibraryContent(
           <span>${quantity(collections.length, 'collection')}</span>
         </div>
         ${renderCollectionGrid(collections, view.emptyMessage ?? 'No collections match this view.')}
+        ${collections.length === 0 && (view.search || (view.filter && view.filter !== 'all')) ? `<p class="collection-empty-action"><a href="${currentPath}">Clear search and filters</a> to see all collections.</p>` : ''}
       </section>
     `
   }
 
   return `
-    <div class="collection-library">
+    <div class="collection-library" data-library-view="${view.activeView}">
       <header class="collection-library-header">
         <div>
           <p class="collection-eyebrow">Catalog operations</p>
           <h1>${heading}</h1>
           ${description}
         </div>
-        <a class="collection-advanced-link" href="/library/files">File diagnostics</a>
+        ${view.activeView === 'summary' ? `<button class="btn btn-primary" type="button" hx-post="/api/rescan" hx-target="#toast-container" hx-swap="innerHTML" hx-disabled-elt="this">Scan library</button>` : ''}
       </header>
-      <nav class="collection-library-nav" aria-label="Library sections">
-        <a href="/library">Overview</a>
-        <a href="/library/tv">TV shows</a>
-        <a href="/library/movies">Movies</a>
-        <a href="/library/interludes">Asset files</a>
-        <a href="/library/bumpers">Station Assets</a>
-        <a href="/library/review">Review queue</a>
-      </nav>
+      ${renderLibraryNavigation(view.activeView === 'detail' ? view.detail?.kind === 'tv' ? 'tv' : view.detail?.kind === 'movie' ? 'movies' : 'interludes' : view.activeView)}
       <section id="collection-live-work" class="collection-live-work" role="status" aria-live="polite" hidden>
         <strong id="collection-live-title">Library scan</strong>
         <progress id="collection-live-progress" max="1" value="0"></progress>
@@ -729,12 +723,14 @@ export function renderCollectionLibraryContent(
               <form method="get" action="${currentPath}" role="search">
                 ${view.filter && view.filter !== 'all' ? `<input type="hidden" name="status" value="${escapeHtml(view.filter)}">` : ''}
                 <label for="collection-search">Search collections and episodes</label>
-                <input id="collection-search" name="search" value="${escapeHtml(view.search ?? '')}">
+                <input id="collection-search" name="search" type="search" placeholder="Title or episode name" value="${escapeHtml(view.search ?? '')}">
                 <button type="submit">Search</button>
+                ${view.search ? `<a class="collection-search-clear" href="${currentPath}?status=${view.filter ?? 'all'}">Clear search</a>` : ''}
               </form>
             </div>`
           : ''
       }
+      ${view.activeView === 'summary' && view.summary.tvCollections === 0 && view.summary.movieCollections === 0 && view.summary.interludes === 0 ? `<section class="admin-get-started"><h2>Build your library</h2><p>Connect your media folders, then scan to find your shows and movies. Review their matches and playback approvals before creating a station.</p><a href="/settings#library-services">Check media folder settings</a></section>` : ''}
       ${renderSummary(view.summary)}
       ${renderBulkActions(view)}
       ${primaryContent}
@@ -747,7 +743,7 @@ export function renderCollectionLibrary(
   view: CollectionLibraryViewModel
 ): string {
   return renderLayout(
-    'Library',
+    view.heading && view.heading !== 'Library' ? `${view.heading} · Library` : 'Library',
     `<link rel="stylesheet" href="/css/collection-library.css">
      ${renderCollectionLibraryContent(view)}
      <script>

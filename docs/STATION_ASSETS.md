@@ -17,8 +17,13 @@ enabled.
 | Docker Compose | `TOASTTV_STATION_ASSETS_PATH` | `/media/interludes` | Read/write |
 | Legacy/local | `<media directory>/interludes` | Not applicable | Read/write |
 
-Set `TOASTTV_STATION_ASSETS_WRITABLE=true` only when that dedicated mount is
-writable. This permission does not make the TV or movie roots writable. Older
+Enable **Allow station asset changes** in **Settings → Library** or directly
+on **Station Assets**. This saved setting takes effect immediately; the folder
+must also be writable. New installations start with changes disabled. The old
+`TOASTTV_STATION_ASSETS_WRITABLE` value is imported only when the saved setting
+does not exist, so it can be removed from existing Docker templates after upgrading.
+Later UI choices take precedence over that legacy variable. This permission
+does not make the TV or movie roots writable. Older
 host directories named `interludes` can remain in place; point the Station
 Assets mapping at them rather than moving files solely for the new label.
 

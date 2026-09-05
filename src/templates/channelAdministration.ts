@@ -1199,15 +1199,15 @@ function renderChannelCard(
       <div><dt>Marathons</dt><dd>${escapeHtml(marathonSummary(channel.marathon))}</dd></div>
     </dl>
     <div class="channel-admin-actions">
-      <a class="channel-admin-primary" href="/channels?edit=${encodeURIComponent(channel.id)}#channel-editor">Configure</a>
-      <a href="/channels?builder=${encodeURIComponent(channel.id)}#station-builder">Auto lineup</a>
-      <a href="/channels?branding=${encodeURIComponent(channel.id)}#branding-modal">Logo</a>
+      <a class="channel-admin-primary" href="/channels?edit=${encodeURIComponent(channel.id)}#channel-editor" aria-label="Configure ${escapeHtml(channel.name)}">Configure</a>
+      <a href="/channels?builder=${encodeURIComponent(channel.id)}#station-builder" aria-label="Edit lineup for ${escapeHtml(channel.name)}">Auto lineup</a>
+      <a href="/channels?branding=${encodeURIComponent(channel.id)}#branding-modal" aria-label="Edit logo for ${escapeHtml(channel.name)}">Logo</a>
       <form method="post" action="/channels/${encodeURIComponent(channel.id)}/enabled">
         <input type="hidden" name="enabled" value="${channel.enabled ? 'false' : 'true'}">
         <button type="submit">${channel.enabled ? 'Disable' : 'Enable'}</button>
       </form>
       <form method="post" action="/channels/${encodeURIComponent(channel.id)}/delete" onsubmit="return confirm('Delete this channel?')">
-        <button class="channel-admin-danger" type="submit">Delete</button>
+        <button class="channel-admin-danger" type="submit" aria-label="Delete ${escapeHtml(channel.name)}">Delete</button>
       </form>
     </div>
   </article>`

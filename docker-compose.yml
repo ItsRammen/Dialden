@@ -21,7 +21,6 @@ services:
       TOASTTV_MEDIA_READ_ONLY: "true"
       # Programme libraries stay read-only; only the dedicated Station Assets
       # mount may be changed by Bumper Manager.
-      TOASTTV_STATION_ASSETS_WRITABLE: "true"
       TOASTTV_TRANSCODING_MODE: "${TOASTTV_TRANSCODING_MODE:-software}"
       TOASTTV_QSV_DEVICE: "${TOASTTV_QSV_DEVICE:-/dev/dri/renderD128}"
       TOASTTV_UPDATES_ENABLED: "false"

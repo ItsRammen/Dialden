@@ -82,7 +82,6 @@ ENV NODE_ENV=production \
     TOASTTV_MEDIA_READ_ONLY=true \
     TOASTTV_TRANSCODING_MODE=software \
     TOASTTV_QSV_DEVICE=/dev/dri/renderD128 \
-    TOASTTV_STATION_ASSETS_WRITABLE=false \
     TOASTTV_UPDATES_ENABLED=false
 
 COPY --from=build --chown=bun:bun /app/bin/server.js ./bin/server.js

@@ -14,14 +14,12 @@ describe('Docker Intel GPU deployment', () => {
       /<Config Name="Station Assets"[^>]*>[^<]*<\/Config>/
     )?.[0]
 
-    expect(compose).toContain('TOASTTV_STATION_ASSETS_WRITABLE: "true"')
+    expect(compose).not.toContain('TOASTTV_STATION_ASSETS_WRITABLE')
     expect(compose).toContain('TOASTTV_STATION_ASSETS_PATH')
     expect(compose).toMatch(/target: \/media\/interludes\s+read_only: false/)
     expect(stationAssets).toContain('Target="/media/interludes"')
     expect(stationAssets).toContain('Mode="rw"')
-    expect(template).toContain(
-      'Target="TOASTTV_STATION_ASSETS_WRITABLE" Default="true"'
-    )
+    expect(template).not.toContain('TOASTTV_STATION_ASSETS_WRITABLE')
   })
 
   test('maps the DRM directory independently from the FFmpeg render node', () => {

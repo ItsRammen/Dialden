@@ -44,6 +44,7 @@ type BumperMediaLibrary = Pick<
 
 export interface BumperDirectoryStatus {
   readonly path: string
+  readonly changesEnabled: boolean
   readonly state: 'ready' | 'missing' | 'unreadable' | 'not-directory'
   readonly writable: boolean
   readonly message: string
@@ -70,37 +71,42 @@ const UPLOAD_EXTENSIONS = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm'])
 export class BumperAdministrationService {
   constructor(
     private readonly media: BumperMediaLibrary,
-    private readonly writable: boolean,
+    private readonly writable: boolean | (() => Promise<boolean>),
     private readonly options: BumperAdministrationOptions = {}
   ) {}
 
   async directoryStatus(): Promise<BumperDirectoryStatus> {
     const path = this.stationAssetsRoot()
+    const changesEnabled = await this.changesEnabled()
     try {
       if (!(await stat(path)).isDirectory()) {
-        return { path, state: 'not-directory', writable: false, message: 'This path is a file. Map a host folder to this container path.' }
+        return { path, changesEnabled, state: 'not-directory', writable: false, message: 'This path is a file. Map a host folder to this container path.' }
       }
       await access(path, constants.R_OK | constants.X_OK)
       await readdir(path)
     } catch (error) {
       const missing = isMissingFile(error)
       return {
-        path, state: missing ? 'missing' : 'unreadable', writable: false,
+        path, changesEnabled, state: missing ? 'missing' : 'unreadable', writable: false,
         message: missing
           ? 'Folder not found inside ToastTV. In Unraid, add a Path mapping with this container path, then apply the container changes.'
           : 'ToastTV cannot read this folder. Check the share permissions for the container PUID and PGID, then scan again.',
       }
     }
-    let writable = this.writable
-    if (writable) {
-      try { await access(path, constants.W_OK | constants.X_OK) } catch { writable = false }
-    }
+    let folderWritable = true
+    try { await access(path, constants.W_OK | constants.X_OK) } catch { folderWritable = false }
     return {
-      path, state: 'ready', writable,
-      message: writable
-        ? 'Folder is readable and writable. Scan to import videos from this folder and its subfolders.'
-        : 'Folder is readable. Scanning works; uploads and renames require a writable mapping and Station Assets write access.',
+      path, changesEnabled, state: 'ready', writable: changesEnabled && folderWritable,
+      message: !folderWritable
+        ? 'ToastTV can read this folder but cannot write to it. Set the Docker mapping to Read/Write and check folder permissions for the container PUID and PGID.'
+        : !changesEnabled
+          ? 'Folder access is ready. Enable station asset changes below to upload, generate, rename, and configure clips. Scanning is always available.'
+          : 'Folder is readable and writable. Scan to import videos from this folder and its subfolders.',
     }
+  }
+
+  async changesEnabled(): Promise<boolean> {
+    return typeof this.writable === 'function' ? this.writable() : this.writable
   }
 
   async scan(refresh = false): Promise<BumperScanResult> {
@@ -138,7 +144,7 @@ export class BumperAdministrationService {
     configuration: StationAssetConfiguration,
     playback: 'allow' | 'block' | 'policy'
   ): Promise<MediaItem> {
-    if (!this.writable) throw new Error('The Station Assets library is read-only')
+    if (!(await this.changesEnabled())) throw new Error('Station asset changes are disabled in Settings → Library')
     const { item, filename } = await this.preview(id, configuration)
     const originalPath = resolve(item.path)
     const root = this.stationAssetsRoot()
@@ -195,7 +201,7 @@ export class BumperAdministrationService {
     configuration: StationAssetConfiguration,
     playback: 'allow' | 'block' | 'policy'
   ): Promise<MediaItem> {
-    if (!this.writable) throw new Error('The Station Assets library is read-only')
+    if (!(await this.changesEnabled())) throw new Error('Station asset changes are disabled in Settings → Library')
     if (bytes.byteLength === 0) throw new Error('The uploaded file is empty')
     const extension = extname(basename(originalFilename)).toLowerCase()
     if (!UPLOAD_EXTENSIONS.has(extension)) {
@@ -222,7 +228,7 @@ export class BumperAdministrationService {
     design: BumperDesign,
     playback: 'allow' | 'block' | 'policy'
   ): Promise<MediaItem> {
-    if (!this.writable) throw new Error('The Station Assets library is read-only')
+    if (!(await this.changesEnabled())) throw new Error('Station asset changes are disabled in Settings → Library')
     if (!this.options.render) throw new Error('Bumper rendering is unavailable')
     if (
       !Number.isSafeInteger(configuration.targetSeconds) ||

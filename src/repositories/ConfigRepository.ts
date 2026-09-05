@@ -51,6 +51,7 @@ export interface AppConfig {
   }
   library: {
     /** Zero disables the periodic fallback; filesystem watching remains active. */
+    stationAssetsWritable?: boolean
     safetyScanIntervalMinutes: number
   }
 }
@@ -100,6 +101,7 @@ const DEFAULT_CONFIG: AppConfig = {
     safeMode: true,
   },
   library: {
+    stationAssetsWritable: false,
     safetyScanIntervalMinutes: 15,
   },
 }
@@ -108,11 +110,13 @@ export class ConfigRepository {
   private bootstrap: BootstrapConfig
   private repository: IMediaRepository | null = null
   private readonly defaultLogoPath: string
+  private readonly initialStationAssetsWritable: boolean
 
   constructor(
     configPath = './data/config.json',
     environment: Record<string, string | undefined> = process.env
   ) {
+    this.initialStationAssetsWritable = ['true', '1', 'yes', 'on'].includes((environment.TOASTTV_STATION_ASSETS_WRITABLE ?? '').trim().toLowerCase())
     this.bootstrap = this.loadBootstrap(configPath, environment)
     this.defaultLogoPath = getDataPathForEnvironment(environment, 'logo.png')
   }
@@ -208,6 +212,8 @@ export class ConfigRepository {
       'library.safetyScanIntervalMinutes',
       DEFAULT_CONFIG.library.safetyScanIntervalMinutes.toString()
     )
+    // Import the old environment choice once; subsequent UI changes take precedence.
+    await setIfMissing('library.stationAssetsWritable', String(this.initialStationAssetsWritable))
     // Note: Special media discovery (intro/outro/offair) is now handled by ConfigService.discoverSpecialMedia()
   }
 
@@ -259,6 +265,7 @@ export class ConfigRepository {
         safeMode: s['playback.safeMode'] !== 'false', // Default true
       },
       library: {
+        stationAssetsWritable: s['library.stationAssetsWritable'] === 'true',
         safetyScanIntervalMinutes: parseSafetyScanInterval(
           s['library.safetyScanIntervalMinutes']
         ),
@@ -348,6 +355,9 @@ export class ConfigRepository {
         await this.repository.setSetting('logo.y', partial.logo.y.toString())
     }
 
+    if (partial.library?.stationAssetsWritable !== undefined) {
+      await this.repository.setSetting('library.stationAssetsWritable', String(partial.library.stationAssetsWritable))
+    }
     if (partial.library?.safetyScanIntervalMinutes !== undefined) {
       await this.repository.setSetting(
         'library.safetyScanIntervalMinutes',

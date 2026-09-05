@@ -117,6 +117,7 @@ export function createSettingsController(deps: SettingsControllerDeps) {
         safeMode: body['safeMode'] === 'true',
       },
       library: {
+        ...(body['stationAssetsSettingPresent'] === 'true' ? { stationAssetsWritable: body['stationAssetsWritable'] === 'true' } : {}),
         safetyScanIntervalMinutes: parseSafetyScanInterval(
           body['safetyScanIntervalMinutes']
         ),

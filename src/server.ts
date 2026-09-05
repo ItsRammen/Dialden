@@ -430,7 +430,7 @@ export async function createServer(
   const bumperAdministrationController = createBumperAdministrationController({
     bumpers: new BumperAdministrationService(
       mediaService,
-      runtime.stationAssetsWritable,
+      async () => (await configService.get()).library.stationAssetsWritable === true,
       {
         render: async (command) => {
           const child = Bun.spawn([...command], {
@@ -460,7 +460,8 @@ export async function createServer(
       }
     ),
     library: collectionLibraryService,
-    writable: runtime.stationAssetsWritable,
+    writable: async () => (await configService.get()).library.stationAssetsWritable === true,
+    setWritable: async (enabled) => configService.update({ library: { stationAssetsWritable: enabled } }),
     refreshSchedules: async () => {
       channelService.invalidateScheduleCatalog()
       await daemon.getEngine().refreshCache(true)

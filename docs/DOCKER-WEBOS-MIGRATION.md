@@ -568,7 +568,7 @@ The legacy Pi path remains the default outside the container. Shutdown is not ye
 /app/config/kids-7.library.json  active read-only repository policy in the supplied Compose deployment
 ```
 
-The named `toasttv-data` volume preserves the implemented `/app/data` contents across container recreation. `TOASTTV_DATA` is the root for mutable generated paths, `TOASTTV_DATABASE` can override its database, and `TOASTTV_CONFIG` selects the bootstrap JSON. TV and movie roots remain read-only; the separate Station Assets root is writable only when `TOASTTV_STATION_ASSETS_WRITABLE=true`. The image creates `/media` before dropping privileges but does not change ownership of a user-supplied runtime bind mount. The runtime user must have read/traverse access to programme libraries and write access to Station Assets.
+The named `toasttv-data` volume preserves the implemented `/app/data` contents across container recreation. `TOASTTV_DATA` is the root for mutable generated paths, `TOASTTV_DATABASE` can override its database, and `TOASTTV_CONFIG` selects the bootstrap JSON. TV and movie roots remain read-only; changes to the separate Station Assets root are enabled through **Settings → Library → Allow station asset changes**, and also require a writable mount. The image creates `/media` before dropping privileges but does not change ownership of a user-supplied runtime bind mount. The runtime user must have read/traverse access to programme libraries and write access to Station Assets.
 
 The image seeds `kids-7.library.json` into appdata only when it is missing, so
 Unraid policy edits survive image replacement. Container `TZ` controls logs and

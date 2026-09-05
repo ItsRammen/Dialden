@@ -84,6 +84,25 @@ describe('BumperAdministrationService', () => {
       .toMatchObject({ state: 'ready', writable: false })
   })
 
+  test('rechecks the saved permission for every mutation and separates it from folder access', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'toasttv-bumper-permission-'))
+    directories.push(directory)
+    mkdirSync(join(directory, 'interludes'))
+    const library = mock<MediaService>()
+    library.getMediaDirectory.mockReturnValue(directory)
+    let enabled = false
+    const service = new BumperAdministrationService(library, async () => enabled)
+    expect(await service.directoryStatus()).toMatchObject({ state: 'ready', changesEnabled: false, writable: false })
+    expect((await service.directoryStatus()).message).toContain('Enable station asset changes below')
+    enabled = true
+    expect(await service.directoryStatus()).toMatchObject({ changesEnabled: true, writable: true })
+    enabled = false
+    await expect(service.upload('clip.mp4', new Uint8Array([1]), { station: 'Nick', kind: 'ident-general' }, 'allow')).rejects.toThrow('disabled in Settings')
+    await expect(service.generate({ station: 'Nick', kind: 'ident-general' }, { background: '#000000', foreground: '#ffffff', accent: '#ffffff' }, 'allow')).rejects.toThrow('disabled in Settings')
+    await expect(service.configure(1, { station: 'Nick', kind: 'ident-general' }, 'allow')).rejects.toThrow('disabled in Settings')
+    expect(library.rescan).not.toHaveBeenCalled()
+  })
+
   test('renames, marks, and approves an asset as one configuration operation', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'toasttv-bumper-admin-'))
     directories.push(directory)
@@ -170,7 +189,7 @@ describe('BumperAdministrationService', () => {
       'nick__ident-general__target-08s__v01.mp4'
     )
     await expect(service.configure(5, configuration, 'allow')).rejects.toThrow(
-      'read-only'
+      'disabled in Settings'
     )
   })
 

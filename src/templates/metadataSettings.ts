@@ -4,7 +4,7 @@ import type {
 } from '../config/metadata'
 import type { MetadataJobState } from '../types'
 import type { PublicReviewAssistantConfig } from '../config/reviewAssistant'
-import { renderLayout } from './layout'
+import { renderLayout, renderSettingsNavigation } from './layout'
 import { escapeHtml } from './utils'
 
 export interface MetadataSettingsDraft {
@@ -56,23 +56,24 @@ export function renderMetadataSettings(
     ...(options.assistant ? [{ id: 'assistant', label: 'Review assistant' }] : []),
     { id: 'maintenance', label: 'Maintenance' },
   ]
-  const activeTab = assistantTab ? 'assistant' : 'provider'
+  const activeTab = options.maintenanceStarted || options.reevaluationUnavailable ? 'maintenance' : assistantTab ? 'assistant' : 'provider'
   const panel = (id: string, body: string): string =>
     `<div class="settings-tabpanel${id === activeTab ? ' is-active' : ''}" id="tabpanel-${id}" role="tabpanel" aria-labelledby="tab-${id}">${body}</div>`
 
   return renderLayout(
     'Metadata and review',
     `<div class="settings metadata-settings">
-      <a class="settings-back-link" href="/settings">← Settings</a>
+
 
       <header class="metadata-settings-header">
         <div>
           <p class="metadata-eyebrow">Library enrichment</p>
           <h1>Metadata and review</h1>
-          <p class="metadata-lede">Where titles are identified, how the outstanding queue gets decided, and how to re-run either over the library.</p>
+          <p class="metadata-lede">Connect your metadata provider, configure automatic reviews, and maintain your library.</p>
         </div>
       </header>
 
+      ${renderSettingsNavigation('metadata')}
       ${renderPageAlert(options)}
 
       <section class="metadata-status-panel" aria-label="TMDB provider status">
@@ -455,6 +456,7 @@ const TAB_SCRIPT = `<script>
       var on = tab.getAttribute('data-tab') === id
       tab.classList.toggle('is-active', on)
       tab.setAttribute('aria-selected', String(on))
+      tab.tabIndex = on ? 0 : -1
       var body = document.getElementById('tabpanel-' + tab.getAttribute('data-tab'))
       if (!body) return
       body.classList.toggle('is-active', on)
@@ -464,6 +466,17 @@ const TAB_SCRIPT = `<script>
   bar.addEventListener('click', function (event) {
     var tab = event.target.closest ? event.target.closest('.settings-tab') : null
     if (tab) select(tab.getAttribute('data-tab'))
+  })
+  bar.addEventListener('keydown', function (event) {
+    var index = tabs.indexOf(event.target)
+    if (index < 0) return
+    var next = event.key === 'ArrowRight' ? (index + 1) % tabs.length
+      : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length
+      : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : -1
+    if (next < 0) return
+    event.preventDefault()
+    select(tabs[next].getAttribute('data-tab'))
+    tabs[next].focus()
   })
   var opening = bar.querySelector('.settings-tab.is-active') || tabs[0]
   select(opening.getAttribute('data-tab'))

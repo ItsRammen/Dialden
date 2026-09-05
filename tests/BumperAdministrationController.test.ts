@@ -5,12 +5,13 @@ import type { BumperAdministrationService } from '../src/services/BumperAdminist
 import type { CollectionLibraryService } from '../src/services/CollectionLibraryService'
 
 function fixture(writable = true) {
+  let enabled = writable
   const bumpers = mock<BumperAdministrationService>()
   const library = mock<CollectionLibraryService>()
   bumpers.scan.mockResolvedValue({ items: [], recognized: 0, invalid: 0, legacy: 0, playable: 0 })
-  bumpers.directoryStatus.mockResolvedValue({ path: '/media/interludes', state: 'ready', writable: true, message: 'Folder connected' })
+  bumpers.directoryStatus.mockImplementation(async () => ({ path: '/media/interludes', state: 'ready', changesEnabled: enabled, writable: enabled, message: 'Folder connected' }))
   library.list.mockResolvedValue([])
-  return { bumpers, app: createBumperAdministrationController({ bumpers, library, writable }) }
+  return { bumpers, app: createBumperAdministrationController({ bumpers, library, writable: async () => enabled, setWritable: async (value) => { enabled = value } }) }
 }
 
 function batch() {
@@ -25,6 +26,27 @@ function batch() {
 }
 
 describe('Bumper import', () => {
+  test('the page control enables and revokes imports without rebuilding the controller', async () => {
+    const { app, bumpers } = fixture(false)
+    expect((await app.request('/library/bumpers/upload', { method: 'POST', body: batch() })).status).toBe(403)
+    const enable = await app.request('/library/bumpers/access', { method: 'POST', body: new URLSearchParams({ enabled: 'true' }) })
+    expect(enable.status).toBe(303)
+    expect((await app.request('/library/bumpers/upload', { method: 'POST', body: batch() })).status).toBe(200)
+    await app.request('/library/bumpers/access', { method: 'POST', body: new URLSearchParams({ enabled: 'false' }) })
+    expect((await app.request('/library/bumpers/upload', { method: 'POST', body: batch() })).status).toBe(403)
+    expect(bumpers.upload).toHaveBeenCalledTimes(2)
+  })
+
+  test('reports folder failures once, without a contradictory scan or read-only banner', async () => {
+    const { app, bumpers } = fixture(false)
+    bumpers.directoryStatus.mockResolvedValue({ path: '/media/interludes', state: 'missing', changesEnabled: false, writable: false, message: 'Folder not found inside ToastTV.' })
+    const html = await (await app.request('/library/bumpers?notice=scan')).text()
+    expect(html.match(/Folder not found inside ToastTV\./g)).toHaveLength(1)
+    expect(html).not.toContain('The Station Assets library is read-only')
+    expect(html).not.toContain('Scan complete:')
+    expect(html).toContain('Enable station asset changes')
+  })
+
   test('imports every selected clip with shared settings', async () => {
     const { bumpers, app } = fixture()
     const response = await app.request('/library/bumpers/upload', { method: 'POST', body: batch() })

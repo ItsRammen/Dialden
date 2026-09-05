@@ -68,9 +68,9 @@ To enable uploads and generated bumpers:
 2. Rename the entry to **Station Assets**.
 3. Keep its container path as `/media/interludes`.
 4. Use a dedicated host directory and change access to **Read/Write**.
-5. Add `TOASTTV_STATION_ASSETS_WRITABLE=true` if the saved template does not
-   already contain it.
-6. Apply the template and run **Library → Station Assets → Scan bumper files**.
+5. Apply the template, then enable **Allow station asset changes** in
+   **Settings → Library**, or use the enable button on **Station Assets**.
+6. Run **Library → Station Assets → Scan bumper files**.
 
 You do not have to rename an existing host directory. A path such as
 `/mnt/user/appdata/toasttv/interludes` remains valid when mapped to

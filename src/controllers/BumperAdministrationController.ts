@@ -14,7 +14,8 @@ import type {
 interface BumperAdministrationControllerDeps {
   readonly bumpers: BumperAdministrationService
   readonly library: CollectionLibraryService
-  readonly writable: boolean
+  readonly writable: boolean | (() => Promise<boolean>)
+  readonly setWritable?: (enabled: boolean) => Promise<void>
   readonly refreshSchedules?: () => Promise<void>
   readonly updateAvailable?: () => boolean | undefined
 }
@@ -42,6 +43,18 @@ export function createBumperAdministrationController(
   const controller = new Hono()
 
   controller.get('/library/bumpers', (c) => renderPage(c, deps))
+
+  controller.post('/library/bumpers/access', async (c) => {
+    if (!deps.setWritable) return c.text('Change this setting in Settings → Library', 400)
+    const body = await c.req.parseBody()
+    if (body['enabled'] !== 'true' && body['enabled'] !== 'false') return c.text('Choose a valid access setting', 400)
+    try {
+      await deps.setWritable(body['enabled'] === 'true')
+      return c.redirect('/library/bumpers', 303)
+    } catch {
+      return renderPage(c, deps, { kind: 'warning', message: 'Could not save the access setting. Try again.' }, 500)
+    }
+  })
 
   controller.post('/library/bumpers/scan', async (c) => {
     try {
@@ -91,7 +104,7 @@ export function createBumperAdministrationController(
   }))
 
   controller.post('/library/bumpers/upload', async (c) => {
-    if (!deps.writable) return c.text('The Station Assets library is read-only', 403)
+    if (!(await changesEnabled(deps))) return c.text('Station asset changes are disabled in Settings → Library', 403)
     try {
       const body = await c.req.parseBody({ all: true })
       const selected = body['file']
@@ -134,7 +147,7 @@ export function createBumperAdministrationController(
   })
 
   controller.post('/library/bumpers/generate', async (c) => {
-    if (!deps.writable) return c.text('The Station Assets library is read-only', 403)
+    if (!(await changesEnabled(deps))) return c.text('Station asset changes are disabled in Settings → Library', 403)
     const body = await c.req.parseBody()
     try {
       await deps.bumpers.generate(
@@ -178,8 +191,8 @@ async function renderPage(
   const queryNotice = c.req.query('notice')
   const resolvedNotice = notice ?? (queryNotice === 'saved'
     ? { kind: 'success' as const, message: 'Bumper renamed and configured.' }
-    : queryNotice === 'scan'
-      ? { kind: directory.state === 'ready' ? 'success' as const : 'warning' as const, message: directory.state === 'ready' ? `Scan complete: ${scan.items.length} indexed assets. Check any unavailable-file warnings below.` : `Scan finished, but the asset folder is ${directory.state}. ${directory.message}` }
+    : queryNotice === 'scan' && directory.state === 'ready'
+      ? { kind: 'success' as const, message: `Scan complete: ${scan.items.length} indexed assets.` }
       : queryNotice === 'uploaded'
         ? { kind: 'success' as const, message: 'Bumper uploaded, named, marked, and indexed.' }
         : queryNotice === 'generated'
@@ -194,7 +207,8 @@ async function renderPage(
     scan,
     filter,
     shows,
-    writable: deps.writable && directory.writable,
+    writable: directory.writable,
+    canChangeAccess: Boolean(deps.setWritable),
     directory,
     ...(preview ? { preview } : {}),
     ...(resolvedNotice ? { notice: resolvedNotice } : {}),
@@ -234,4 +248,8 @@ function parsePlayback(value: unknown): 'allow' | 'block' | 'policy' {
     throw new Error('Choose a valid playback setting')
   }
   return playback as 'allow' | 'block' | 'policy'
+}
+
+async function changesEnabled(deps: BumperAdministrationControllerDeps): Promise<boolean> {
+  return typeof deps.writable === 'function' ? deps.writable() : deps.writable
 }

@@ -5,7 +5,7 @@ import type {
   BumperScanStatus,
 } from '../services/BumperAdministrationService'
 import type { StationAssetKind } from '../services/StationAssetService'
-import { renderLayout } from './layout'
+import { renderLayout, renderLibraryNavigation } from './layout'
 import { escapeHtml, formatTime } from './utils'
 
 export type BumperAdminFilter = 'all' | 'attention' | BumperScanStatus
@@ -15,6 +15,7 @@ export interface BumperAdministrationViewModel {
   readonly scan: BumperScanResult
   readonly filter: BumperAdminFilter
   readonly shows: readonly string[]
+  readonly canChangeAccess?: boolean
   readonly writable: boolean
   readonly preview?: { readonly id: number; readonly filename: string }
   readonly notice?: { readonly kind: 'success' | 'warning'; readonly message: string }
@@ -46,20 +47,13 @@ export function renderBumperAdministration(
           <button class="btn btn-primary" type="submit">Scan bumper files</button>
         </form>
       </header>
-      <nav class="collection-library-nav" aria-label="Library sections">
-        <a href="/library">Overview</a>
-        <a href="/library/tv">TV shows</a>
-        <a href="/library/movies">Movies</a>
-        <a href="/library/interludes">Asset files</a>
-        <a href="/library/bumpers" aria-current="page">Station Assets</a>
-        <a href="/library/review">Review queue</a>
-      </nav>
+      ${renderLibraryNavigation('bumpers')}
       ${view.notice ? `<div class="bumper-notice bumper-notice-${view.notice.kind}" role="status">${escapeHtml(view.notice.message)}</div>` : ''}
-      ${view.writable ? '' : '<div class="bumper-notice bumper-notice-warning">The Station Assets library is read-only. Scanning works, but files cannot be uploaded, generated, renamed, or marked.</div>'}
       ${view.directory ? `<section class="bumper-source" aria-label="Station assets folder">
-        <strong>${view.directory.state === 'ready' ? 'Folder connected' : 'Folder needs attention'}</strong>
+        <strong>${view.directory.state !== 'ready' ? 'Folder needs attention' : view.directory.writable ? 'Folder connected · Changes enabled' : !view.directory.changesEnabled ? 'Folder connected · Changes disabled' : 'Folder connected · Read-only access'}</strong>
         <code>${escapeHtml(view.directory.path)}</code>
         <p>${escapeHtml(view.directory.message)}</p>
+        ${view.canChangeAccess ? `<form class="bumper-access-control" method="post" action="/library/bumpers/access"><input type="hidden" name="enabled" value="${view.directory.changesEnabled ? 'false' : 'true'}"><button class="btn btn-secondary" type="submit">${view.directory.changesEnabled ? 'Disable station asset changes' : 'Enable station asset changes'}</button><span>Saved in <a href="/settings#library-services">Settings → Library</a>. No restart required.</span></form>` : ''}
         <details><summary>Unraid folder setup</summary><p>Use a <strong>Path</strong> mapping: your host folder (for example, <code>/mnt/user/Media/Interludes/</code>) → container path <code>${escapeHtml(view.directory.path)}</code>. Use Read/Write access for uploads. Apply the changes in Unraid, then select Scan bumper files. A connected empty folder is detected even when it has no videos.</p><p>Supported files: MP4, MKV, AVI, MOV, and WebM, including subfolders. Other formats are not imported. Files still need a valid duration and playback approval.</p></details>
       </section>` : ''}
       <section class="bumper-summary" aria-label="Bumper scan summary">

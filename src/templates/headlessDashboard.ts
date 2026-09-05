@@ -368,6 +368,7 @@ export function renderHeadlessDashboardContent(
         <div>
           <p class="headless-eyebrow">Operations</p>
           <h1>System overview</h1>
+          <p class="admin-page-description">Monitor broadcasts, review library activity, and check connected TVs.</p>
         </div>
         <div class="headless-server-state headless-server-${view.server.status}" role="status" aria-live="polite">
           <strong><span aria-hidden="true">${serverStatus.icon}</span> ${serverStatus.label}</strong>
@@ -391,7 +392,7 @@ export function renderHeadlessDashboardContent(
           ${
             view.channels.length > 0
               ? view.channels.map(renderChannel).join('')
-              : '<p class="headless-empty">No channels are configured.</p>'
+              : '<p class="headless-empty">No channels are configured. <a href="/channels?builder=create#station-builder">Create your first station</a> to start broadcasting.</p>'
           }
         </div>
       </section>
