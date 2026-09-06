@@ -956,15 +956,15 @@ describe('ChannelService', () => {
     const now = await service.getNow('kids-club')
 
     expect(now?.program).toMatchObject({
-      mediaId: 90,
-      type: 'interlude',
+      generated: 'schedule-card',
+      type: 'bumper',
       scheduledStart: '2026-08-23T22:40:00.000Z',
       scheduledEnd: '2026-08-23T22:40:30.000Z',
       offsetSeconds: 10,
     })
     expect(now?.next).toMatchObject({
-      mediaId: 1,
-      type: 'program',
+      generated: 'schedule-card',
+      type: 'bumper',
       scheduledStart: '2026-08-23T22:40:30.000Z',
     })
   })
@@ -1025,11 +1025,12 @@ describe('ChannelService', () => {
         programs[index - 1]?.scheduledEnd
       )
     }
-    expect(programs.filter((item) => item.type === 'interlude')).toHaveLength(7)
-    expect(programs.at(-1)).toMatchObject({
-      durationSeconds: 40,
-      sourceDurationSeconds: 40,
-    })
+    expect(programs.some((item) => item.generated === 'schedule-card')).toBe(true)
+    for (const item of programs.filter((item) => item.mediaId === 90)) {
+      expect(item.sourceDurationSeconds).toBe(60)
+      expect(item.durationSeconds).toBe(60)
+    }
+    expect(programs.filter((item) => item.mediaId === 90).length).toBeLessThanOrEqual(1)
   })
 
   test('spreads a slot remainder across its breaks instead of banking it as a tail', async () => {
@@ -1097,7 +1098,7 @@ describe('ChannelService', () => {
     let longestRunSeconds = 0
     let runSeconds = 0
     for (const item of programs) {
-      if (item.type === 'interlude') {
+      if (item.type === 'interlude' || item.generated) {
         run++
         runSeconds += item.durationSeconds
         longestRunSeconds = Math.max(longestRunSeconds, runSeconds)
@@ -1112,7 +1113,7 @@ describe('ChannelService', () => {
     // Breaks land between programmes rather than all after the last one.
     const breakCount = programs.filter(
       (item, index) =>
-        item.type === 'interlude' && programs[index - 1]?.type === 'program'
+        (item.type === 'interlude' || item.generated) && programs[index - 1]?.type === 'program'
     ).length
     expect(breakCount).toBeGreaterThanOrEqual(5)
 
@@ -1135,8 +1136,8 @@ describe('ChannelService', () => {
       durationSeconds: 1411,
     }))
     const assets = [
-      named(200, 'nickelodeon--filler--generic-break-out--2009--N1-01.mp4', 12),
-      named(201, 'nickelodeon--filler--generic-break-in--2009--N1-02.mp4', 9),
+      named(200, 'nickelodeon--filler--generic-break-out--2009--N1-01.mp4', 12.4),
+      named(201, 'nickelodeon--filler--generic-break-in--2009--N1-02.mp4', 9.7),
       /* "Starts right now" only makes sense against the start of the show it
          names, so it must be the last thing in the pod. */
       named(
@@ -1182,10 +1183,17 @@ describe('ChannelService', () => {
     )
 
     const programs = (await service.getGuide('nick', 4))?.programs ?? []
+    for (const item of programs) {
+      const original = assets.find((asset) => asset.id === item.mediaId)
+      if (original) expect(item.durationSeconds).toBeCloseTo(original.durationSeconds, 3)
+    }
+    for (let i = 1; i < programs.length; i++) {
+      expect(programs[i]!.scheduledStart).toBe(programs[i - 1]!.scheduledEnd)
+    }
     const pods: number[][] = []
     let pod: number[] = []
     for (const item of programs) {
-      if (item.type === 'interlude') pod.push(item.mediaId)
+      if (item.type === 'interlude' || item.generated) pod.push(item.mediaId)
       else if (pod.length > 0) {
         pods.push(pod)
         pod = []

@@ -309,6 +309,26 @@ describe('station asset filenames and selection', () => {
 })
 
 describe('filling a long gap', () => {
+  test('long exports do not exclude short fillers and fresh choices beat repeats', () => {
+    const pool = [10, 12, 18, 28, 60, 120].map((seconds, i) => asset(i + 100, `nick__filler-general__target-${seconds}s__v01.mp4`, seconds))
+    const recent: string[] = []
+    const used = new Set<number>()
+    for (let i = 0; i < pool.length; i++) {
+      const choice = selectStationFillerAsset(pool, 'nick', 180, `mixed-${i}`, recent)!
+      expect(recent).not.toContain(choice.filename)
+      recent.push(choice.filename); used.add(choice.durationSeconds)
+    }
+    expect(used.size).toBe(pool.length)
+  })
+
+  test('transition alternatives rotate within the correct semantic tier', () => {
+    const pool = [1, 2].map((id) => asset(id, `nick__bumper-up-next__next-spongebob__v0${id}.mp4`))
+    const context = { station: 'nick', currentShow: 'other', nextShow: 'spongebob', seed: 'same' }
+    const first = selectStationTransitionAsset(pool, context)!
+    const second = selectStationTransitionAsset(pool, { ...context, recentlyPlayed: [first.filename] })!
+    expect(first.id).not.toBe(second.id)
+  })
+
   /* Reproduces what Nickelodeon actually aired: a 14m21s hole between a
      programme ending at 08:45:39 and the next slot at 09:00, filled with the
      same 28s clip thirty times. The library had 190 fillers available; the
@@ -379,8 +399,8 @@ describe('filling a long gap', () => {
     expect(plays).toBe(3)
   })
 
-  test('when nothing fits, truncates the shortest rather than a long clip', () => {
-    // A 2s remainder should cut a 5s clip, not carve 2s out of a 28s one.
-    expect(selectStationFillerAsset(library, 'nick', 2, 'tail')?.id).toBe(6)
+  test('when nothing fits, leaves the remainder for a generated card', () => {
+    // A 2s remainder must not shorten any imported clip.
+    expect(selectStationFillerAsset(library, 'nick', 2, 'tail')).toBeUndefined()
   })
 })

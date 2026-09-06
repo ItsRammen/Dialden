@@ -1,3 +1,4 @@
+import { ScheduleCardService } from './services/ScheduleCardService'
 /**
  * ToastTV Admin Web Server
  *
@@ -179,7 +180,8 @@ export async function createServer(
     () => configService.get(),
     channelLogos,
     undefined,
-    () => transcodingStatus.activeBackend === 'intel-qsv'
+    () => transcodingStatus.activeBackend === 'intel-qsv',
+    new ScheduleCardService(getDataPath('schedule-cards'))
   )
   const channelWorkers = new ContinuousChannelWorkerManager(
     channelTimeline,

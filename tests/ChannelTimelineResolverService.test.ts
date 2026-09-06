@@ -534,3 +534,22 @@ describe('ChannelTimelineResolverService', () => {
     })
   })
 })
+
+
+test('generated schedule cards resolve without a catalog row and support joining mid-card', async () => {
+  const card = { ...program('card', 0, '2026-08-24T19:30:00Z', '2026-08-24T19:30:30Z', 'bumper'), generated: 'schedule-card' as const }
+  const episode = program('episode', 1, '2026-08-24T19:30:30Z', '2026-08-24T20:00:00Z')
+  const programs = [card, episode]
+  const lookedUp: number[] = []
+  const resolver = new ChannelTimelineResolverService(
+    { getGuide: async () => ({ channelId: 'kids', serverTime: '2026-08-24T19:30:10Z', serverTimeMs: Date.parse('2026-08-24T19:30:10Z'), timezone: 'UTC', timelineRevision: 'cards', requestedEnd: episode.scheduledEnd, coverageEnd: episode.scheduledEnd, truncated: false, programs }) },
+    { resolveForChannelWorker: async (id) => { lookedUp.push(id); return { path: '/episode.mkv', size: 1, mimeType: 'video/x-matroska', lastModified: new Date(0) } } },
+    { getById: async () => null }, undefined, undefined, () => true, () => false,
+    { resolve: async (request) => { expect(request.programs).toBe(programs); expect(request.program).toBe(card); return '/cards/card.mp4' } }
+  )
+  const result = await resolver.resolveWindow('kids', new Date('2026-08-24T19:30:10Z'), 2)
+  expect(lookedUp).toEqual([1])
+  expect(result).toHaveLength(2)
+  expect(result[0]).toMatchObject({ sourcePath: '/cards/card.mp4', sourceOffsetSeconds: 10, sourceDurationSeconds: 20, type: 'bumper' })
+  expect(result[1]).toMatchObject({ sourcePath: '/episode.mkv', sourceOffsetSeconds: 0 })
+})

@@ -1,3 +1,4 @@
+import type { ScheduleCardService } from './ScheduleCardService'
 import { existsSync } from 'node:fs'
 import type { AppConfig } from '../repositories/ConfigRepository'
 import type {
@@ -44,7 +45,8 @@ export class ChannelTimelineResolverService implements ChannelTimelineResolver {
     private readonly logos?: Pick<ChannelLogoStore, 'path'> &
       Partial<Pick<ChannelLogoStore, 'has'>>,
     private readonly sourceExists: (path: string) => boolean = existsSync,
-    private readonly hardwareDecodesH264: () => boolean = () => false
+    private readonly hardwareDecodesH264: () => boolean = () => false,
+    private readonly scheduleCards?: Pick<ScheduleCardService, 'resolve'>
   ) {}
 
   /** Effective logo metadata for the client UI at the authoritative response time. */
@@ -160,10 +162,27 @@ export class ChannelTimelineResolverService implements ChannelTimelineResolver {
       .slice(0, Math.max(1, minimumItems))
     const result: ChannelTimelinePosition[] = []
     const resolvedWindow = await Promise.all(
-      window.map(async (program) => ({
-        resolved: await this.media.resolveForChannelWorker(program.mediaId),
-        item: await this.repository.getById(program.mediaId),
-      }))
+      window.map(async (program) => {
+        if (program.generated === 'schedule-card') {
+          if (!this.scheduleCards) return { resolved: null, item: null }
+          const channel = this.channel(channelId)
+          const selected = channel ? this.resolveBranding(channel, new Date(program.scheduledStart)) : undefined
+          let logoPath: string | undefined
+          if (selected?.policy.mode === 'custom' && this.logos) {
+            const path = this.logos.path(channelId, selected.logoId)
+            if (this.sourceExists(path)) logoPath = path
+          }
+          const path = await this.scheduleCards.resolve({
+            channelName: channel?.name ?? channelId, timezone: guide.timezone,
+            program, programs: guide.programs, logoPath,
+          })
+          return { resolved: { path }, item: { hasAudio: true, width: 1280, height: 720, codec: 'h264', compatibility: 'compatible', pixelFormat: 'yuv420p' } as MediaItem }
+        }
+        return {
+          resolved: await this.media.resolveForChannelWorker(program.mediaId),
+          item: await this.repository.getById(program.mediaId),
+        }
+      })
     )
 
     for (let index = 0; index < window.length; index++) {

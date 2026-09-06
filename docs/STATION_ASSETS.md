@@ -76,7 +76,9 @@ At a transition, ToastTV tries:
 4. A generic station ident.
 5. A legacy, unstructured interlude.
 
-At the unused end of a bounded lineup slot, it prefers `filler-general`, then `standby-loop`, and clips the final scheduled play to the slot boundary. An ident is used as filler only when it is long enough to cover the remaining time.
+Imported clips only play when their full duration fits. Breaks reserve room for closing bumpers, then use a short station ident or varied filler and generated Coming Up cards for the remaining time. Cards show actual show names and times from the final guide for the next hour. Long fillers no longer exclude the short pool, and recent fillers are skipped instead of looping to fill a gap.
+
+Cards are rendered ahead of playback with software FFmpeg, cached outside the media library for 24 hours, and include a silent stereo audio track. They appear in the Admin guide and remain hidden in the User guide. Only generated cards are sized to the remaining gap; imported clips are never shortened.
 
 Assets never cross station prefixes: a `nick` schedule will not borrow a `cbbc` filler.
 Files that contain the structured `__` separators but fail the contract are withheld from automatic matching instead of silently becoming generic legacy bumpers.
@@ -131,4 +133,4 @@ the end of bounded schedule slots.
 - Show-specific bumpers mention the actual adjacent scheduled shows.
 - The same schedule inputs produce the same bumper variant.
 - No asset with another station prefix appears on Nick.
-- The final filler ends exactly on the next slot boundary.
+- A generated card fills any remainder before the next slot boundary.

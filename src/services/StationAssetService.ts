@@ -64,6 +64,7 @@ export interface StationTransitionContext {
   readonly followingShow?: string
   readonly seed: string
   readonly maximumDurationSeconds?: number
+  readonly recentlyPlayed?: readonly string[]
   /*
    * Which end of the break this is for. 'break-out' wants the piece that leaves
    * the show -- "we'll be right back" -- and 'break-in' the piece that hands
@@ -360,7 +361,10 @@ export function selectStationTransitionAsset(
         : [nowNext, more, upNext, ident]
   for (const matches of priorities) {
     const candidates = described.filter(matches).map((entry) => entry.item)
-    if (candidates.length > 0) return deterministicCandidate(candidates, context.seed)
+    if (candidates.length > 0) {
+      const fresh = candidates.filter((item) => !(context.recentlyPlayed ?? []).slice(-8).includes(item.filename))
+      return deterministicCandidate(fresh.length ? fresh : candidates, context.seed)
+    }
   }
   /* Unnamed assets stand in for a handover, which every break needs, but never
      for the leaving bumper, which is optional. Without this an unparsed sting
@@ -374,7 +378,8 @@ export function selectStationTransitionAsset(
       (context.maximumDurationSeconds === undefined ||
         item.durationSeconds <= context.maximumDurationSeconds)
   )
-  return legacy.length > 0 ? deterministicCandidate(legacy, context.seed) : undefined
+  const freshLegacy = legacy.filter((item) => !(context.recentlyPlayed ?? []).slice(-8).includes(item.filename))
+  return legacy.length > 0 ? deterministicCandidate(freshLegacy.length ? freshLegacy : legacy, context.seed) : undefined
 }
 
 /*
@@ -462,17 +467,7 @@ export function selectStationFillerAsset(
   const fitting = candidates.filter(
     (entry) => entry.item.durationSeconds <= remainingSeconds
   )
-  if (fitting.length === 0) {
-    /* Nothing fits, so whatever is chosen gets truncated to the remainder.
-       The shortest asset loses the least of itself doing that. */
-    const shortest = Math.min(...candidates.map((entry) => entry.item.durationSeconds))
-    return deterministicCandidate(
-      candidates
-        .filter((entry) => entry.item.durationSeconds === shortest)
-        .map((entry) => entry.item),
-      seed
-    )
-  }
+  if (fitting.length === 0) return undefined
 
   /* Having a date window is only worth anything if the piece actually airs
      while it holds, so an in-season piece is taken ahead of the evergreen
@@ -493,7 +488,7 @@ export function selectStationFillerAsset(
     )
   }
 
-  const longest = Math.max(...fitting.map((entry) => entry.item.durationSeconds))
+  const longest = Math.min(30, Math.max(...fitting.map((entry) => entry.item.durationSeconds)))
   const longEnough = fitting.filter(
     (entry) => entry.item.durationSeconds >= longest * FILLER_LENGTH_BAND
   )
@@ -501,7 +496,8 @@ export function selectStationFillerAsset(
      with one usable filler still has to fill the gap with it. */
   const recent = new Set(recentlyPlayed.slice(-FILLER_SPACING))
   const unplayed = longEnough.filter((entry) => !recent.has(entry.item.filename))
-  const choices = unplayed.length > 0 ? unplayed : longEnough
+  const anyFresh = fitting.filter((entry) => !recent.has(entry.item.filename))
+  const choices = unplayed.length > 0 ? unplayed : anyFresh.length > 0 ? anyFresh : longEnough
   return deterministicCandidate(
     choices.map((entry) => entry.item),
     seed

@@ -1,6 +1,7 @@
 import type { IMediaRepository } from '../repositories/IMediaRepository'
 import type { MediaItem } from '../types'
 import {
+  parseStationAssetFilename,
   selectStationFillerAsset,
   selectStationTransitionAsset,
   STATION_ASSET_HISTORY,
@@ -97,6 +98,7 @@ export interface ScheduledProgram {
   readonly id: string
   readonly channelId: string
   readonly mediaId: number
+  readonly generated?: 'schedule-card'
   readonly title: string
   readonly collectionTitle: string
   readonly episodeLabel?: string
@@ -135,7 +137,7 @@ export interface DirectPlaybackDescriptor {
 }
 
 export interface CurrentProgram extends ScheduledProgram {
-  readonly playback: DirectPlaybackDescriptor
+  readonly playback: DirectPlaybackDescriptor | { readonly mode: 'hls'; readonly url: string; readonly sourceOffsetAtPlaybackZeroMs: 0 }
   readonly offsetMs: number
   readonly offsetSeconds: number
 }
@@ -697,7 +699,7 @@ export class ChannelService {
       program: current
         ? {
             ...current,
-            playback: this.directPlayback(current.mediaId),
+            playback: current.generated ? { mode: 'hls', url: `/api/v1/channels/${encodeURIComponent(channel.id)}/live/index.m3u8`, sourceOffsetAtPlaybackZeroMs: 0 } : this.directPlayback(current.mediaId),
             offsetMs: Math.max(
               0,
               nowMs - Date.parse(current.scheduledStart)
@@ -1765,7 +1767,7 @@ export class ChannelService {
       }
 
       const breakSlots =
-        interludes.length === 0 ? 0 : Math.floor(planned.length / frequency)
+        !this.interludePolicy.enabled ? 0 : Math.floor(planned.length / frequency)
       const budgets = this.elasticBreakBudgets(
         slotSeconds - plannedSeconds - minBreakSeconds * breakSlots,
         breakSlots,
@@ -1797,7 +1799,7 @@ export class ChannelService {
         cursorMs = scheduledEnd.getTime()
         sequence++
 
-        if (interludes.length === 0 || (index + 1) % frequency !== 0) continue
+        if (!this.interludePolicy.enabled || (index + 1) % frequency !== 0) continue
         const budget = budgets[breakIndex] ?? 0
         breakIndex++
         if (budget <= 0) continue
@@ -1819,16 +1821,22 @@ export class ChannelService {
          has more empty time than a believable break load can cover, so it is
          genuinely unfilled rather than merely unbroken. */
       const recentFillers: string[] = [...recentBreakAssets]
-      while (cursorMs < end.getTime() && sequence < MAX_PROGRAMS_PER_SLOT) {
-        const remainingSeconds = Math.ceil((end.getTime() - cursorMs) / 1000)
+      while (this.interludePolicy.enabled && cursorMs < end.getTime() && sequence < MAX_PROGRAMS_PER_SLOT) {
+        const remainingSeconds = (end.getTime() - cursorMs) / 1000
         const filler = selectStationFillerAsset(
-          interludes,
+          interludes.filter((item) => !recentFillers.includes(item.filename)),
           this.stationAssetKey(channel),
           remainingSeconds,
           `${channel.id}|${cursorMs}|filler`,
           recentFillers
         )
-        if (!filler) break
+        if (!filler || sequence % 2 === 0) {
+          const cardEnd = Math.min(end.getTime(), cursorMs + 30_000)
+          programs.push(this.scheduleCard(channel, cursorMs, cardEnd))
+          cursorMs = cardEnd
+          sequence++
+          continue
+        }
         recentFillers.push(filler.filename)
         if (recentFillers.length > FILLER_MEMORY) recentFillers.shift()
         const playSeconds = Math.min(filler.durationSeconds, remainingSeconds)
@@ -1998,6 +2006,7 @@ export class ChannelService {
 
     const frequency = this.interludeFrequency()
     const output: MediaItem[] = []
+    const recent: string[] = []
     let programCount = 0
     for (let repetition = 0; repetition < frequency; repetition++) {
       for (let index = 0; index < programs.length; index++) {
@@ -2015,8 +2024,9 @@ export class ChannelService {
               ? { followingShow: this.stationProgramKey(following) }
               : {}),
             seed: `${seed}|${repetition}|${index}|transition`,
+            recentlyPlayed: recent,
           })
-          if (interlude) output.push(interlude)
+          if (interlude) { output.push(interlude); recent.push(interlude.filename); if (recent.length > FILLER_MEMORY) recent.shift() }
         }
       }
     }
@@ -2070,10 +2080,8 @@ export class ChannelService {
     return budgets
   }
 
-  /* One break, built as a pod rather than a single sting: the context-aware
-     transition asset leads so "coming up next" still lands against the right
-     show, then generic fillers pad out the remaining budget. Returns the new
-     cursor. */
+  /* Reserve the closing handover before adding opening assets and cards.
+     Imported clips always play in full. Returns the new cursor. */
   private emitBreakPod(
     programs: ScheduledProgram[],
     channel: LibraryChannelPolicy,
@@ -2100,17 +2108,10 @@ export class ChannelService {
       options.recent.push(item.filename)
       if (options.recent.length > FILLER_MEMORY) options.recent.shift()
     }
-    const emit = (item: MediaItem): void => {
-      const playSeconds = Math.min(
-        item.durationSeconds,
-        Math.ceil((podEndMs - cursorMs) / 1000)
-      )
-      const scheduledEnd = new Date(
-        Math.min(podEndMs, cursorMs + playSeconds * 1000)
-      )
-      programs.push(
-        this.scheduledProgram(channel, item, new Date(cursorMs), scheduledEnd)
-      )
+    const emit = (item: MediaItem, limitMs = podEndMs): void => {
+      if (item.durationSeconds * 1000 > limitMs - cursorMs) return
+      const scheduledEnd = new Date(cursorMs + item.durationSeconds * 1000)
+      programs.push(this.scheduledProgram(channel, item, new Date(cursorMs), scheduledEnd))
       cursorMs = scheduledEnd.getTime()
       remember(item)
     }
@@ -2134,6 +2135,7 @@ export class ChannelService {
       ? selectStationTransitionAsset(interludes, {
           ...bumperContext,
           seed: options.seed,
+          recentlyPlayed: options.recent,
           maximumDurationSeconds: budgetSeconds,
           position: 'break-in',
         })
@@ -2170,31 +2172,52 @@ export class ChannelService {
       ? selectStationTransitionAsset(interludes, {
           ...bumperContext,
           seed: `${options.seed}|leaving`,
+          recentlyPlayed: options.recent,
           maximumDurationSeconds: Math.floor((fillEndMs - cursorMs) / 1000),
           position: 'break-out',
         })
       : undefined
-    if (leaving) emit(leaving)
+    if (leaving) emit(leaving, fillEndMs)
     const breakOut = pick('break-out', fillEndMs)
-    if (breakOut) emit(breakOut)
+    if (breakOut) emit(breakOut, fillEndMs)
 
-    while (cursorMs < fillEndMs) {
-      const remainingSeconds = Math.ceil((fillEndMs - cursorMs) / 1000)
-      const filler = selectStationFillerAsset(
-        interludes,
-        station,
-        remainingSeconds,
-        `${options.seed}|pod|${cursorMs}`,
-        options.recent
+    // A short station logo may precede the card; never pad a pod with a loop
+    // of imported clips. Only generated cards may be sized to the remainder.
+    const logo = interludes.find((item) => {
+      const descriptor = parseStationAssetFilename(item.filename)
+      return descriptor?.station === station && descriptor.kind === 'ident-general' && !descriptor.sequence && !descriptor.role &&
+        item.durationSeconds <= 15 && !options.recent.includes(item.filename) &&
+        item.durationSeconds * 1000 + 5000 <= fillEndMs - cursorMs
+    })
+    if (logo) emit(logo, fillEndMs)
+    else {
+      const middle = selectStationFillerAsset(
+        interludes.filter((item) => !options.recent.includes(item.filename) && item.id !== transition?.id && item.id !== breakIn?.id),
+        station, Math.max(0, (fillEndMs - cursorMs) / 1000 - 5), `${options.seed}|middle`, options.recent
       )
-      if (!filler) break
-      emit(filler)
+      if (middle) emit(middle, fillEndMs)
+    }
+    while (cursorMs < fillEndMs) {
+      const cardEnd = Math.min(fillEndMs, cursorMs + 30_000)
+      programs.push(this.scheduleCard(channel, cursorMs, cardEnd))
+      cursorMs = cardEnd
     }
 
     // Closing the break, before the show-aware bumper hands over.
     if (breakIn) emit(breakIn)
     if (transition) emit(transition)
     return cursorMs
+  }
+
+  private scheduleCard(channel: LibraryChannelPolicy, startMs: number, endMs: number): ScheduledProgram {
+    return {
+      id: `${channel.id}:${startMs}:schedule-card`, channelId: channel.id,
+      mediaId: 0, generated: 'schedule-card', title: 'Coming up · ' + channel.name,
+      collectionTitle: 'Station schedule', scheduledStart: new Date(startMs).toISOString(),
+      scheduledEnd: new Date(endMs).toISOString(), durationSeconds: (endMs - startMs) / 1000,
+      durationMs: endMs - startMs, type: 'bumper', sourceStartSeconds: 0,
+      sourceDurationSeconds: (endMs - startMs) / 1000, transitionIn: 'hard_cut', transitionOut: 'hard_cut',
+    }
   }
 
   private stationAssetKey(channel: LibraryChannelPolicy): string {
@@ -2322,7 +2345,7 @@ export class ChannelService {
       ? { enabled: true, frequency: this.interludeFrequency() }
       : undefined
     return this.hash(
-      JSON.stringify({ channel, catalogHash: source.catalogHash, interlude })
+      JSON.stringify({ scheduleVersion: 'whole-clips-and-cards-v1', channel, catalogHash: source.catalogHash, interlude })
     )
       .toString(16)
       .padStart(8, '0')
@@ -2335,7 +2358,7 @@ export class ChannelService {
     const interlude = this.interludePolicy.enabled
       ? { enabled: true, frequency: this.interludeFrequency() }
       : undefined
-    return this.hash(JSON.stringify({ channel, catalog, interlude }))
+    return this.hash(JSON.stringify({ scheduleVersion: 'whole-clips-and-cards-v1', channel, catalog, interlude }))
       .toString(16)
       .padStart(8, '0')
   }
