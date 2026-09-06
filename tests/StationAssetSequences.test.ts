@@ -34,6 +34,7 @@ describe('interactive sequence metadata', () => {
     expect(descriptor?.sequence).toEqual({
       family: 'play-with-us',
       id: 'nick-jr-play-with-us-elephants',
+      subject: 'elephants',
       part: 'A',
     })
     expect(parseStationAssetFilename(ELEPHANTS_C)?.sequence?.part).toBe('C')

@@ -13,8 +13,17 @@ export interface StationAssetSequence {
   readonly family: 'play-with-us'
   /** Groups the parts. Stable across a rebuild of the library. */
   readonly id: string
+  /** Full distinguishing slug: 'purple-dolls-mat' never collapses to 'mat'. */
+  readonly subject: string
   readonly part: 'A' | 'B' | 'C'
 }
+
+/*
+ * Where a piece sits in a break. 'break-out' leads, straight off the end of the
+ * programme; 'break-in' closes, immediately before programming resumes; anything
+ * unmarked is standalone and safe to place anywhere.
+ */
+export type StationAssetRole = 'break-out' | 'break-in' | 'standalone'
 
 export interface StationAssetDescriptor {
   readonly station: string
@@ -31,6 +40,11 @@ export interface StationAssetDescriptor {
   readonly legacyWebCta?: boolean
   /** Says the show starts now, so it only works immediately before that show. */
   readonly rightNow?: boolean
+  /** Position within a break; absent means standalone. */
+  readonly role?: StationAssetRole
+  /* Carries a generic tune-in such as "weekdays on Nick". Evergreen, unlike the
+     dated premiere material the importer rejects outright. */
+  readonly scheduleCta?: boolean
 }
 
 export interface StationAssetConfiguration {
@@ -194,7 +208,12 @@ function parseAssetCodeMetadata(
     const subject = sequence[1] as string
     const part = (sequence[2] as string).toUpperCase() as 'A' | 'B' | 'C'
     return {
-      sequence: { family: 'play-with-us', id: `${station}-play-with-us-${subject}`, part },
+      sequence: {
+        family: 'play-with-us',
+        id: `${station}-play-with-us-${subject}`,
+        subject,
+        part,
+      },
     }
   }
 
@@ -212,6 +231,18 @@ function parseAssetCodeMetadata(
   return {}
 }
 
+/*
+ * Long-form pieces name their position in the break at the end of the code, and
+ * the older short filler exports already use the same suffix. Read it from
+ * either, so 'generic-break-out' and a long-form '...-helpful-hints-break-out'
+ * are placed the same way.
+ */
+function parseAssetRole(label: string): { role?: StationAssetRole } {
+  if (/(?:^|-)break-out$/.test(label)) return { role: 'break-out' }
+  if (/(?:^|-)break-in$/.test(label)) return { role: 'break-in' }
+  return {}
+}
+
 /** Canonical completed exports from nickstory_toasttv_combined_v5.py. */
 export function parseNickstoryAssetFilename(filename: string): StationAssetDescriptor | null {
   const fields = filename.replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, '').toLowerCase().split('--')
@@ -221,6 +252,11 @@ export function parseNickstoryAssetFilename(filename: string): StationAssetDescr
   const year = fields.pop()
   if (!station || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(station) ||
       !year || !/^(19|20)\d{2}$/.test(year) || !code || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(code)) return null
+  /* Hosted themed-night and stunt packaging needs an event context this
+     scheduler does not model, so it is never an ordinary station asset. The
+     exporter quarantines it outside the active tree; this is the backstop for
+     a copy that predates that, or one filed by hand. */
+  if (type === 'event-packaging') return null
   const resolved = station === 'nickelodeon' ? 'nick' : station
   const base = { station: resolved, ...parseAssetCodeMetadata(resolved, code) }
   const show = (value: string | undefined): value is string =>
@@ -239,7 +275,16 @@ export function parseNickstoryAssetFilename(filename: string): StationAssetDescr
   const kinds = { ident: 'ident-general', filler: 'filler-general', standby: 'standby-loop' } as const
   const kind = type && Object.prototype.hasOwnProperty.call(kinds, type)
     ? kinds[type as keyof typeof kinds] : undefined
-  return kind ? { ...base, kind } : null
+  if (!kind) return null
+  /* The semantic field carries the break position and the tune-in marker; the
+     production code carries sequence and UGC metadata. Long-form pieces use the
+     same suffixes as the older short exports, so both read the same way. */
+  return {
+    ...base,
+    kind,
+    ...parseAssetRole(value),
+    ...(value.includes('schedule-cta') ? { scheduleCta: true } : {}),
+  }
 }
 
 function sameStationShow(left: string | undefined, right: string | undefined): boolean {
@@ -326,7 +371,15 @@ export function selectStationFillerAsset(
   remainingSeconds: number,
   seed: string,
   /** Filenames just played in this gap, so the same clip is not repeated. */
-  recentlyPlayed: readonly string[] = []
+  recentlyPlayed: readonly string[] = [],
+  /*
+   * Restricts the pool to one break position. Omitted, positional pieces are
+   * held back: a break-out belongs against the end of a programme and a
+   * break-in against the start of the next, so neither should turn up loose in
+   * the middle of a pod. They are still used rather than wasted if a station
+   * has nothing else.
+   */
+  role?: StationAssetRole
 ): MediaItem | undefined {
   const described = items
     .map((item) => ({ item, descriptor: parseStationAssetFilename(item.filename) }))
@@ -339,7 +392,15 @@ export function selectStationFillerAsset(
   /* A part of an ordered sequence is meaningless on its own -- an unanswered
      question, or an answer to one nobody heard -- so it never enters the
      independent rotation. selectStationInteractiveSequence places them. */
-  const standalone = described.filter((entry) => !entry.descriptor.sequence)
+  const placeable = described.filter((entry) => !entry.descriptor.sequence)
+  const positioned = role
+    ? placeable.filter((entry) =>
+        role === 'standalone'
+          ? entry.descriptor.role === undefined
+          : entry.descriptor.role === role
+      )
+    : placeable.filter((entry) => entry.descriptor.role === undefined)
+  const standalone = positioned.length > 0 || role ? positioned : placeable
   const fillers = standalone.filter((entry) => entry.descriptor.kind === 'filler-general')
   const standby = standalone.filter((entry) => entry.descriptor.kind === 'standby-loop')
   const idents = standalone.filter((entry) => entry.descriptor.kind === 'ident-general')

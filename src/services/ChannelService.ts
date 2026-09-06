@@ -5,6 +5,7 @@ import {
   selectStationTransitionAsset,
   stationShowKey,
 } from './StationAssetService'
+import type { StationAssetRole } from './StationAssetService'
 import type {
   ChannelAutomationCollectionRef,
   ChannelAutomationHandoffPolicy,
@@ -2111,22 +2112,54 @@ export class ChannelService {
       remember(item)
     }
 
-    if (options.next) {
-      const transition = selectStationTransitionAsset(interludes, {
+    /* The show-aware bumper closes the pod, immediately before the programme it
+       names. Leading with it would put "Dora is coming up next" two minutes
+       early, and a rightNow piece -- "starts right now" -- would simply be
+       wrong. Its time is reserved up front so the fill cannot eat it. */
+    const transition = options.next
+      ? selectStationTransitionAsset(interludes, {
+          station,
+          currentShow: this.stationProgramKey(options.current),
+          nextShow: this.stationProgramKey(options.next),
+          ...(options.following
+            ? { followingShow: this.stationProgramKey(options.following) }
+            : {}),
+          seed: options.seed,
+          maximumDurationSeconds: Math.floor((podEndMs - cursorMs) / 1000),
+        })
+      : undefined
+    const afterTransitionMs = podEndMs - (transition?.durationSeconds ?? 0) * 1000
+
+    const pick = (
+      position: StationAssetRole,
+      limitMs: number
+    ): MediaItem | undefined => {
+      if (cursorMs >= limitMs) return undefined
+      const chosen = selectStationFillerAsset(
+        interludes,
         station,
-        currentShow: this.stationProgramKey(options.current),
-        nextShow: this.stationProgramKey(options.next),
-        ...(options.following
-          ? { followingShow: this.stationProgramKey(options.following) }
-          : {}),
-        seed: options.seed,
-        maximumDurationSeconds: Math.floor((podEndMs - cursorMs) / 1000),
-      })
-      if (transition) emit(transition)
+        Math.floor((limitMs - cursorMs) / 1000),
+        `${options.seed}|${position}`,
+        options.recent,
+        position
+      )
+      return chosen && chosen.durationSeconds * 1000 <= limitMs - cursorMs
+        ? chosen
+        : undefined
     }
 
-    while (cursorMs < podEndMs) {
-      const remainingSeconds = Math.ceil((podEndMs - cursorMs) / 1000)
+    /* Reserved before the middle is filled, for the same reason as the
+       transition: fill first and there is never any budget left for a piece
+       whose whole point is to arrive last. */
+    const breakIn = pick('break-in', afterTransitionMs)
+    const fillEndMs = afterTransitionMs - (breakIn?.durationSeconds ?? 0) * 1000
+
+    // Straight off the end of the programme.
+    const breakOut = pick('break-out', fillEndMs)
+    if (breakOut) emit(breakOut)
+
+    while (cursorMs < fillEndMs) {
+      const remainingSeconds = Math.ceil((fillEndMs - cursorMs) / 1000)
       const filler = selectStationFillerAsset(
         interludes,
         station,
@@ -2137,6 +2170,10 @@ export class ChannelService {
       if (!filler) break
       emit(filler)
     }
+
+    // Closing the break, before the show-aware bumper hands over.
+    if (breakIn) emit(breakIn)
+    if (transition) emit(transition)
     return cursorMs
   }
 

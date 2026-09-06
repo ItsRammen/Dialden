@@ -42,7 +42,10 @@ describe('station asset filenames and selection', () => {
     ['up-next--the-fairly-oddparents', { kind: 'bumper-up-next', next: 'the-fairly-oddparents' }],
     ['now-next--now-spongebob-squarepants--next-the-fairly-oddparents', { kind: 'bumper-now-next', now: 'spongebob-squarepants', next: 'the-fairly-oddparents' }],
     ['ident--generic-station-id', { kind: 'ident-general' }],
-    ['filler--generic-break-in', { kind: 'filler-general' }],
+    ['filler--generic-break-in', { kind: 'filler-general', role: 'break-in' }],
+    ['filler--generic-break-out', { kind: 'filler-general', role: 'break-out' }],
+    ['filler--generic-long-form-nick-extra-helpful-hints-break-out', { kind: 'filler-general', role: 'break-out' }],
+    ['filler--generic-long-form-purple-and-brown', { kind: 'filler-general' }],
     ['standby--generic-standby', { kind: 'standby-loop' }],
   ] as const)('recognizes Nickstory v5 export %s', (fields, expected) => {
     expect(parseStationAssetFilename(`nickelodeon--${fields}--2008--NHD12095-11-2.m4v`)).toEqual({ station: 'nick', ...expected })

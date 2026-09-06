@@ -1123,6 +1123,87 @@ describe('ChannelService', () => {
     }
   })
 
+  test('orders a break pod break-out first and the show-aware bumper last', async () => {
+    const repository = mock<IMediaRepository>()
+    const named = (id: number, filename: string, duration: number): MediaItem => ({
+      ...interlude(id, duration),
+      filename,
+    })
+    const episodes = Array.from({ length: 4 }, (_, index) => ({
+      ...video(index + 1, 'The Wild Thornberrys (1998)'),
+      path: `/media/tv/The Wild Thornberrys (1998)/episode-${index + 1}.mkv`,
+      durationSeconds: 1411,
+    }))
+    const assets = [
+      named(200, 'nickelodeon--filler--generic-break-out--2009--N1-01.mp4', 12),
+      named(201, 'nickelodeon--filler--generic-break-in--2009--N1-02.mp4', 9),
+      /* "Starts right now" only makes sense against the start of the show it
+         names, so it must be the last thing in the pod. */
+      named(
+        202,
+        'nickelodeon--up-next--the-wild-thornberrys--2009--ugc-navigation-right-now-N1-03.mp4',
+        14
+      ),
+      ...[5, 6, 7, 8, 10, 11].map((duration, index) =>
+        named(
+          210 + index,
+          `nickelodeon--filler--generic--2009--N2-${index + 1}.mp4`,
+          duration
+        )
+      ),
+    ]
+    repository.getAll.mockResolvedValue([...episodes, ...assets])
+    const service = new ChannelService(
+      repository,
+      {
+        ...policy,
+        roots: {
+          tv: {
+            collections: [
+              { name: 'The Wild Thornberrys (1998)', groups: ['comfort'] },
+            ],
+          },
+        },
+        channels: [
+          {
+            id: 'nick',
+            name: 'Nick',
+            enabled: true,
+            timezone: 'UTC',
+            slots: [
+              { days: ['sun'], start: '06:00', end: '09:00', groups: ['comfort'] },
+            ],
+          },
+        ],
+      },
+      { now: () => new Date('2026-08-23T06:00:00.000Z') },
+      undefined,
+      { enabled: true, frequency: 1 }
+    )
+
+    const programs = (await service.getGuide('nick', 4))?.programs ?? []
+    const pods: number[][] = []
+    let pod: number[] = []
+    for (const item of programs) {
+      if (item.type === 'interlude') pod.push(item.mediaId)
+      else if (pod.length > 0) {
+        pods.push(pod)
+        pod = []
+      }
+    }
+    expect(pods.length).toBeGreaterThan(0)
+    for (const entry of pods) {
+      expect(entry.length).toBeGreaterThan(3)
+      expect(entry[0]).toBe(200) // break-out leads
+      expect(entry.at(-1)).toBe(202) // the "right now" bumper hands over
+      expect(entry.at(-2)).toBe(201) // break-in closes the break itself
+      // Positional pieces are never left loose in the middle.
+      expect(entry.slice(1, -2)).not.toContain(200)
+      expect(entry.slice(1, -2)).not.toContain(201)
+      expect(entry.slice(1, -2)).not.toContain(202)
+    }
+  })
+
   test('handles a five-second all-day video without exhausting the schedule builder', async () => {
     const repository = mock<IMediaRepository>()
     repository.getAll.mockResolvedValue([
