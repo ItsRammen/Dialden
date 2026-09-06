@@ -134,3 +134,5 @@ the end of bounded schedule slots.
 - The same schedule inputs produce the same bumper variant.
 - No asset with another station prefix appears on Nick.
 - A generated card fills any remainder before the next slot boundary.
+
+Short breaks under 30 seconds use only a fitting transition announcement before the next show. Longer breaks show a generated schedule card only when at least 10 seconds remain after imported assets; the next show starts earlier if the remaining allowance is too short for a readable card.

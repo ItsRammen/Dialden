@@ -2140,6 +2140,12 @@ export class ChannelService {
           position: 'break-in',
         })
       : undefined
+    // A short handover needs only the matching announcement, not a miniature
+    // commercial break. Unused allowance stays available at the slot boundary.
+    if (budgetSeconds < 30 && options.next) {
+      if (transition) emit(transition)
+      return cursorMs
+    }
     const afterTransitionMs = podEndMs - (transition?.durationSeconds ?? 0) * 1000
 
     const pick = (
@@ -2187,18 +2193,20 @@ export class ChannelService {
       const descriptor = parseStationAssetFilename(item.filename)
       return descriptor?.station === station && descriptor.kind === 'ident-general' && !descriptor.sequence && !descriptor.role &&
         item.durationSeconds <= 15 && !options.recent.includes(item.filename) &&
-        item.durationSeconds * 1000 + 5000 <= fillEndMs - cursorMs
+        item.durationSeconds * 1000 + 10_000 <= fillEndMs - cursorMs
     })
     if (logo) emit(logo, fillEndMs)
     else {
       const middle = selectStationFillerAsset(
         interludes.filter((item) => !options.recent.includes(item.filename) && item.id !== transition?.id && item.id !== breakIn?.id),
-        station, Math.max(0, (fillEndMs - cursorMs) / 1000 - 5), `${options.seed}|middle`, options.recent
+        station, Math.max(0, (fillEndMs - cursorMs) / 1000 - 10), `${options.seed}|middle`, options.recent
       )
       if (middle) emit(middle, fillEndMs)
     }
-    while (cursorMs < fillEndMs) {
-      const cardEnd = Math.min(fillEndMs, cursorMs + 30_000)
+    while (fillEndMs - cursorMs >= 10_000) {
+      // Keep a final page readable instead of leaving a sub-ten-second flash.
+      const remainingMs = fillEndMs - cursorMs
+      const cardEnd = cursorMs + (remainingMs <= 40_000 ? remainingMs : 30_000)
       programs.push(this.scheduleCard(channel, cursorMs, cardEnd))
       cursorMs = cardEnd
     }
@@ -2345,7 +2353,7 @@ export class ChannelService {
       ? { enabled: true, frequency: this.interludeFrequency() }
       : undefined
     return this.hash(
-      JSON.stringify({ scheduleVersion: 'whole-clips-and-cards-v1', channel, catalogHash: source.catalogHash, interlude })
+      JSON.stringify({ scheduleVersion: 'whole-clips-and-cards-v2', channel, catalogHash: source.catalogHash, interlude })
     )
       .toString(16)
       .padStart(8, '0')
@@ -2358,7 +2366,7 @@ export class ChannelService {
     const interlude = this.interludePolicy.enabled
       ? { enabled: true, frequency: this.interludeFrequency() }
       : undefined
-    return this.hash(JSON.stringify({ scheduleVersion: 'whole-clips-and-cards-v1', channel, catalog, interlude }))
+    return this.hash(JSON.stringify({ scheduleVersion: 'whole-clips-and-cards-v2', channel, catalog, interlude }))
       .toString(16)
       .padStart(8, '0')
   }

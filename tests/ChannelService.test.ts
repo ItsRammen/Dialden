@@ -1124,6 +1124,25 @@ describe('ChannelService', () => {
     }
   })
 
+  test('short breaks use a whole matching announcement without a generated card', () => {
+    const service = new ChannelService(mock<IMediaRepository>(), policy)
+    const current = video(1, 'SpongeBob SquarePants')
+    const next = video(2, 'The Fairly OddParents')
+    const announcement = { ...interlude(90, 8.2), filename: 'nickelodeon--up-next--the-fairly-oddparents--2009--N1-01.mp4' }
+    const opening = { ...interlude(91, 5.138), filename: 'nickelodeon--filler--generic-break-out--2009--N12090-03.mp4' }
+    const channel = { ...policy.channels![0]!, id: 'nick', name: 'Nick' }
+    const programs: import('../src/services/ChannelService').ScheduledProgram[] = []
+    const startMs = Date.parse('2026-08-23T06:00:00Z')
+    // Exercise the break builder directly to isolate a tight budget from planning.
+    const end = (service as any).emitBreakPod(programs, channel, [announcement, opening], {
+      startMs, limitMs: startMs + 60_000, budgetSeconds: 20,
+      current, next, recent: [], seed: 'short-break',
+    })
+    expect(programs.map((item) => item.mediaId)).toEqual([90])
+    expect(programs[0]!.durationSeconds).toBe(8.2)
+    expect(end).toBe(startMs + 8200)
+  })
+
   test('orders a break pod break-out first and the show-aware bumper last', async () => {
     const repository = mock<IMediaRepository>()
     const named = (id: number, filename: string, duration: number): MediaItem => ({
