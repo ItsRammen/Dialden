@@ -304,11 +304,29 @@ export function selectStationTransitionAsset(
   return legacy.length > 0 ? deterministicCandidate(legacy, context.seed) : undefined
 }
 
+/*
+ * How short an asset may be, relative to the longest that fits, and still count
+ * as "long enough" for the gap. Picking only the longest is what made a
+ * fourteen minute hole play one 28s clip thirty times in a row: exactly one
+ * asset in the library is 28s, so the seed never got a choice.
+ *
+ * The value is measured, not guessed. Against a real 190-filler library
+ * filling the real 14m21s gap, a band of 0.6 still leans on seven clips with
+ * one of them playing ten times, because that library's durations are bimodal:
+ * a handful near 20s and a mass at 10s and 5s. Widening to 0.3 brings in the
+ * 10s assets and gives 45 distinct clips with nothing playing more than three
+ * times, at the cost of 76 pieces instead of 43 -- which is what a real
+ * commercial break looks like anyway.
+ */
+const FILLER_LENGTH_BAND = 0.3
+
 export function selectStationFillerAsset(
   items: readonly MediaItem[],
   station: string,
   remainingSeconds: number,
-  seed: string
+  seed: string,
+  /** Filenames just played in this gap, so the same clip is not repeated. */
+  recentlyPlayed: readonly string[] = []
 ): MediaItem | undefined {
   const described = items
     .map((item) => ({ item, descriptor: parseStationAssetFilename(item.filename) }))
@@ -337,10 +355,29 @@ export function selectStationFillerAsset(
   const fitting = candidates.filter(
     (entry) => entry.item.durationSeconds <= remainingSeconds
   )
-  const pool = fitting.length > 0 ? fitting : candidates
-  const longest = Math.max(...pool.map((entry) => entry.item.durationSeconds))
+  if (fitting.length === 0) {
+    /* Nothing fits, so whatever is chosen gets truncated to the remainder.
+       The shortest asset loses the least of itself doing that. */
+    const shortest = Math.min(...candidates.map((entry) => entry.item.durationSeconds))
+    return deterministicCandidate(
+      candidates
+        .filter((entry) => entry.item.durationSeconds === shortest)
+        .map((entry) => entry.item),
+      seed
+    )
+  }
+
+  const longest = Math.max(...fitting.map((entry) => entry.item.durationSeconds))
+  const longEnough = fitting.filter(
+    (entry) => entry.item.durationSeconds >= longest * FILLER_LENGTH_BAND
+  )
+  /* Skip what has just played, unless that would leave nothing -- a station
+     with one usable filler still has to fill the gap with it. */
+  const recent = new Set(recentlyPlayed)
+  const unplayed = longEnough.filter((entry) => !recent.has(entry.item.filename))
+  const choices = unplayed.length > 0 ? unplayed : longEnough
   return deterministicCandidate(
-    pool.filter((entry) => entry.item.durationSeconds === longest).map((entry) => entry.item),
+    choices.map((entry) => entry.item),
     seed
   )
 }

@@ -156,7 +156,13 @@ describe('station asset filenames and selection', () => {
       asset(3, 'nick__filler-general__target-15s__v01.mp4', 15),
       asset(4, 'nick__filler-general__target-30s__v01.mp4', 30),
     ]
-    expect(selectStationFillerAsset(items, 'nick', 40, 'gap')?.id).toBe(4)
+    /* The point is the station and the kind, not which of the two eligible
+       nick fillers wins: with a length band rather than a strict maximum both
+       qualify, so pinning one id would be asserting a hash outcome. */
+    const chosen = selectStationFillerAsset(items, 'nick', 40, 'gap')
+    expect([3, 4]).toContain(chosen?.id)
+    expect(chosen?.id).not.toBe(1) // another station's filler
+    expect(chosen?.id).not.toBe(2) // standby, only used when no filler exists
     expect(stationShowKey('The Fairly OddParents (2001)')).toBe(
       'the-fairly-oddparents-2001'
     )
@@ -172,5 +178,82 @@ describe('station asset filenames and selection', () => {
         seed: 'invalid',
       })
     ).toBeUndefined()
+  })
+})
+
+describe('filling a long gap', () => {
+  /* Reproduces what Nickelodeon actually aired: a 14m21s hole between a
+     programme ending at 08:45:39 and the next slot at 09:00, filled with the
+     same 28s clip thirty times. The library had 190 fillers available; the
+     selector collapsed to "longest that fits" and exactly one asset is 28s,
+     so the varying seed never had a choice to make. */
+  const library = [
+    asset(1, 'nick__filler-general__target-28s__v01.mp4', 28),
+    asset(2, 'nick__filler-general__target-19s__v01.mp4', 19),
+    asset(3, 'nick__filler-general__target-19s__v02.mp4', 19),
+    asset(4, 'nick__filler-general__target-18s__v01.mp4', 18),
+    asset(5, 'nick__filler-general__target-10s__v01.mp4', 10),
+    asset(6, 'nick__filler-general__target-5s__v01.mp4', 5),
+  ]
+
+  function fillGap(seconds: number): Array<{ id: number; seconds: number }> {
+    const played: Array<{ id: number; seconds: number }> = []
+    const recent: string[] = []
+    let remaining = seconds
+    while (remaining > 0 && played.length < 200) {
+      const chosen = selectStationFillerAsset(
+        library,
+        'nick',
+        remaining,
+        `nick|${remaining}|filler`,
+        recent
+      )
+      if (!chosen) break
+      recent.push(chosen.filename)
+      if (recent.length > 3) recent.shift()
+      const seconds = Math.min(chosen.durationSeconds, remaining)
+      played.push({ id: chosen.id, seconds })
+      remaining -= seconds
+    }
+    return played
+  }
+
+  test('does not play the same clip over and over', () => {
+    const played = fillGap(861) // the real gap: 14m21s
+
+    expect(played.length).toBeGreaterThan(0)
+    // Nothing back to back.
+    for (let index = 1; index < played.length; index += 1) {
+      expect(played[index]?.id).not.toBe(played[index - 1]?.id)
+    }
+    // And more than one clip did the work.
+    expect(new Set(played.map((item) => item.id)).size).toBeGreaterThan(2)
+  })
+
+  test('still fills the gap exactly, without overrunning the slot', () => {
+    const played = fillGap(861)
+    expect(played.reduce((total, item) => total + item.seconds, 0)).toBe(861)
+  })
+
+  test('a station with only one usable filler still fills the gap', () => {
+    // The no-repeat rule must not deadlock a thin library.
+    const single = [asset(1, 'nick__filler-general__target-10s__v01.mp4', 10)]
+    const recent: string[] = []
+    let remaining = 30
+    let plays = 0
+    while (remaining > 0 && plays < 10) {
+      const chosen = selectStationFillerAsset(single, 'nick', remaining, `s|${remaining}`, recent)
+      if (!chosen) break
+      recent.push(chosen.filename)
+      remaining -= Math.min(chosen.durationSeconds, remaining)
+      plays += 1
+    }
+    expect(remaining).toBe(0)
+    expect(plays).toBe(3)
+  })
+
+  test('when nothing fits, truncates the shortest rather than a long clip', () => {
+    // A 2s remainder should cut a 5s clip, not carve 2s out of a 28s one.
+    expect(selectStationFillerAsset(library, 'nick', 2, 'tail')?.id).toBe(6)
   })
 })

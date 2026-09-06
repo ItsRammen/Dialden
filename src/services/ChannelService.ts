@@ -199,6 +199,12 @@ interface LocalParts {
 }
 
 const SYSTEM_CLOCK: ChannelClock = { now: () => new Date() }
+/* How many just-played fillers a gap remembers. Enough to keep a long gap
+   moving through the library rather than cycling a few clips, and the selector
+   falls back to the whole band when everything is recent, so a station with a
+   handful of usable assets can still fill a long gap. */
+const FILLER_MEMORY = 8
+
 const MAX_PROGRAMS_PER_SLOT = 20_000
 // Scans, approvals, metadata edits, and channel configuration changes all
 // explicitly invalidate the schedule epoch. Keep the expensive catalog warm
@@ -1797,15 +1803,22 @@ export class ChannelService {
           }
         }
       }
+      /* What this gap has already played. Without it a long gap repeats one
+         clip: the selector is deterministic, and if the pool it picks from has
+         a single member the varying seed changes nothing. */
+      const recentFillers: string[] = []
       while (cursorMs < end.getTime() && sequence < MAX_PROGRAMS_PER_SLOT) {
         const remainingSeconds = Math.ceil((end.getTime() - cursorMs) / 1000)
         const filler = selectStationFillerAsset(
           interludes,
           this.stationAssetKey(channel),
           remainingSeconds,
-          `${channel.id}|${cursorMs}|filler`
+          `${channel.id}|${cursorMs}|filler`,
+          recentFillers
         )
         if (!filler) break
+        recentFillers.push(filler.filename)
+        if (recentFillers.length > FILLER_MEMORY) recentFillers.shift()
         const playSeconds = Math.min(filler.durationSeconds, remainingSeconds)
         const scheduledEnd = new Date(
           Math.min(end.getTime(), cursorMs + playSeconds * 1000)
