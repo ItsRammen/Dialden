@@ -56,6 +56,8 @@ export function renderChannelAdministration(
     'Channels',
     `<link rel="stylesheet" href="/css/channels.css">
     <script src="/js/channels.js" defer></script>
+    <link rel="stylesheet" href="/css/channel-guide.css">
+    <script src="/js/channel-guide.js" defer></script>
     <div class="channel-admin">
       <header class="channel-admin-hero">
         <div>
@@ -1200,6 +1202,7 @@ function renderChannelCard(
       <div><dt>Marathons</dt><dd>${escapeHtml(marathonSummary(channel.marathon))}</dd></div>
     </dl>
     <div class="channel-admin-actions">
+      <button type="button" data-channel-guide="${escapeHtml(channel.id)}" data-guide-name="${escapeHtml(channel.name)}" aria-label="Open guide for ${escapeHtml(channel.name)}">Guide</button>
       <a class="channel-admin-primary" href="/channels?edit=${encodeURIComponent(channel.id)}#channel-editor" aria-label="Configure ${escapeHtml(channel.name)}">Configure</a>
       <a href="/channels?builder=${encodeURIComponent(channel.id)}#station-builder" aria-label="Edit lineup for ${escapeHtml(channel.name)}">Auto lineup</a>
       <a href="/channels?branding=${encodeURIComponent(channel.id)}#branding-modal" aria-label="Edit logo for ${escapeHtml(channel.name)}">Logo</a>
