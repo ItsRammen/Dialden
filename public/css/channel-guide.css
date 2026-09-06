@@ -13,3 +13,5 @@
 .admin-guide-body { display: flex; flex-direction: column; gap: 5px; overflow-wrap: anywhere; }
 .admin-guide-body span, .admin-guide-body small { color: var(--text-secondary, #a5b0c5); font-size: .8rem; }
 @media(max-width:600px) { .admin-guide { padding: 16px; } .admin-guide-item { grid-template-columns: 1fr; gap: 8px; } }
+button.headless-card-link[data-channel-guide] { background: none; border: 0; padding: 0; font: inherit; font-weight: 800; cursor: pointer; }
+button.headless-card-link[data-channel-guide]:focus-visible { outline: 2px solid #93c5fd; outline-offset: 4px; }

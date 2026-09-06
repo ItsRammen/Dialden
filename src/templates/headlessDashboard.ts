@@ -253,7 +253,7 @@ function renderChannel(channel: HeadlessChannelViewModel): string {
       <div class="headless-channel-actions">
         ${
           guideHref
-            ? `<a class="headless-card-link" href="${guideHref}" aria-label="Open the ${escapeHtml(channel.name)} guide">Guide</a>`
+            ? `<button type="button" class="headless-card-link" data-channel-guide="${escapeHtml(channel.id)}" data-guide-name="${escapeHtml(channel.name)}" aria-label="Open the ${escapeHtml(channel.name)} guide">Guide</button>`
             : ''
         }
         ${manageHref ? `<a class="headless-card-link" href="${manageHref}">Configure</a>` : ''}
@@ -446,6 +446,8 @@ export function renderHeadlessDashboard(
   return renderLayout(
     'Dashboard',
     `<link rel="stylesheet" href="/css/headless-dashboard.css">
+     <link rel="stylesheet" href="/css/channel-guide.css">
+     <script src="/js/channel-guide.js" defer></script>
      ${renderHeadlessDashboardContent(view)}
      <script>
        (function () {
