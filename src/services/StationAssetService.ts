@@ -64,6 +64,13 @@ export interface StationTransitionContext {
   readonly followingShow?: string
   readonly seed: string
   readonly maximumDurationSeconds?: number
+  /*
+   * Which end of the break this is for. 'break-out' wants the piece that leaves
+   * the show -- "we'll be right back" -- and 'break-in' the piece that hands
+   * over to what follows. Omitted, every kind is considered, which is the right
+   * behaviour for a single sting standing in for a whole break.
+   */
+  readonly position?: 'break-out' | 'break-in'
 }
 
 const KINDS = new Set<StationAssetKind>([
@@ -228,18 +235,21 @@ function parseAssetCodeMetadata(
     }
   }
 
-  return {}
+  /* The tune-in marker rides on the production code, alongside the show it
+     names -- 'show-team-umizoomi-schedule-cta-N14785-01' -- not on the semantic
+     field where the break position lives. */
+  return label.includes('schedule-cta') ? { scheduleCta: true } : {}
 }
 
 /*
- * Long-form pieces name their position in the break at the end of the code, and
- * the older short filler exports already use the same suffix. Read it from
- * either, so 'generic-break-out' and a long-form '...-helpful-hints-break-out'
- * are placed the same way.
+ * Long-form pieces name their position in the break at the end of the semantic
+ * field, and the older short filler exports already use the same suffixes.
+ * 'standalone' is stated outright rather than left to be inferred.
  */
 function parseAssetRole(label: string): { role?: StationAssetRole } {
   if (/(?:^|-)break-out$/.test(label)) return { role: 'break-out' }
   if (/(?:^|-)break-in$/.test(label)) return { role: 'break-in' }
+  if (/(?:^|-)standalone$/.test(label)) return { role: 'standalone' }
   return {}
 }
 
@@ -283,7 +293,6 @@ export function parseNickstoryAssetFilename(filename: string): StationAssetDescr
     ...base,
     kind,
     ...parseAssetRole(value),
-    ...(value.includes('schedule-cta') ? { scheduleCta: true } : {}),
   }
 }
 
@@ -320,24 +329,38 @@ export function selectStationTransitionAsset(
           entry.item.durationSeconds <= context.maximumDurationSeconds)
     )
   const sameShow = sameStationShow(context.currentShow, context.nextShow)
-  const priorities: Array<(entry: typeof described[number]) => boolean> = [
-    (entry) =>
-      entry.descriptor.kind === 'bumper-now-next' &&
-      sameStationShow(entry.descriptor.now, context.nextShow) &&
-      sameStationShow(entry.descriptor.next, context.followingShow),
-    (entry) =>
-      sameShow &&
-      entry.descriptor.kind === 'bumper-more' &&
-      sameStationShow(entry.descriptor.show, context.nextShow),
-    (entry) =>
-      entry.descriptor.kind === 'bumper-up-next' &&
-      sameStationShow(entry.descriptor.next, context.nextShow),
-    (entry) => entry.descriptor.kind === 'ident-general',
-  ]
+  type Entry = typeof described[number]
+  /* "We'll be right back" only makes sense when there is a back to be right
+     back to, so it is offered when the same show resumes after the break. */
+  const more = (entry: Entry): boolean =>
+    sameShow &&
+    entry.descriptor.kind === 'bumper-more' &&
+    sameStationShow(entry.descriptor.show, context.nextShow)
+  const nowNext = (entry: Entry): boolean =>
+    entry.descriptor.kind === 'bumper-now-next' &&
+    sameStationShow(entry.descriptor.now, context.nextShow) &&
+    sameStationShow(entry.descriptor.next, context.followingShow)
+  const upNext = (entry: Entry): boolean =>
+    entry.descriptor.kind === 'bumper-up-next' &&
+    sameStationShow(entry.descriptor.next, context.nextShow)
+  const ident = (entry: Entry): boolean =>
+    entry.descriptor.kind === 'ident-general'
+  const priorities: Array<(entry: Entry) => boolean> =
+    context.position === 'break-out'
+      ? /* Nothing generic here: an ident leaving the show would just be another
+           sting, and the break already opens with one if any exist. */
+        [more]
+      : context.position === 'break-in'
+        ? [nowNext, upNext, ident]
+        : [nowNext, more, upNext, ident]
   for (const matches of priorities) {
     const candidates = described.filter(matches).map((entry) => entry.item)
     if (candidates.length > 0) return deterministicCandidate(candidates, context.seed)
   }
+  /* Unnamed assets stand in for a handover, which every break needs, but never
+     for the leaving bumper, which is optional. Without this an unparsed sting
+     is emitted at both ends of every pod. */
+  if (context.position === 'break-out') return undefined
   const legacy = items.filter(
     (item) =>
       parseStationAssetFilename(item.filename) === null &&
@@ -393,13 +416,13 @@ export function selectStationFillerAsset(
      question, or an answer to one nobody heard -- so it never enters the
      independent rotation. selectStationInteractiveSequence places them. */
   const placeable = described.filter((entry) => !entry.descriptor.sequence)
-  const positioned = role
-    ? placeable.filter((entry) =>
-        role === 'standalone'
-          ? entry.descriptor.role === undefined
-          : entry.descriptor.role === role
-      )
-    : placeable.filter((entry) => entry.descriptor.role === undefined)
+  /* An unmarked piece and one the exporter marks 'standalone' are the same
+     thing: safe anywhere. Long-form assets state it outright, older short
+     exports leave it off. */
+  const positionOf = (entry: (typeof placeable)[number]): StationAssetRole =>
+    entry.descriptor.role ?? 'standalone'
+  const wanted = role ?? 'standalone'
+  const positioned = placeable.filter((entry) => positionOf(entry) === wanted)
   const standalone = positioned.length > 0 || role ? positioned : placeable
   const fillers = standalone.filter((entry) => entry.descriptor.kind === 'filler-general')
   const standby = standalone.filter((entry) => entry.descriptor.kind === 'standby-loop')

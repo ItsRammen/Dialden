@@ -1204,6 +1204,68 @@ describe('ChannelService', () => {
     }
   })
 
+  test('gives Nick Jr its own station assets rather than Nickelodeon\'s', async () => {
+    const repository = mock<IMediaRepository>()
+    const named = (id: number, filename: string): MediaItem => ({
+      ...interlude(id, 10),
+      filename,
+    })
+    const episodes = Array.from({ length: 4 }, (_, index) => ({
+      ...video(index + 1, 'Dora the Explorer (2000)'),
+      path: `/media/tv/Dora the Explorer (2000)/episode-${index + 1}.mkv`,
+      durationSeconds: 1411,
+    }))
+    const assets = [
+      named(400, 'nick-jr--filler--generic--2009--N1-01.mp4'),
+      named(401, 'nick-jr--filler--generic--2009--N1-02.mp4'),
+      named(500, 'nickelodeon--filler--generic--2009--N2-01.mp4'),
+      named(501, 'nickelodeon--filler--generic--2009--N2-02.mp4'),
+    ]
+    repository.getAll.mockResolvedValue([...episodes, ...assets])
+    const service = new ChannelService(
+      repository,
+      {
+        ...policy,
+        roots: {
+          tv: {
+            collections: [{ name: 'Dora the Explorer (2000)', groups: ['comfort'] }],
+          },
+        },
+        channels: [
+          {
+            id: 'nick-jr',
+            name: 'Nick Jr.',
+            enabled: true,
+            timezone: 'UTC',
+            automation: {
+              preset: 'network-copy',
+              airtime: 'all-day',
+              networkId: 'nick-jr',
+              eraStartYear: 1996,
+              eraEndYear: 2026,
+              selectionMode: 'automatic',
+            },
+            slots: [
+              { days: ['sun'], start: '06:00', end: '09:00', groups: ['comfort'] },
+            ],
+          },
+        ],
+      } as LibraryPolicyDocument,
+      { now: () => new Date('2026-08-23T06:00:00.000Z') },
+      undefined,
+      { enabled: true, frequency: 1 }
+    )
+
+    const programs = (await service.getGuide('nick-jr', 4))?.programs ?? []
+    const played = new Set(
+      programs.filter((item) => item.type === 'interlude').map((item) => item.mediaId)
+    )
+    expect(played.size).toBeGreaterThan(0)
+    /* 'nick-jr' also starts with 'nick', and folding the two together left the
+       whole Nick Jr package unreachable behind Nickelodeon's. */
+    for (const mediaId of played) expect(mediaId).toBeLessThan(500)
+  })
+
   test('handles a five-second all-day video without exhausting the schedule builder', async () => {
     const repository = mock<IMediaRepository>()
     repository.getAll.mockResolvedValue([

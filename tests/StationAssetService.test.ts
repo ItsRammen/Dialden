@@ -51,6 +51,64 @@ describe('station asset filenames and selection', () => {
     expect(parseStationAssetFilename(`nickelodeon--${fields}--2008--NHD12095-11-2.m4v`)).toEqual({ station: 'nick', ...expected })
   })
 
+  test('picks the leaving bumper at one end of a break and the handover at the other', () => {
+    const more = asset(
+      301,
+      'nick-jr--more--dora-the-explorer--2009--ugc-navigation-when-we-come-back-N12075-05.mp4'
+    )
+    const upNext = asset(
+      302,
+      'nick-jr--up-next--dora-the-explorer--2009--ugc-navigation-coming-up-next-N12075-04.mp4'
+    )
+    const ident = asset(303, 'nick-jr--ident--generic-station-id--2009--N1-01.mp4')
+    const items = [more, upNext, ident]
+    // The same show resumes, so "we'll be right back" is the piece that leaves.
+    const resuming = {
+      station: 'nick-jr',
+      currentShow: 'dora-the-explorer',
+      nextShow: 'dora-the-explorer',
+      seed: 'test',
+    }
+    expect(
+      selectStationTransitionAsset(items, { ...resuming, position: 'break-out' })
+    ).toBe(more)
+    expect(
+      selectStationTransitionAsset(items, { ...resuming, position: 'break-in' })
+    ).toBe(upNext)
+
+    /* Leaving is optional, so it never falls back to something generic --
+       otherwise every break would open and close with an ident. */
+    expect(
+      selectStationTransitionAsset([ident], { ...resuming, position: 'break-out' })
+    ).toBeUndefined()
+    expect(
+      selectStationTransitionAsset([ident], { ...resuming, position: 'break-in' })
+    ).toBe(ident)
+
+    // A different show follows, so there is no "back" to be right back to.
+    expect(
+      selectStationTransitionAsset(items, {
+        ...resuming,
+        currentShow: 'go-diego-go',
+        position: 'break-out',
+      })
+    ).toBeUndefined()
+  })
+
+  test('reads the tune-in marker from the production code, not the semantic field', () => {
+    const cta = parseStationAssetFilename(
+      'nick-jr--filler--generic-long-form-interstitial-standalone--2012--show-team-umizoomi-schedule-cta-N14785-01.mp4'
+    )
+    expect(cta?.scheduleCta).toBe(true)
+    // Stated outright by long-form exports; older short ones simply omit it.
+    expect(cta?.role).toBe('standalone')
+    const plain = parseStationAssetFilename(
+      'nick-jr--filler--generic-long-form-interstitial-standalone--2008--N3588-01.mp4'
+    )
+    expect(plain?.scheduleCta).toBeUndefined()
+    expect(plain?.role).toBe('standalone')
+  })
+
   test('uses explicit current/next roles and matches year-suffixed library titles', () => {
     const clip = asset(101, 'nickelodeon--now-next--now-spongebob-squarepants--next-the-fairly-oddparents--2008--NHD12095-11-2.mp4')
     const context = { station: 'nick', currentShow: 'other-show', nextShow: 'spongebob-squarepants-1999', followingShow: 'the-fairly-oddparents-2001', seed: 'test' }

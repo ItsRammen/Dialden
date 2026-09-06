@@ -2116,16 +2116,23 @@ export class ChannelService {
        names. Leading with it would put "Dora is coming up next" two minutes
        early, and a rightNow piece -- "starts right now" -- would simply be
        wrong. Its time is reserved up front so the fill cannot eat it. */
-    const transition = options.next
-      ? selectStationTransitionAsset(interludes, {
+    const bumperContext = options.next
+      ? {
           station,
           currentShow: this.stationProgramKey(options.current),
           nextShow: this.stationProgramKey(options.next),
           ...(options.following
             ? { followingShow: this.stationProgramKey(options.following) }
             : {}),
+        }
+      : undefined
+    const budgetSeconds = Math.floor((podEndMs - cursorMs) / 1000)
+    const transition = bumperContext
+      ? selectStationTransitionAsset(interludes, {
+          ...bumperContext,
           seed: options.seed,
-          maximumDurationSeconds: Math.floor((podEndMs - cursorMs) / 1000),
+          maximumDurationSeconds: budgetSeconds,
+          position: 'break-in',
         })
       : undefined
     const afterTransitionMs = podEndMs - (transition?.durationSeconds ?? 0) * 1000
@@ -2154,7 +2161,17 @@ export class ChannelService {
     const breakIn = pick('break-in', afterTransitionMs)
     const fillEndMs = afterTransitionMs - (breakIn?.durationSeconds ?? 0) * 1000
 
-    // Straight off the end of the programme.
+    /* Leaving the show: the spoken "we'll be right back" first if the station
+       has one for it, then a generic break-out sting. */
+    const leaving = bumperContext
+      ? selectStationTransitionAsset(interludes, {
+          ...bumperContext,
+          seed: `${options.seed}|leaving`,
+          maximumDurationSeconds: Math.floor((fillEndMs - cursorMs) / 1000),
+          position: 'break-out',
+        })
+      : undefined
+    if (leaving) emit(leaving)
     const breakOut = pick('break-out', fillEndMs)
     if (breakOut) emit(breakOut)
 
@@ -2178,13 +2195,16 @@ export class ChannelService {
   }
 
   private stationAssetKey(channel: LibraryChannelPolicy): string {
-    if (
-      channel.automation?.networkId === 'nickelodeon' ||
-      channel.automation?.networkId === 'nick-jr'
-    ) {
-      return 'nick'
-    }
+    /* Nick Jr is its own on-air brand and the exporter now ships it as its own
+       station, so it must not be folded into Nickelodeon's pool -- doing that
+       leaves every nick-jr asset unreachable, including the Play With Us
+       sequences, and dresses a preschool block in its sibling's bumpers. The
+       nick-jr test has to come first: 'nick-jr' also starts with 'nick'. */
+    const networkId = channel.automation?.networkId
+    if (networkId === 'nick-jr') return 'nick-jr'
+    if (networkId === 'nickelodeon') return 'nick'
     const key = stationShowKey(channel.id)
+    if (key === 'nick-jr' || key.startsWith('nick-jr-')) return 'nick-jr'
     return key.startsWith('nick') ? 'nick' : key
   }
 
