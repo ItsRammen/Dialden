@@ -77,7 +77,21 @@
     dialog.showModal();
     load();
   });
+  function outsideGuide(event) {
+    var bounds = dialog.getBoundingClientRect();
+    return event.clientX < bounds.left || event.clientX > bounds.right ||
+      event.clientY < bounds.top || event.clientY > bounds.bottom;
+  }
+  var backdropPress = false;
+  dialog.addEventListener('pointerdown', function (event) {
+    backdropPress = event.target === dialog && outsideGuide(event);
+  });
+  dialog.addEventListener('pointercancel', function () { backdropPress = false; });
   dialog.addEventListener('click', function (event) {
+    var closeBackdrop = backdropPress && event.target === dialog && outsideGuide(event);
+    backdropPress = false;
+    if (closeBackdrop) { dialog.close(); return; }
+
     var button = event.target.closest('button');
     if (!button) return;
     if (button.hasAttribute('data-close')) dialog.close();
