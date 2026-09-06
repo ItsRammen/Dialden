@@ -18,7 +18,7 @@ export interface BumperRenderOptions {
   readonly background: string
   readonly foreground: string
   readonly accent: string
-  /** Optional channel logo, drawn above the text when present. */
+  /** Optional channel logo, drawn in the corner when present. */
   readonly logoPath?: string
   readonly outputPath: string
 }
@@ -131,6 +131,32 @@ export function buildBumperArgs(
     ].join(':')
   )
 
+  /*
+   * The logo sits inside the title-safe area rather than against the edge:
+   * a television overscans, and a corner mark placed at the true corner is
+   * the first thing to be cropped off the side of the picture.
+   */
+  const safeX = Math.round(options.width * 0.05)
+  const safeY = Math.round(options.height * 0.05)
+  const logoWidth = Math.round(options.width * 0.12)
+
+  /* Two video inputs cannot be filtered with -vf, so a card carrying a logo is
+     built with -filter_complex and mapped explicitly. Without one the simpler
+     form is kept: it is the command every existing test asserts. */
+  const video = options.logoPath
+    ? [
+        '-i', options.logoPath,
+        '-filter_complex',
+        '[0:v]' + filters.join(',') + '[card];' +
+          '[2:v]scale=' + logoWidth + ':-1[logo];' +
+          '[card][logo]overlay=' +
+          'x=W-w-' + safeX + ':' +
+          'y=H-h-' + safeY + '[v]',
+        '-map', '[v]',
+        '-map', '1:a',
+      ]
+    : ['-vf', filters.join(',')]
+
   return [
     '-hide_banner',
     '-loglevel', 'error',
@@ -143,7 +169,7 @@ export function buildBumperArgs(
       ':r=25',
     '-f', 'lavfi',
     '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
-    '-vf', filters.join(','),
+    ...video,
     '-t', String(options.durationSeconds),
     '-c:v', 'libx264',
     '-preset', 'veryfast',

@@ -207,6 +207,35 @@ describe('the ffmpeg command', () => {
     expect(filter).toContain('Starting at 18\\:30')
   })
 
+  test('draws the station logo inside the title-safe corner', () => {
+    const args = buildBumperArgs(
+      'up-next',
+      { headline: 'Jimmy Neutron' },
+      { ...options, logoPath: '/logos/nick.png' }
+    )
+    /* Two video inputs cannot go through -vf, so a card carrying a logo is
+       built as a filter graph and mapped explicitly. */
+    expect(args).not.toContain('-vf')
+    expect(args[args.indexOf('-i') + 1]).toBe(
+      'color=c=0x0b0705:s=1920x1080:d=6:r=25'
+    )
+    expect(args).toContain('/logos/nick.png')
+    const graph = args[args.indexOf('-filter_complex') + 1] ?? ''
+    expect(graph).toContain('[2:v]scale=230:-1[logo]')
+    /* Inside the safe area rather than against the edge: a television
+       overscans, and the true corner is the first thing cropped. */
+    expect(graph).toContain('overlay=x=W-w-96:y=H-h-54')
+    // The audio still has to be carried through explicitly.
+    expect(args).toContain('-map')
+    expect(args[args.lastIndexOf('-map') + 1]).toBe('1:a')
+  })
+
+  test('keeps the simpler command when there is no logo', () => {
+    const args = buildBumperArgs('ident', { headline: 'Toast Kids' }, options)
+    expect(args).toContain('-vf')
+    expect(args).not.toContain('-filter_complex')
+  })
+
   test('always writes an audio track', () => {
     /* A segment with no audio stream makes the player reconfigure in the
        middle of a channel, which is the stall this product exists to avoid. */
