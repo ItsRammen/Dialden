@@ -135,4 +135,6 @@ the end of bounded schedule slots.
 - No asset with another station prefix appears on Nick.
 - A generated card fills any remainder before the next slot boundary.
 
-Short breaks under 30 seconds use only a fitting transition announcement before the next show. Longer breaks show a generated schedule card only when at least 10 seconds remain after imported assets; the next show starts earlier if the remaining allowance is too short for a readable card.
+Break composition uses the actual selected clip durations. If less than 15 seconds remain for a readable card after opening and closing clips, use only a fitting transition announcement and start the next show earlier. Small block-end remainders extend an earlier card in that block when available, shifting subsequent items without shortening them. If there is no earlier card to extend, the fixed block boundary can still require a short final card. Repeat history carries across blocks within the scheduled day.
+
+The Admin modal guide groups contiguous station assets into one expandable Break entry, with total imported and generated time and clips listed in playback order. The User view remains programs-only.

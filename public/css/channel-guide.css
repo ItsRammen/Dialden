@@ -15,3 +15,11 @@
 @media(max-width:600px) { .admin-guide { padding: 16px; } .admin-guide-item { grid-template-columns: 1fr; gap: 8px; } }
 button.headless-card-link[data-channel-guide] { background: none; border: 0; padding: 0; font: inherit; font-weight: 800; cursor: pointer; }
 button.headless-card-link[data-channel-guide]:focus-visible { outline: 2px solid #93c5fd; outline-offset: 4px; }
+
+.admin-guide-break summary { cursor: pointer; color: #93c5fd; padding: 8px 0; }
+.admin-guide-break summary:focus-visible { outline: 2px solid #93c5fd; outline-offset: 3px; }
+.admin-guide-clips { margin: 4px 0; padding-left: 24px; }
+.admin-guide-clip { padding: 8px; border-top: 1px solid var(--glass-border, #334155); }
+.admin-guide-clip strong, .admin-guide-clip small { display: block; }
+.admin-guide-clip strong { font-size: .85rem; font-weight: 500; }
+.admin-guide-clip.is-current { background: rgba(59,130,246,.12); }

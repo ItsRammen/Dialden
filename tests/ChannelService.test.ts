@@ -1141,6 +1141,29 @@ describe('ChannelService', () => {
     expect(programs.map((item) => item.mediaId)).toEqual([90])
     expect(programs[0]!.durationSeconds).toBe(8.2)
     expect(end).toBe(startMs + 8200)
+    const closing = { ...opening, id: 92, durationSeconds: 10, filename: 'nickelodeon--filler--generic-break-in--2009--N12093-02.mp4' }
+    const longer: import('../src/services/ChannelService').ScheduledProgram[] = []
+    ;(service as any).emitBreakPod(longer, channel, [announcement, opening, closing], {
+      startMs, limitMs: startMs + 60_000, budgetSeconds: 35,
+      current, next, recent: [], seed: 'duration-based-break',
+    })
+    expect(longer.map((item) => item.mediaId)).toEqual([90])
+  })
+
+  test('absorbs a small boundary remainder without shortening or separating clips', () => {
+    const service = new ChannelService(mock<IMediaRepository>(), policy)
+    const channel = { ...policy.channels![0]!, id: 'nick', name: 'Nick' }
+    const start = Date.parse('2026-08-23T06:00:00Z')
+    const card = (service as any).scheduleCard(channel, start, start + 20_000)
+    const clip = { ...card, id: 'clip', mediaId: 91, generated: undefined, type: 'interlude', scheduledStart: new Date(start + 20_000).toISOString(), scheduledEnd: new Date(start + 25_138).toISOString(), durationMs: 5138, durationSeconds: 5.138, sourceDurationSeconds: 5.138 }
+    const rows = [card, clip]
+    expect((service as any).absorbBreakRemainder(rows, channel, start, 7000)).toBe(true)
+    expect(rows[0].durationSeconds).toBe(27)
+    expect(rows[1].scheduledStart).toBe(rows[0].scheduledEnd)
+    expect(rows[1].scheduledEnd).toBe(new Date(start + 32_138).toISOString())
+    expect(rows[1].sourceDurationSeconds).toBe(5.138)
+    expect(rows[1].durationMs).toBe(5138)
+    expect((service as any).absorbBreakRemainder(rows, channel, start + 100_000, 1000)).toBe(false)
   })
 
   test('orders a break pod break-out first and the show-aware bumper last', async () => {
