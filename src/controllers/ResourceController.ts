@@ -35,46 +35,36 @@ export function createResourceController(deps: ResourceControllerDeps) {
     const sample = monitor.sample(processes())
     if (sample.intervalMs === null) {
       // The first sample is a baseline; percentages need two.
-      return c.html('<p class="hint">Measuring…</p>')
+      return c.html('<p class="engine-empty">Measuring usage… The first reading will appear in a few seconds.</p>')
     }
 
-    const cpu =
-      sample.cpuPercent === null
-        ? 'unavailable'
-        : `${sample.cpuPercent.toFixed(1)}% of ${sample.cores} cores`
+    const cpu = sample.cpuPercent === null ? 'Unavailable' : `${sample.cpuPercent.toFixed(1)}%`
+    const busy = sample.gpu.available && typeof sample.gpu.busyPercent === 'number'
+    const frequency = sample.gpu.frequencyMhz
+    const gpu = busy ? `${sample.gpu.busyPercent!.toFixed(0)}%`
+      : frequency !== undefined ? `${frequency} MHz` : 'Unavailable'
+    const gpuDetail = busy ? 'Reported hardware utilization'
+      : frequency !== undefined
+        ? `Clock frequency, not utilization${sample.gpu.maxFrequencyMhz !== undefined ? ` · maximum ${sample.gpu.maxFrequencyMhz} MHz` : ''}`
+        : 'This driver does not report hardware usage.'
+    const channels = [...sample.channels].sort((left, right) => right.cpuPercent - left.cpuPercent)
+    const rows = channels.map((item) => `<tr>
+      <th scope="row">${escapeHtml(item.channelId)}</th>
+      <td><span class="engine-path ${item.hardware ? 'engine-path-hardware' : ''}">${item.hardware ? 'Hardware' : 'Software'}</span></td>
+      <td class="engine-number">${item.cpuPercent.toFixed(1)}%</td>
+    </tr>`).join('')
+    return c.html(`<div class="engine-metrics">
+      <div class="engine-metric"><span>Server CPU</span><strong>${cpu}</strong><small>Share of all ${sample.cores} CPU cores</small></div>
+      <div class="engine-metric"><span>Media engine</span><strong>${escapeHtml(gpu)}</strong><small>${escapeHtml(gpuDetail)}</small></div>
+      <div class="engine-metric"><span>Active channels</span><strong>${channels.length}</strong><small>${sample.gpu.hardwarePipelines} hardware · ${sample.gpu.softwarePipelines} software</small></div>
+    </div>
+    <div class="engine-channel-header"><h4>Usage by channel</h4><span>Refreshes every 5 seconds</span></div>
+    ${channels.length ? `<div class="engine-table-scroll"><table class="engine-table">
+      <caption>Channel CPU is measured against one core and can exceed 100%.</caption>
+      <thead><tr><th scope="col">Channel</th><th scope="col">Processing</th><th scope="col" class="engine-number">CPU / core</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`
+      : '<p class="engine-empty">No channels are running. Usage will appear when a viewer starts watching.</p>'}`)
 
-    const gpu = sample.gpu.available
-      ? `${sample.gpu.busyPercent?.toFixed(0)}% busy`
-      : sample.gpu.frequencyMhz !== undefined
-        ? `${sample.gpu.frequencyMhz} MHz of ${sample.gpu.maxFrequencyMhz} MHz`
-        : 'not reported by this driver'
-
-    const channels = [...sample.channels].sort(
-      (left, right) => right.cpuPercent - left.cpuPercent
-    )
-    const rows = channels.length
-      ? channels
-          .map(
-            (item) =>
-              `<div><dt>${escapeHtml(item.channelId)} <span class="profile-badge">${
-                item.hardware ? 'media engine' : 'software'
-              }</span></dt><dd>${item.cpuPercent.toFixed(0)}% of one core</dd></div>`
-          )
-          .join('')
-      : '<div><dt>Channels</dt><dd>none running</dd></div>'
-
-    return c.html(
-      `<dl class="settings-status-list">
-         <div><dt>Server CPU</dt><dd>${cpu}</dd></div>
-         <div><dt>Media engine</dt><dd>${escapeHtml(gpu)}${
-           sample.gpu.available || sample.gpu.frequencyMhz === undefined
-             ? ''
-             : ' <span class="hint">frequency, not utilisation</span>'
-         }</dd></div>
-         <div><dt>Pipelines</dt><dd>${sample.gpu.hardwarePipelines} on the media engine, ${sample.gpu.softwarePipelines} in software</dd></div>
-         ${rows}
-       </dl>`
-    )
   })
 
   return controller

@@ -1,0 +1,23 @@
+.media-engine-panel { min-width: 0; margin-top: 16px; }
+.engine-heading, .engine-channel-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.engine-heading h3, .engine-channel-header h4 { margin: 0; font-size: 1rem; }
+.engine-readonly, .engine-channel-header > span { color: var(--text-secondary); font-size: .8rem; }
+.engine-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 20px 0; }
+.engine-metric { display: flex; flex-direction: column; gap: 8px; padding: 16px; border: 1px solid var(--glass-border); border-radius: 12px; background: var(--bg-secondary); }
+.engine-metric > span { font-size: .8rem; color: var(--text-secondary); }
+.engine-metric strong { font-size: 1.65rem; line-height: 1.2; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.engine-metric small { color: var(--text-secondary); line-height: 1.5; }
+.engine-table-scroll { overflow-x: auto; }
+.engine-table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+.engine-table caption { caption-side: bottom; text-align: left; padding: 12px 0; font-size: .8rem; color: var(--text-secondary); }
+.engine-table th, .engine-table td { padding: 12px 8px; text-align: left; border-bottom: 1px solid var(--glass-border); }
+.engine-table thead th { font-size: .75rem; color: var(--text-secondary); font-weight: 500; }
+.engine-table tbody th { font-weight: 500; overflow-wrap: anywhere; }
+.engine-table .engine-number { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.engine-path { display: inline-block; padding: 3px 8px; border-radius: 6px; background: var(--bg-secondary); font-size: .75rem; }
+.engine-path-hardware { color: var(--accent-success); }
+.engine-empty { margin: 16px 0; padding: 18px; border: 1px dashed var(--glass-border); border-radius: 10px; color: var(--text-secondary); line-height: 1.6; }
+.engine-configuration { margin: 16px 0; }
+.engine-configuration summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
+.engine-configuration summary:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 3px; }
+@media (max-width: 640px) { .engine-metrics { grid-template-columns: 1fr; } .engine-metric { gap: 5px; } }

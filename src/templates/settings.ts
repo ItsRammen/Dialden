@@ -171,7 +171,6 @@ export function renderSettings(props: SettingsProps): string {
               </div>
             </div>
 
-            ${renderTranscodingStatus(props.transcodingStatus)}
             ${
               props.qualityTier
                 ? `<div class="form-group" id="quality-tier">
@@ -185,6 +184,7 @@ export function renderSettings(props: SettingsProps): string {
             }
           </section>
           </div>
+          ${renderTranscodingStatus(props.transcodingStatus)}
         </section>
 
         <section class="settings-group" id="library-services">
@@ -425,8 +425,9 @@ function renderTranscodingStatus(
       : 'Hardware transcoding is unavailable; CPU fallback is active.'
 
   return `
-    <div class="form-group" id="transcoding-status">
-      <label>Transcoding</label>
+    <link rel="stylesheet" href="/css/media-engine.css">
+    <section class="settings-card media-engine-panel" id="transcoding-status" aria-labelledby="media-engine-heading">
+      <div class="engine-heading"><h3 id="media-engine-heading">Media engine</h3><span class="engine-readonly">Live status</span></div>
       <div class="hardware-profile-display">
         <span class="profile-badge">Hardware ${stateLabel}</span>
         <span class="hint">${summary}</span>
@@ -437,6 +438,7 @@ function renderTranscodingStatus(
            hx-trigger="load, every 5s" hx-swap="innerHTML">
         <p class="hint">Measuring…</p>
       </div>
+      <details class="engine-configuration"><summary>Encoder configuration</summary>
       <dl class="settings-status-list">
         <div><dt>Configured</dt><dd>${configuredLabel}</dd></div>
         <div><dt>Active encoder</dt><dd>${activeLabel}</dd></div>
@@ -451,10 +453,11 @@ function renderTranscodingStatus(
                 : ''
         }
       </dl>
+      </details>
       ${status.fallbackReason ? `<p class="settings-restart-note" role="status">Fallback reason: ${escapeHtml(status.fallbackReason)}</p>` : ''}
       ${renderTranscodingDiagnostics(status, candidates, attempts)}
       <p class="hint">Read-only container setting. Change <code>TOASTTV_TRANSCODING_MODE</code> in the deployment environment, then restart Dialden.</p>
-    </div>
+    </section>
   `
 }
 
