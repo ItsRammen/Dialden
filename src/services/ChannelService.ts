@@ -205,6 +205,9 @@ const SYSTEM_CLOCK: ChannelClock = { now: () => new Date() }
    handful of usable assets can still fill a long gap. */
 const FILLER_MEMORY = 8
 
+/* Longest a single break may run. Real pods sit around two to four minutes. */
+const MAX_BREAK_POD_SECONDS = 180
+
 const MAX_PROGRAMS_PER_SLOT = 20_000
 // Scans, approvals, metadata edits, and channel configuration changes all
 // explicitly invalidate the schedule epoch. Keep the expensive catalog warm
@@ -1711,10 +1714,6 @@ export class ChannelService {
         ),
         channel
       )
-      let cursorMs = start.getTime()
-      let sequence = 0
-      let orderIndex = 0
-      let programsSinceInterlude = 0
       const interludes = this.orderedInterludes(
         source,
         channel,
@@ -1722,91 +1721,100 @@ export class ChannelService {
         start,
         `${channel.id}|${dateKey}|${slot.start}|${slot.groups.join(',')}`
       )
+      const slotSeconds = Math.floor((end.getTime() - start.getTime()) / 1000)
 
-      while (cursorMs < end.getTime() && sequence < MAX_PROGRAMS_PER_SLOT) {
-        const remainingSeconds = Math.floor((end.getTime() - cursorMs) / 1000)
-        let selected: MediaItem | undefined
+      /* Plan the programmes first, reserving no break time at all, so the slot
+         carries as many as it can hold. What is left over becomes the break
+         budget. A broadcast format clock works this way round: the pods are
+         sized to land the block on its boundary, rather than the leftover
+         piling up as dead air at the end. */
+      const frequency = this.interludeFrequency()
+      /* Every break still has to fit its shortest asset. Sizing pods purely
+         from leftover time would drop breaks altogether in a slot whose
+         programmes happen to tile it exactly. */
+      const minBreakSeconds =
+        interludes.length === 0
+          ? 0
+          : Math.min(...interludes.map((item) => item.durationSeconds))
+      const planned: MediaItem[] = []
+      let plannedSeconds = 0
+      let planIndex = 0
+      while (planned.length < MAX_PROGRAMS_PER_SLOT) {
+        let picked: MediaItem | undefined
         for (let attempt = 0; attempt < ordered.length; attempt++) {
-          const candidate = ordered[(orderIndex + attempt) % ordered.length]
-          if (candidate && candidate.durationSeconds <= remainingSeconds) {
-            selected = candidate
-            orderIndex = (orderIndex + attempt + 1) % ordered.length
+          const candidate = ordered[(planIndex + attempt) % ordered.length]
+          if (!candidate) continue
+          const breaksAfter = Math.floor((planned.length + 1) / frequency)
+          const committed =
+            plannedSeconds +
+            candidate.durationSeconds +
+            minBreakSeconds * breaksAfter
+          if (committed <= slotSeconds) {
+            picked = candidate
+            planIndex = (planIndex + attempt + 1) % ordered.length
             break
           }
         }
-        if (!selected) break
+        if (!picked) break
+        planned.push(picked)
+        plannedSeconds += picked.durationSeconds
+      }
 
-        const scheduledStart = new Date(cursorMs)
+      const breakSlots =
+        interludes.length === 0 ? 0 : Math.floor(planned.length / frequency)
+      const budgets = this.elasticBreakBudgets(
+        slotSeconds - plannedSeconds - minBreakSeconds * breakSlots,
+        breakSlots,
+        minBreakSeconds
+      )
+
+      let cursorMs = start.getTime()
+      let sequence = 0
+      let breakIndex = 0
+      /* Carried across every pod in the slot, not reset per break: the point is
+         that the viewer does not see the same sting twice in quick succession,
+         and pods sit only a programme apart. */
+      const recentBreakAssets: string[] = []
+
+      for (let index = 0; index < planned.length; index++) {
+        const selected = planned[index]
+        if (!selected) break
         const scheduledEnd = new Date(
           cursorMs + selected.durationSeconds * 1000
         )
         programs.push(
-          this.scheduledProgram(channel, selected, scheduledStart, scheduledEnd)
+          this.scheduledProgram(
+            channel,
+            selected,
+            new Date(cursorMs),
+            scheduledEnd
+          )
         )
         cursorMs = scheduledEnd.getTime()
         sequence++
-        programsSinceInterlude++
 
-        if (
-          programsSinceInterlude >= this.interludeFrequency() &&
-          interludes.length > 0 &&
-          sequence < MAX_PROGRAMS_PER_SLOT
-        ) {
-          const remainingAfterProgram = Math.floor(
-            (end.getTime() - cursorMs) / 1000
-          )
-          const nextProgram = this.nextFittingProgram(
-            ordered,
-            orderIndex,
-            remainingAfterProgram
-          )
-          const followingProgram = nextProgram
-            ? this.nextFittingProgram(
-                ordered,
-                (nextProgram.index + 1) % ordered.length,
-                remainingAfterProgram
-              )?.item
-            : undefined
-          const interlude = nextProgram
-            ? selectStationTransitionAsset(interludes, {
-                station: this.stationAssetKey(channel),
-                currentShow: this.stationProgramKey(selected),
-                nextShow: this.stationProgramKey(nextProgram.item),
-                ...(followingProgram
-                  ? { followingShow: this.stationProgramKey(followingProgram) }
-                  : {}),
-                seed: `${channel.id}|${cursorMs}|transition`,
-                maximumDurationSeconds: Math.max(
-                  0,
-                  remainingAfterProgram - nextProgram.item.durationSeconds
-                ),
-              })
-            : undefined
-          const interludeEndMs =
-            cursorMs + (interlude?.durationSeconds ?? 0) * 1000
-          if (interlude && interludeEndMs <= end.getTime()) {
-            programs.push(
-              this.scheduledProgram(
-                channel,
-                interlude,
-                new Date(cursorMs),
-                new Date(interludeEndMs)
-              )
-            )
-            cursorMs = interludeEndMs
-            sequence++
-            programsSinceInterlude = 0
-          } else if (interlude) {
-            // Never skip a due break merely to squeeze another program into a
-            // bounded slot. The next slot starts a fresh cadence.
-            break
-          }
-        }
+        if (interludes.length === 0 || (index + 1) % frequency !== 0) continue
+        const budget = budgets[breakIndex] ?? 0
+        breakIndex++
+        if (budget <= 0) continue
+
+        cursorMs = this.emitBreakPod(programs, channel, interludes, {
+          startMs: cursorMs,
+          limitMs: end.getTime(),
+          budgetSeconds: budget,
+          current: selected,
+          ...(planned[index + 1] ? { next: planned[index + 1] } : {}),
+          ...(planned[index + 2] ? { following: planned[index + 2] } : {}),
+          recent: recentBreakAssets,
+          seed: `${channel.id}|${cursorMs}|transition`,
+        })
+        sequence = programs.length
       }
-      /* What this gap has already played. Without it a long gap repeats one
-         clip: the selector is deterministic, and if the pool it picks from has
-         a single member the varying seed changes nothing. */
-      const recentFillers: string[] = []
+
+      /* Anything the capped pods could not absorb. Reaching here means the slot
+         has more empty time than a believable break load can cover, so it is
+         genuinely unfilled rather than merely unbroken. */
+      const recentFillers: string[] = [...recentBreakAssets]
       while (cursorMs < end.getTime() && sequence < MAX_PROGRAMS_PER_SLOT) {
         const remainingSeconds = Math.ceil((end.getTime() - cursorMs) / 1000)
         const filler = selectStationFillerAsset(
@@ -2033,6 +2041,105 @@ export class ChannelService {
     return Number.isFinite(value) && value > 0 ? value : 1
   }
 
+  /* Spread a slot's unused time evenly over its breaks. Pods are capped so a
+     slot that is mostly empty -- one short show against a long slot -- does not
+     turn a single break into twenty minutes of station idents; past the cap the
+     time is left for the filler tail, where it reads as unfilled rather than
+     pretending to be a commercial load. */
+  private elasticBreakBudgets(
+    spareSeconds: number,
+    breakSlots: number,
+    floorSeconds: number
+  ): number[] {
+    if (breakSlots <= 0) return []
+    const spare = Math.max(0, spareSeconds)
+    const share = Math.floor(spare / breakSlots)
+    let extra = spare - share * breakSlots
+    const budgets: number[] = []
+    for (let index = 0; index < breakSlots; index++) {
+      const bonus = extra > 0 ? 1 : 0
+      extra -= bonus
+      budgets.push(
+        Math.min(floorSeconds + share + bonus, MAX_BREAK_POD_SECONDS)
+      )
+    }
+    return budgets
+  }
+
+  /* One break, built as a pod rather than a single sting: the context-aware
+     transition asset leads so "coming up next" still lands against the right
+     show, then generic fillers pad out the remaining budget. Returns the new
+     cursor. */
+  private emitBreakPod(
+    programs: ScheduledProgram[],
+    channel: LibraryChannelPolicy,
+    interludes: readonly MediaItem[],
+    options: {
+      startMs: number
+      limitMs: number
+      budgetSeconds: number
+      current: MediaItem
+      next?: MediaItem
+      following?: MediaItem
+      recent: string[]
+      seed: string
+    }
+  ): number {
+    const station = this.stationAssetKey(channel)
+    const podEndMs = Math.min(
+      options.limitMs,
+      options.startMs + options.budgetSeconds * 1000
+    )
+    let cursorMs = options.startMs
+
+    const remember = (item: MediaItem): void => {
+      options.recent.push(item.filename)
+      if (options.recent.length > FILLER_MEMORY) options.recent.shift()
+    }
+    const emit = (item: MediaItem): void => {
+      const playSeconds = Math.min(
+        item.durationSeconds,
+        Math.ceil((podEndMs - cursorMs) / 1000)
+      )
+      const scheduledEnd = new Date(
+        Math.min(podEndMs, cursorMs + playSeconds * 1000)
+      )
+      programs.push(
+        this.scheduledProgram(channel, item, new Date(cursorMs), scheduledEnd)
+      )
+      cursorMs = scheduledEnd.getTime()
+      remember(item)
+    }
+
+    if (options.next) {
+      const transition = selectStationTransitionAsset(interludes, {
+        station,
+        currentShow: this.stationProgramKey(options.current),
+        nextShow: this.stationProgramKey(options.next),
+        ...(options.following
+          ? { followingShow: this.stationProgramKey(options.following) }
+          : {}),
+        seed: options.seed,
+        maximumDurationSeconds: Math.floor((podEndMs - cursorMs) / 1000),
+      })
+      if (transition) emit(transition)
+    }
+
+    while (cursorMs < podEndMs) {
+      const remainingSeconds = Math.ceil((podEndMs - cursorMs) / 1000)
+      const filler = selectStationFillerAsset(
+        interludes,
+        station,
+        remainingSeconds,
+        `${options.seed}|pod|${cursorMs}`,
+        options.recent
+      )
+      if (!filler) break
+      emit(filler)
+    }
+    return cursorMs
+  }
+
   private stationAssetKey(channel: LibraryChannelPolicy): string {
     if (
       channel.automation?.networkId === 'nickelodeon' ||
@@ -2048,19 +2155,6 @@ export class ChannelService {
     return stationShowKey(
       item.collectionTitle || item.collectionMetadataTitle || item.filename
     )
-  }
-
-  private nextFittingProgram(
-    ordered: readonly MediaItem[],
-    startIndex: number,
-    remainingSeconds: number
-  ): { item: MediaItem; index: number } | undefined {
-    for (let attempt = 0; attempt < ordered.length; attempt++) {
-      const index = (startIndex + attempt) % ordered.length
-      const item = ordered[index]
-      if (item && item.durationSeconds <= remainingSeconds) return { item, index }
-    }
-    return undefined
   }
 
   private interludeActiveOn(

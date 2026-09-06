@@ -1032,6 +1032,97 @@ describe('ChannelService', () => {
     })
   })
 
+  test('spreads a slot remainder across its breaks instead of banking it as a tail', async () => {
+    /* The shape that produced 30 identical bumpers on the real Nickelodeon
+       06:00-09:00 block: a three-hour slot carrying one show whose episodes are
+       all ~23.5 minutes, so six fit and roughly a quarter-hour is left over. */
+    const repository = mock<IMediaRepository>()
+    const episodes = Array.from({ length: 8 }, (_, index) => ({
+      ...video(index + 1, 'The Wild Thornberrys (1998)'),
+      path: `/media/tv/The Wild Thornberrys (1998)/episode-${index + 1}.mkv`,
+      durationSeconds: 1411,
+    }))
+    const fillers = [5, 5, 6, 7, 8, 9, 10, 12, 15, 18, 22, 28].map(
+      (duration, index) => ({
+        ...interlude(100 + index, duration),
+        filename: `nick__filler-general__target-${duration}s__v${index}.mp4`,
+      })
+    )
+    repository.getAll.mockResolvedValue([...episodes, ...fillers])
+    const service = new ChannelService(
+      repository,
+      {
+        ...policy,
+        roots: {
+          tv: {
+            collections: [
+              { name: 'The Wild Thornberrys (1998)', groups: ['comfort'] },
+            ],
+          },
+        },
+        channels: [
+          {
+            id: 'nick',
+            name: 'Nick',
+            enabled: true,
+            timezone: 'UTC',
+            slots: [
+              { days: ['sun'], start: '06:00', end: '09:00', groups: ['comfort'] },
+            ],
+          },
+        ],
+      },
+      { now: () => new Date('2026-08-23T06:00:00.000Z') },
+      undefined,
+      { enabled: true, frequency: 1 }
+    )
+
+    const programs = (await service.getGuide('nick', 4))?.programs ?? []
+    expect(programs[0]?.scheduledStart).toBe('2026-08-23T06:00:00.000Z')
+    expect(programs.at(-1)?.scheduledEnd).toBe('2026-08-23T09:00:00.000Z')
+    for (let index = 1; index < programs.length; index++) {
+      expect(programs[index]?.scheduledStart).toBe(
+        programs[index - 1]?.scheduledEnd
+      )
+    }
+
+    /* Seven, where reserving a fixed break per programme fits only six: the
+       remainder is claimed as break time rather than left as a tail, so the
+       block carries an extra episode. */
+    expect(programs.filter((item) => item.type === 'program')).toHaveLength(7)
+
+    // No break may bank the whole remainder, and none may sit at the tail as a
+    // quarter-hour of station idents.
+    let run = 0
+    let longestRunSeconds = 0
+    let runSeconds = 0
+    for (const item of programs) {
+      if (item.type === 'interlude') {
+        run++
+        runSeconds += item.durationSeconds
+        longestRunSeconds = Math.max(longestRunSeconds, runSeconds)
+      } else {
+        run = 0
+        runSeconds = 0
+      }
+    }
+    expect(run).toBeGreaterThan(0)
+    expect(longestRunSeconds).toBeLessThanOrEqual(180)
+
+    // Breaks land between programmes rather than all after the last one.
+    const breakCount = programs.filter(
+      (item, index) =>
+        item.type === 'interlude' && programs[index - 1]?.type === 'program'
+    ).length
+    expect(breakCount).toBeGreaterThanOrEqual(5)
+
+    // And the viewer never sees the same sting twice in a row.
+    for (let index = 1; index < programs.length; index++) {
+      if (programs[index]?.type !== 'interlude') continue
+      expect(programs[index]?.mediaId).not.toBe(programs[index - 1]?.mediaId)
+    }
+  })
+
   test('handles a five-second all-day video without exhausting the schedule builder', async () => {
     const repository = mock<IMediaRepository>()
     repository.getAll.mockResolvedValue([

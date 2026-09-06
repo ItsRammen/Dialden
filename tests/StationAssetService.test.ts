@@ -160,7 +160,7 @@ describe('station asset filenames and selection', () => {
        nick fillers wins: with a length band rather than a strict maximum both
        qualify, so pinning one id would be asserting a hash outcome. */
     const chosen = selectStationFillerAsset(items, 'nick', 40, 'gap')
-    expect([3, 4]).toContain(chosen?.id)
+    expect([3, 4]).toContain(chosen?.id ?? -1)
     expect(chosen?.id).not.toBe(1) // another station's filler
     expect(chosen?.id).not.toBe(2) // standby, only used when no filler exists
     expect(stationShowKey('The Fairly OddParents (2001)')).toBe(
