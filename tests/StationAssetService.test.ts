@@ -46,6 +46,10 @@ describe('station asset filenames and selection', () => {
     ['filler--generic-break-out', { kind: 'filler-general', role: 'break-out' }],
     ['filler--generic-long-form-nick-extra-helpful-hints-break-out', { kind: 'filler-general', role: 'break-out' }],
     ['filler--generic-long-form-purple-and-brown', { kind: 'filler-general' }],
+    // A seasonal piece appends its season after the position, and is still positioned.
+    ['filler--generic-break-out-summer', { kind: 'filler-general', role: 'break-out' }],
+    ['filler--generic-break-in-summer', { kind: 'filler-general', role: 'break-in' }],
+    ['ident--generic-station-id-fall', { kind: 'ident-general' }],
     ['standby--generic-standby', { kind: 'standby-loop' }],
   ] as const)('recognizes Nickstory v5 export %s', (fields, expected) => {
     expect(parseStationAssetFilename(`nickelodeon--${fields}--2008--NHD12095-11-2.m4v`)).toEqual({ station: 'nick', ...expected })

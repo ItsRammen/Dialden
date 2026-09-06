@@ -247,9 +247,14 @@ function parseAssetCodeMetadata(
  * 'standalone' is stated outright rather than left to be inferred.
  */
 function parseAssetRole(label: string): { role?: StationAssetRole } {
-  if (/(?:^|-)break-out$/.test(label)) return { role: 'break-out' }
-  if (/(?:^|-)break-in$/.test(label)) return { role: 'break-in' }
-  if (/(?:^|-)standalone$/.test(label)) return { role: 'standalone' }
+  /* Matched as a whole token anywhere in the field rather than only at the end,
+     because a seasonal piece appends its season after the position:
+     'generic-break-out-summer' is still a break-out. */
+  const token = (value: string): RegExp =>
+    new RegExp(`(?:^|-)${value}(?:-|$)`)
+  if (token('break-out').test(label)) return { role: 'break-out' }
+  if (token('break-in').test(label)) return { role: 'break-in' }
+  if (token('standalone').test(label)) return { role: 'standalone' }
   return {}
 }
 
