@@ -393,6 +393,24 @@ export function selectStationTransitionAsset(
  */
 const FILLER_LENGTH_BAND = 0.3
 
+/* How many pieces must pass before the same one may play again. The seasonal
+   window is much wider because a season has an order of magnitude fewer pieces
+   than the evergreen pool -- thirteen for autumn against five hundred -- and
+   preferring them without spacing them would wear them out in an afternoon. */
+const FILLER_SPACING = 8
+const SEASONAL_SPACING = 40
+
+/* How much history a caller should keep and pass back. Exported so the two
+   cannot drift: keep less than this and seasonal spacing quietly shrinks. */
+export const STATION_ASSET_HISTORY = SEASONAL_SPACING
+
+/* A piece the importer gave a date window to. Out-of-season ones are already
+   gone by the time selection runs -- the schedule filters the pool by date
+   first -- so anything still carrying a window is in season now. */
+function isSeasonal(item: MediaItem): boolean {
+  return item.dateStart !== null || item.dateEnd !== null
+}
+
 export function selectStationFillerAsset(
   items: readonly MediaItem[],
   station: string,
@@ -456,13 +474,32 @@ export function selectStationFillerAsset(
     )
   }
 
+  /* Having a date window is only worth anything if the piece actually airs
+     while it holds, so an in-season piece is taken ahead of the evergreen
+     rotation -- but only one that has not played for a good while. Both of the
+     ways this can run out lead back to the ordinary pool on their own: a
+     station with nothing for the current season never has a candidate here,
+     and one whose seasonal pieces have all played recently stops having one
+     until they age out. */
+  const spacedSeasonal = fitting.filter(
+    (entry) =>
+      isSeasonal(entry.item) &&
+      !recentlyPlayed.slice(-SEASONAL_SPACING).includes(entry.item.filename)
+  )
+  if (spacedSeasonal.length > 0) {
+    return deterministicCandidate(
+      spacedSeasonal.map((entry) => entry.item),
+      seed
+    )
+  }
+
   const longest = Math.max(...fitting.map((entry) => entry.item.durationSeconds))
   const longEnough = fitting.filter(
     (entry) => entry.item.durationSeconds >= longest * FILLER_LENGTH_BAND
   )
   /* Skip what has just played, unless that would leave nothing -- a station
      with one usable filler still has to fill the gap with it. */
-  const recent = new Set(recentlyPlayed)
+  const recent = new Set(recentlyPlayed.slice(-FILLER_SPACING))
   const unplayed = longEnough.filter((entry) => !recent.has(entry.item.filename))
   const choices = unplayed.length > 0 ? unplayed : longEnough
   return deterministicCandidate(

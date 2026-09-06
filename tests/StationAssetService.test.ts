@@ -55,6 +55,68 @@ describe('station asset filenames and selection', () => {
     expect(parseStationAssetFilename(`nickelodeon--${fields}--2008--NHD12095-11-2.m4v`)).toEqual({ station: 'nick', ...expected })
   })
 
+  describe('seasonal pieces', () => {
+    const seasonal = (id: number, name: string): MediaItem => ({
+      ...asset(id, `nickelodeon--filler--generic-${name}--2011--N1-${id}.mp4`),
+      dateStart: '06-01',
+      dateEnd: '08-31',
+    })
+    const evergreen = (id: number): MediaItem =>
+      asset(id, `nickelodeon--filler--generic--2011--N2-${id}.mp4`)
+    /* The schedule filters the pool by date before selection runs, so anything
+       reaching the selector with a window is in season now. */
+    const items = [
+      seasonal(1, 'summer'),
+      seasonal(2, 'summer'),
+      ...[3, 4, 5, 6].map(evergreen),
+    ]
+
+    test('airs while its window holds, ahead of the evergreen rotation', () => {
+      const chosen = selectStationFillerAsset(items, 'nick', 60, 'seed')
+      expect([1, 2]).toContain(chosen?.id ?? -1)
+    })
+
+    test('gives way to the ordinary pool once they have all just played', () => {
+      const played = [items[0]!.filename, items[1]!.filename]
+      const chosen = selectStationFillerAsset(items, 'nick', 60, 'seed', played)
+      expect(chosen?.id).toBeGreaterThan(2)
+    })
+
+    test('comes back round once they have aged out of the history', () => {
+      // A full window of other pieces, so neither seasonal piece is recent.
+      const played = Array.from({ length: 40 }, (_, index) => `other-${index}.mp4`)
+      const chosen = selectStationFillerAsset(items, 'nick', 60, 'seed', played)
+      expect([1, 2]).toContain(chosen?.id ?? -1)
+    })
+
+    test('is simply absent for a season the station has nothing for', () => {
+      const winter = [evergreen(3), evergreen(4), evergreen(5)]
+      const chosen = selectStationFillerAsset(winter, 'nick', 60, 'seed')
+      expect(chosen?.id).toBeGreaterThan(2)
+    })
+
+    test('still respects the break position it was asked for', () => {
+      /* A seasonal piece is not a free pass into a position it does not hold:
+         in the real library most of them are break-out, which is why they
+         surface through that pick rather than the middle of a pod. */
+      const positioned = [
+        seasonal(7, 'break-out-summer'),
+        asset(9, 'nickelodeon--filler--generic-break-in--2011--N3-09.mp4'),
+        ...[3, 4, 5, 6].map(evergreen),
+      ]
+      expect(
+        selectStationFillerAsset(positioned, 'nick', 60, 'seed', [], 'break-out')?.id
+      ).toBe(7)
+      expect(
+        selectStationFillerAsset(positioned, 'nick', 60, 'seed', [], 'break-in')?.id
+      ).toBe(9)
+      // And it stays out of the middle of a pod, in season or not.
+      expect(
+        selectStationFillerAsset(positioned, 'nick', 60, 'seed')?.id
+      ).toBeGreaterThan(2)
+    })
+  })
+
   test('picks the leaving bumper at one end of a break and the handover at the other', () => {
     const more = asset(
       301,

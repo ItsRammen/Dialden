@@ -3,6 +3,7 @@ import type { MediaItem } from '../types'
 import {
   selectStationFillerAsset,
   selectStationTransitionAsset,
+  STATION_ASSET_HISTORY,
   stationShowKey,
 } from './StationAssetService'
 import type { StationAssetRole } from './StationAssetService'
@@ -204,7 +205,9 @@ const SYSTEM_CLOCK: ChannelClock = { now: () => new Date() }
    moving through the library rather than cycling a few clips, and the selector
    falls back to the whole band when everything is recent, so a station with a
    handful of usable assets can still fill a long gap. */
-const FILLER_MEMORY = 8
+/* Long enough for the selector to space seasonal pieces; it slices a shorter
+   window off the end for ordinary repeat avoidance. */
+const FILLER_MEMORY = STATION_ASSET_HISTORY
 
 /* Longest a single break may run. Real pods sit around two to four minutes. */
 const MAX_BREAK_POD_SECONDS = 180
