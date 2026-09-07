@@ -1,6 +1,23 @@
 (function () {
   'use strict'
 
+  document.querySelectorAll('[data-shorts-picker]').forEach(function (picker) {
+    var search = picker.querySelector('[data-shorts-search]')
+    var status = picker.querySelector('[data-shorts-search-status]')
+    if (!search) return
+    function filterShorts() {
+      var query = search.value.trim().toLocaleLowerCase()
+      var visible = 0
+      picker.querySelectorAll('[data-shorts-option]').forEach(function (option) {
+        option.hidden = !option.getAttribute('data-search-title').toLocaleLowerCase().includes(query)
+        if (!option.hidden) visible++
+      })
+      status.textContent = visible ? visible + ' matching collections' : 'No collections match your search.'
+    }
+    search.addEventListener('input', filterShorts)
+    filterShorts()
+  })
+
   var modal = document.querySelector('.channel-modal')
   if (modal) {
     document.documentElement.classList.add('channel-modal-open')

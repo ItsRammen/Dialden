@@ -1140,3 +1140,18 @@ describe('channel administration template', () => {
     )
   })
 })
+
+
+test('shorts picker suggests Nick titles, preserves saved exceptions, and starts collapsed', () => {
+  const collection = (id: number, title: string) => ({ id, rootId: 'tv', identityKey: title, collectionTitle: title, displayTitle: title, libraryKind: 'tv' as const, genres: [], networks: [], studios: [], eligibleFiles: 4 })
+  const catalog = { collections: [collection(1, 'SpongeBob SquarePants'), collection(2, 'Dexter’s Laboratory'), collection(3, 'The Powerpuff Girls')], genres: [], networks: [], studios: [], presets: [], truncated: false }
+  const channel = { id: 'nick', name: 'Nick', enabled: true, timezone: 'UTC', slots: [], automation: { preset: 'network-copy', airtime: 'all-day' as const, networkId: 'nickelodeon' as const, eraStartYear: 1991, eraEndYear: 2026 }, shorts: { enabled: true, groups: [], collections: ['["tv","tv","The Powerpuff Girls"]'], maximumDurationSeconds: 600, maximumPerBlock: 2 } }
+  const html = renderChannelAdministration({ channels: [channel], manuallyOffAir: [], programmingGroups: [], configurationError: null }, { editId: 'nick', automation: catalog })
+  const picker = html.slice(html.indexOf('<details class="channel-marathon" data-shorts-picker'), html.indexOf('<section class="channel-builder-step" aria-labelledby="station-schedule-heading"'))
+  expect(picker).toContain('data-shorts-search')
+  expect(picker).toContain('SpongeBob SquarePants')
+  expect(picker).not.toContain('Dexter')
+  expect(picker).toContain('The Powerpuff Girls')
+  expect(picker).toContain('Previously selected; outside current suggestions')
+  expect(picker).not.toContain('data-shorts-picker open')
+})

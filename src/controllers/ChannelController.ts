@@ -443,9 +443,12 @@ export function createChannelController({
         ?.channels.find((channel) => channel.id === id)
       const channel = channels.update(
         id,
-        input.marathon === undefined && existing?.marathon
-          ? { ...input, marathon: existing.marathon }
-          : input
+        { ...input,
+          ...(input.marathon === undefined && existing?.marathon ? { marathon: existing.marathon } : {}),
+          // This editor changes presentation and schedule fields, not the
+          // saved Auto lineup recipe. Only Auto setup replaces that recipe.
+          ...(existing?.automation ? { automation: existing.automation } : {}),
+        }
       )
       if (!channel) return c.text('Channel not found', 404)
       await notifyChannelChanged(id)

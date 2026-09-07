@@ -787,3 +787,21 @@ describe('ChannelController', () => {
     ])
   })
 })
+
+
+test('ordinary station edits retain the saved Nick Auto lineup recipe', async () => {
+  const channels = mock<ChannelService>()
+  const automation = { preset: 'network-copy', airtime: 'all-day' as const, networkId: 'nickelodeon' as const, eraStartYear: 1991, eraEndYear: 2026, selectionMode: 'automatic' as const }
+  const existing = { id: 'nick', name: 'Nick', enabled: true, timezone: 'UTC', slots: [], automation }
+  channels.administrationSnapshot.mockReturnValue({ channels: [existing], manuallyOffAir: [], programmingGroups: [], configurationError: null })
+  channels.update.mockReturnValue(existing)
+  const app = new Hono().route('/', createChannelController({ channels }))
+  const data = new FormData()
+  data.set('id', 'nick'); data.set('name', 'Nick updated'); data.set('timezone', 'UTC'); data.set('enabled', 'on')
+  data.set('slots', 'mon | 06:00-09:00 | nick')
+  data.set('brandingMode', 'custom')
+  const response = await app.request('/channels/nick', { method: 'POST', body: data })
+  expect(response.status).toBe(303)
+  expect(channels.update.mock.calls[0]![1].automation).toEqual(automation)
+  expect(channels.update.mock.calls[0]![1].name).toBe('Nick updated')
+})
