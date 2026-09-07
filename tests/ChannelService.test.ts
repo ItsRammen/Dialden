@@ -1124,6 +1124,28 @@ describe('ChannelService', () => {
     }
   })
 
+  test('fills bounded blocks with complete shorts after main episodes and rotates across blocks', async () => {
+    const repository = mock<IMediaRepository>()
+    const main = { ...video(1, 'Bluey (2018)'), durationSeconds: 1413 }
+    const shorts = [2, 3, 4, 5].map((id) => ({ ...video(id, 'Random! Cartoons'), collectionIdentityKey: 'random-cartoons', libraryKind: 'tv' as const, durationSeconds: 412 }))
+    repository.getAll.mockResolvedValue([main, ...shorts, { ...interlude(90, 5), filename: 'nickelodeon--ident--generic-station-id--2015--N1-01.mp4' }])
+    const config: LibraryPolicyDocument = { ...policy, channels: [{ id: 'nick', name: 'Nick', enabled: true, timezone: 'UTC',
+      shorts: { enabled: true, groups: [], collections: ['["tv","tv","random-cartoons"]'], maximumDurationSeconds: 600, maximumPerBlock: 2 },
+      slots: [{ days: ['sun'], start: '06:00', end: '09:00', groups: ['comfort'] }, { days: ['sun'], start: '09:00', end: '12:00', groups: ['comfort'] }] }] }
+    const service = new ChannelService(repository, config, { now: () => new Date('2026-08-23T06:00:00Z') }, undefined, { enabled: true, frequency: 1 })
+    const rows = (await service.getGuide('nick', 6))!.programs
+    const selected = rows.filter((p) => p.type === 'short')
+    expect(selected).toHaveLength(4)
+    expect(new Set(selected.map((p) => p.mediaId)).size).toBe(4)
+    expect(selected.every((p) => p.durationSeconds === 412 && p.sourceDurationSeconds === 412)).toBe(true)
+    expect(rows.filter((p) => p.type === 'program')).toHaveLength(14)
+    expect(selected[0]!.scheduledStart > '2026-08-23T08:40:00').toBe(true)
+    expect(rows.at(-1)!.scheduledEnd).toBe('2026-08-23T12:00:00.000Z')
+    for (let i = 1; i < rows.length; i++) expect(rows[i]!.scheduledStart).toBe(rows[i - 1]!.scheduledEnd)
+    const again = (await service.getGuide('nick', 6))!.programs
+    expect(again).toEqual(rows)
+  })
+
   test('short breaks use a whole matching announcement without a generated card', () => {
     const service = new ChannelService(mock<IMediaRepository>(), policy)
     const current = video(1, 'SpongeBob SquarePants')

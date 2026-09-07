@@ -2716,3 +2716,6 @@ html.channel-modal-open body {
     border-radius: 0;
   }
 }
+
+.channel-shorts-collections { max-height: 240px; overflow-y: auto; padding: 12px; border: 1px solid var(--glass-border, #334155); border-radius: 8px; }
+.channel-shorts-collections label { padding: 5px 0; }

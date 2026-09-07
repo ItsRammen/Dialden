@@ -148,7 +148,8 @@ export function renderChannelAdministration(
                 edit,
                 groups,
                 new Set(options.channelLogoIds ?? []),
-                edit ? options.channelLogoVariants?.[edit.id] ?? [] : []
+                edit ? options.channelLogoVariants?.[edit.id] ?? [] : [],
+                options.automation?.collections ?? []
               ),
               '/channels',
               edit ? `Configure ${edit.name}` : 'Create a station manually'
@@ -307,7 +308,8 @@ function renderManualEditor(
   edit: LibraryChannelPolicy | undefined,
   groups: readonly string[],
   uploadedLogoIds: ReadonlySet<string>,
-  scheduledLogoIds: readonly string[]
+  scheduledLogoIds: readonly string[],
+  collections: StationAutomationCatalog['collections'] = []
 ): string {
   const editorTitle = edit ? escapeHtml(edit.name) : 'Create a station manually'
   return `<section class="channel-admin-editor" id="editor" data-channel-editor>
@@ -344,6 +346,22 @@ function renderManualEditor(
       <section class="channel-builder-step" aria-labelledby="station-pattern-heading">
         ${renderStepHeading(3, 'Programming pattern', 'Optionally add recurring episode marathons to the normal mix.', 'station-pattern-heading')}
         ${renderMarathonSettings(edit?.marathon)}
+        <section class="channel-marathon" aria-labelledby="station-shorts-heading">
+          <h3 id="station-shorts-heading">Short programming</h3>
+          <p>Finish schedule blocks with complete short cartoons before allocating leftover time to breaks. Shorts appear as programmes in both guides.</p>
+          <label class="channel-admin-checkbox"><input type="checkbox" name="shortsEnabled" value="true" ${edit?.shorts?.enabled ? 'checked' : ''}> Fill remaining block time with shorts</label>
+          <fieldset class="channel-shorts-collections"><legend>Short-cartoon collections</legend>
+          ${collections.filter((c) => c.libraryKind === 'tv').map((c) => `<label class="channel-admin-checkbox"><input type="checkbox" name="shortsCollections" value="${escapeHtml(collectionReferenceKey(c))}" ${edit?.shorts?.collections?.includes(collectionReferenceKey(c)) ? 'checked' : ''}> ${escapeHtml(c.displayTitle)} <small>${c.eligibleFiles} eligible files</small></label>`).join('') || '<p>No TV collections available. Import and approve your short cartoons in the TV library first.</p>'}
+          ${(edit?.shorts?.collections ?? []).filter((key) => !collections.some((c) => collectionReferenceKey(c) === key)).map((key) => `<label class="channel-admin-checkbox"><input type="checkbox" name="shortsCollections" value="${escapeHtml(key)}" checked> Saved collection currently unavailable: ${escapeHtml(key)}</label>`).join('')}
+          </fieldset>
+          <details><summary>Use programming groups instead</summary>${[...new Set([...groups, ...(edit?.shorts?.groups ?? [])])].map((group) => `<label class="channel-admin-checkbox"><input type="checkbox" name="shortsGroups" value="${escapeHtml(group)}" ${edit?.shorts?.groups.includes(group) ? 'checked' : ''}> ${escapeHtml(group)}</label>`).join('')}</details>
+          <p>Import individual stories into the TV library, not Station Assets. Selected shorts are reserved for block endings on this station instead of entering its regular episode mix. Continuous all-day schedules have no block ending to fill.</p>
+          <div class="channel-admin-fields">
+            <label>Maximum short duration (seconds)<input type="number" name="shortsMaximumDuration" min="30" max="900" value="${edit?.shorts?.maximumDurationSeconds ?? 600}"></label>
+            <label>Maximum shorts per block<input type="number" name="shortsMaximumPerBlock" min="1" max="4" value="${edit?.shorts?.maximumPerBlock ?? 2}"></label>
+          </div>
+          <p>Only approved, available videos that fit in full are eligible. Recently scheduled shorts are skipped. If none fit, the existing break fallback is used.</p>
+        </section>
       </section>
       <section class="channel-builder-step" aria-labelledby="station-schedule-heading">
         ${renderStepHeading(4, 'Weekly schedule', 'Place programming groups into editable time blocks.', 'station-schedule-heading')}
@@ -438,7 +456,8 @@ function renderBrandingSummary(
 function renderBrandingEditor(
   channel: LibraryChannelPolicy,
   uploadedLogoIds: ReadonlySet<string>,
-  scheduledLogoIds: readonly string[]
+  scheduledLogoIds: readonly string[],
+  collections: StationAutomationCatalog['collections'] = []
 ): string {
   const branding = channel.branding ?? defaultBranding()
   const hasCustomLogo = uploadedLogoIds.has(channel.id)
@@ -1276,7 +1295,8 @@ const SCHEDULE_DAYS = [
 function renderScheduleDesigner(
   slots: LibraryChannelPolicy['slots'],
   configuredGroups: readonly string[],
-  scheduledLogoIds: readonly string[]
+  scheduledLogoIds: readonly string[],
+  collections: StationAutomationCatalog['collections'] = []
 ): string {
   const groups = [...new Set([
     ...configuredGroups,

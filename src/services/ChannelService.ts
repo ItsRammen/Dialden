@@ -1,3 +1,4 @@
+import { selectBlockShorts } from './ShortProgrammingService'
 import type { IMediaRepository } from '../repositories/IMediaRepository'
 import type { MediaItem } from '../types'
 import {
@@ -1688,6 +1689,13 @@ export class ChannelService {
     return programs
   }
 
+  private isShortCollection(channel: LibraryChannelPolicy, source: ScheduleSourceSnapshot, item: MediaItem): boolean {
+    const policy = channel.shorts
+    if (!policy?.enabled) return false
+    const key = JSON.stringify([item.rootId, item.libraryKind, item.collectionIdentityKey])
+    return Boolean(policy.collections?.includes(key)) || policy.groups.some((group) => source.groupsByMediaId.get(item.id)?.has(group))
+  }
+
   private buildDay(
     channel: LibraryChannelPolicy,
     source: ScheduleSourceSnapshot,
@@ -1695,6 +1703,9 @@ export class ChannelService {
   ): ScheduledProgram[] {
     const programs: ScheduledProgram[] = []
     const recentBreakAssets: string[] = []
+    const recentShorts: number[] = []
+    const shortsPool = channel.shorts?.enabled ? source.programMedia.filter((item) => this.isShortCollection(channel, source, item)) : []
+    const shortsIds = new Set(shortsPool.map((item) => item.id))
     const slots = channel.slots
       .filter((slot) => slot.days.includes(date.weekday))
       .sort((a, b) => this.timeToMinutes(a.start) - this.timeToMinutes(b.start))
@@ -1710,7 +1721,7 @@ export class ChannelService {
         this.timeToMinutes(slot.end),
         channel.timezone
       )
-      const eligible = this.programsForGroups(source, slot.groups)
+      const eligible = this.programsForGroups(source, slot.groups).filter((item) => !shortsIds.has(item.id))
       if (eligible.length === 0) continue
 
       const dateKey = `${date.year}-${this.pad(date.month)}-${this.pad(date.day)}`
@@ -1739,10 +1750,10 @@ export class ChannelService {
       /* Every break still has to fit its shortest asset. Sizing pods purely
          from leftover time would drop breaks altogether in a slot whose
          programmes happen to tile it exactly. */
-      const minBreakSeconds =
-        interludes.length === 0
-          ? 0
-          : Math.min(...interludes.map((item) => item.durationSeconds))
+      const minBreakSeconds = !this.interludePolicy.enabled ? 0 : Math.max(
+        channel.shorts?.enabled ? 5 : 0,
+        interludes.length === 0 ? 0 : Math.min(...interludes.map((item) => item.durationSeconds))
+      )
       const planned: MediaItem[] = []
       let plannedSeconds = 0
       let planIndex = 0
@@ -1767,6 +1778,19 @@ export class ChannelService {
         plannedSeconds += picked.durationSeconds
       }
 
+      const selectedShorts = channel.shorts?.enabled ? selectBlockShorts(
+        this.deterministicShuffle(shortsPool.filter((item) => !recentShorts.includes(item.id)), `${channel.id}|${dateKey}|${slot.start}|shorts`),
+        slotSeconds - plannedSeconds - minBreakSeconds * Math.floor(planned.length / frequency),
+        channel.shorts.maximumDurationSeconds, channel.shorts.maximumPerBlock, minBreakSeconds
+      ) : []
+      for (const item of selectedShorts) {
+        planned.push(item)
+        plannedSeconds += item.durationSeconds
+        recentShorts.push(item.id)
+      }
+      while (recentShorts.length > 20) recentShorts.shift()
+      const selectedShortIds = new Set(selectedShorts.map((item) => item.id))
+
       const breakSlots =
         !this.interludePolicy.enabled ? 0 : Math.floor(planned.length / frequency)
       const budgets = this.elasticBreakBudgets(
@@ -1788,12 +1812,8 @@ export class ChannelService {
           cursorMs + selected.durationSeconds * 1000
         )
         programs.push(
-          this.scheduledProgram(
-            channel,
-            selected,
-            new Date(cursorMs),
-            scheduledEnd
-          )
+          { ...this.scheduledProgram(channel, selected, new Date(cursorMs), scheduledEnd),
+            ...(selectedShortIds.has(selected.id) ? { type: 'short' as const } : {}) }
         )
         cursorMs = scheduledEnd.getTime()
         sequence++

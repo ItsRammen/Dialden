@@ -890,6 +890,13 @@ async function readFormChannel(
     timezone: textValue(data.get('timezone')),
     enabled: data.get('enabled') !== null,
     slots: parseChannelSlots(textValue(data.get('slots'))),
+    shorts: {
+      enabled: data.get('shortsEnabled') === 'true',
+      groups: data.getAll('shortsGroups').map(textValue),
+      collections: data.getAll('shortsCollections').map(textValue),
+      maximumDurationSeconds: Number(data.get('shortsMaximumDuration') || 600),
+      maximumPerBlock: Number(data.get('shortsMaximumPerBlock') || 2),
+    },
     branding: readBrandingPolicy(data),
     ...(marathon ? { marathon } : {}),
   }
