@@ -983,12 +983,12 @@ function renderNetworkProfile(
             <input type="checkbox" name="collectionIds" value="${match.collectionId}" ${checked ? 'checked' : ''} ${modeActive && selected && eligible && lineupMode === 'explicit' ? '' : 'disabled'}>
             <span><strong>${escapeHtml(match.title)}</strong><small>${escapeHtml(match.libraryKind.toUpperCase())} · ${match.airStartYear}–${match.airEndYear}${firstAirLabel} · ${escapeHtml(eligibilityReasonLabel(match.eligibilityReason))} · ${escapeHtml(match.playbackOrder)}${collection ? ` · ${countLabel(collection.eligibleFiles, 'playable file')}` : ''}</small></span>
           </label>`
-        }).join('') || '<p class="channel-title-empty">No owned title is strictly eligible for this network.</p>'}
+        }).join('') || '<p class="channel-title-empty">No owned title is ready for this network. Check the TV library for unresolved metadata, approval, or unavailable files; Auto lineup only lists schedulable collections.</p>'}
       </div>
       <p class="channel-title-empty" data-title-filter-empty hidden>No eligible owned title matches this search.</p>
     </section>
     <section class="channel-network-wishlist" aria-labelledby="wishlist-${escapeHtml(profile.id)}">
-      <header><div><h4 id="wishlist-${escapeHtml(profile.id)}">Network acquisition suggestions</h4><p>Wishlist only—Dialden never downloads, streams, or links to media.</p></div></header>
+      <header><div><h4 id="wishlist-${escapeHtml(profile.id)}">Network acquisition suggestions</h4><p>All known suggestions for this network are listed below and filtered by the selected era. This is a built-in wishlist, not an online catalogue. To add a title to the lineup, import it and resolve its approval and metadata in the TV library.</p></div></header>
       <div class="channel-wishlist-grid">
         ${profile.missingSuggestions.map((suggestion) => {
           const visible = erasOverlap(

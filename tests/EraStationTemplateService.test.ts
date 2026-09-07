@@ -618,3 +618,11 @@ describe('era station templates', () => {
     ).toThrow('unknown block')
   })
 })
+
+
+test('Disney Junior includes acquired Bluey from 2019 despite its ABC origin', () => {
+  const library = [collection(999, 'Bluey', { firstAirYear: 2018, networks: ['ABC Kids'] })]
+  expect(analyzeNetworkCopyProfile('disney-junior', library, { startYear: 2019, endYear: 2026 }).matches.map((match) => match.collection.id)).toEqual([999])
+  expect(analyzeNetworkCopyProfile('disney-junior', library, { startYear: 1997, endYear: 2018 }).matches).toHaveLength(0)
+  expect(analyzeNetworkCopyProfile('nick-jr', library, { startYear: 1996, endYear: 2026 }).matches).toHaveLength(0)
+})

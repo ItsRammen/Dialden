@@ -922,6 +922,9 @@ const CURRENT_NETWORK_SUGGESTIONS: Readonly<
     movie('Zombies', 2018, ['music', 'family'], ['primetime']),
   ],
   'disney-junior': [
+    // BBC Studios: US premiere on Disney Junior, September 9, 2019.
+    // https://www.bbcstudiospressroom.com/press/disney-junior-launches-u-s-premiere-preschool-hit-bluey-monday-september-9/
+    showCarriage('Bluey', 2018, 2019, 2026, ['preschool', 'family', 'comedy'], ['morning', 'daytime', 'afternoon'], 'season-sequential'),
     showRun('Doc McStuffins', 2012, 2020, ['preschool', 'educational'], ['morning', 'daytime']),
     showRun('Sofia the First', 2013, 2018, ['preschool', 'fantasy'], ['morning', 'afternoon']),
     showRun('Miles from Tomorrowland', 2015, 2018, ['preschool', 'science-fiction'], ['morning', 'daytime']),
