@@ -103,7 +103,38 @@
       candidateChannelId === nowChannelId || requestedChannelId === nowChannelId;
   }
 
+  // Events such as playing/canplay do not prove that playback is advancing.
+  // Sample independently, including decoded frames where the TV exposes them.
+  function createProgressWatchdog(timeoutMs) {
+    var key = null, time = 0, frames = null, progressedAt = 0, framesAt = 0, framesReliable = false;
+    return function (sample) {
+      if (!sample.enabled || key !== sample.key) {
+        key = sample.enabled ? sample.key : null;
+        time = sample.time;
+        frames = sample.frames;
+        framesReliable = false;
+        progressedAt = framesAt = sample.now;
+        return false;
+      }
+      if (sample.time > time + 0.1 || sample.time < time - 1) {
+        time = sample.time;
+        progressedAt = sample.now;
+      }
+      if (sample.frames === null) framesReliable = false;
+      if (sample.frames !== null && frames !== null && sample.frames > frames) framesReliable = true;
+      if (sample.frames === null || frames === null || sample.frames !== frames) {
+        frames = sample.frames;
+        framesAt = sample.now;
+      }
+      if (sample.now - progressedAt < timeoutMs && (!framesReliable || sample.now - framesAt < timeoutMs)) return false;
+      // Throttle retries even when the element emits no events at all.
+      progressedAt = framesAt = sample.now;
+      return true;
+    };
+  }
+
   return {
+    createProgressWatchdog: createProgressWatchdog,
     appendClientId: appendClientId,
     canAdoptTuner: canAdoptTuner,
     choose: choose,

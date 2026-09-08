@@ -7,7 +7,7 @@
   var STORAGE_CLIENT_NAME = 'toasttv.clientName.v1';
   var STORAGE_SESSION_OWNER = 'toasttv.sessionOwner.v1';
   var STORAGE_SESSION_OWNER_EPOCH = 'toasttv.sessionOwnerEpoch.v1';
-  var CLIENT_VERSION = '0.7.1';
+  var CLIENT_VERSION = '0.7.2';
   var DEFAULT_SERVER = 'http://TOWER:1993';
   var POLL_INTERVAL_MS = 30000;
   var CHANNEL_REFRESH_INTERVAL_MS = 15000;
@@ -5013,7 +5013,33 @@
     if (best) state.clockOffsetMs = best.offset;
   }
 
+  var playbackProgressWatchdog = null;
+  function checkPlaybackProgress() {
+    if (!playbackProgressWatchdog) playbackProgressWatchdog = window.ToastTVPlaybackPolicy.createProgressWatchdog(20000);
+    var video = activeVideo();
+    var frames = null;
+    try {
+      if (video.getVideoPlaybackQuality) frames = video.getVideoPlaybackQuality().totalVideoFrames;
+      else if (typeof video.webkitDecodedFrameCount === 'number') frames = video.webkitDecodedFrameCount;
+    } catch (ignoreFrameCounter) {}
+    // Some TVs expose a permanently unsupported zero counter.
+    if (!(frames > 0)) frames = null;
+    var source = state.activeSource;
+    var stalled = playbackProgressWatchdog({
+      enabled: state.view === 'player' && !state.tuning && !state.localPaused &&
+        !state.awaitingGesture && !document.hidden && source && source.mode === 'channel-hls',
+      key: state.tuneGeneration + ':' + (source ? source.url : ''),
+      now: Date.now(), time: Number(video.currentTime) || 0, frames: frames
+    });
+    if (!stalled || state.tunerRecoveryInFlight) return;
+    logTunerStatus('warn', 'No playback progress for 20 seconds; reconnecting live playback');
+    clearBufferingTimers();
+    if (source.tunerSessionId) recoverStableTunerPlayback();
+    else retryLiveStream('Reconnecting stalled playback…');
+  }
+
   function tickClock() {
+    checkPlaybackProgress();
     var current = new Date(Date.now() + state.clockOffsetMs);
     var label = formatClock(current);
     if (elements.homeClock) elements.homeClock.textContent = label;
