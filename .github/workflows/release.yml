@@ -41,12 +41,21 @@ jobs:
           mkdir -p release
           mv dist/*.tar.gz release/
 
+      # Versioned from clients/webos/appinfo.json, which the TV client
+      # maintains on its own cadence: it is sideloaded by hand, so it does
+      # not have to move whenever the server does.
+      - name: Package webOS client
+        run: |
+          npx --yes --package @webos-tools/cli@3.2.5 ares-package -o dist/webos clients/webos
+          cp dist/webos/*.ipk release/
+
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v1
         with:
           files: |
             release/toasttv-*.tar.gz
             release/media.tar.gz
+            release/*.ipk
           generate_release_notes: true
 
       - name: Update version files for auto-update
