@@ -7,7 +7,7 @@
   var STORAGE_CLIENT_NAME = 'toasttv.clientName.v1';
   var STORAGE_SESSION_OWNER = 'toasttv.sessionOwner.v1';
   var STORAGE_SESSION_OWNER_EPOCH = 'toasttv.sessionOwnerEpoch.v1';
-  var CLIENT_VERSION = '0.7.3';
+  var CLIENT_VERSION = '0.7.4';
   var DEFAULT_SERVER = 'http://TOWER:1993';
   var POLL_INTERVAL_MS = 30000;
   var CHANNEL_REFRESH_INTERVAL_MS = 15000;
@@ -1488,6 +1488,8 @@
     for (index = 0; index < state.channels.length; index += 1) {
       elements.channelGrid.appendChild(createChannelCard(state.channels[index], index));
     }
+    // Rebuilt cards should show the last known logo and lineup immediately.
+    renderRememberedChannelSchedules();
     if (state.channels.length) {
       var previewIndex = focusedChannelId ? findChannelIndex(focusedChannelId) : state.channelIndex;
       selectChannelPreview(previewIndex < 0 ? 0 : previewIndex);
@@ -1692,9 +1694,10 @@
     elements.channelPreviewNumber.textContent = channelNumber(index);
     elements.channelPreviewName.textContent = channel.name;
     elements.channelPreviewMonogram.textContent = channelMonogram(channel.name);
-    hideChannelPreviewLogo();
     var logoUrl = channelBrandingUrl(data);
-    if (logoUrl) {
+    if (!logoUrl) hideChannelPreviewLogo();
+    else if (elements.channelPreviewLogo.getAttribute('src') !== logoUrl) {
+      hideChannelPreviewLogo();
       elements.channelPreviewLogo.alt = channel.name + ' logo';
       elements.channelPreviewLogo.src = logoUrl;
     }
@@ -1849,6 +1852,8 @@
     var target = elements.channelGrid.querySelector('[data-channel-logo="' + escapeAttribute(channelId) + '"]');
     var url = channelBrandingUrl(data);
     if (!target) return;
+    var existingLogo = target.querySelector('img');
+    if (url && existingLogo && existingLogo.getAttribute('src') === url) return;
     clearChildren(target);
     if (!url) {
       target.textContent = channelMonogram((state.channels[findChannelIndex(channelId)] || {}).name || 'TV');
@@ -3905,7 +3910,7 @@
     var cacheKey = guideDayCacheKey(channelId, fromMs);
     var entry = state.guideCache[cacheKey];
     if (!entry) return null;
-    if (Date.now() - entry.fetchedAt >= GUIDE_CACHE_TTL_MS) {
+    if (Date.now() - entry.fetchedAt >= 30 * 60 * 1000) {
       delete state.guideCache[cacheKey];
       return null;
     }
@@ -3972,9 +3977,9 @@
     }
   }
 
-  function requestGuideDay(channelId, fromMs) {
+  function requestGuideDay(channelId, fromMs, refresh) {
     var cacheKey = guideDayCacheKey(channelId, fromMs);
-    if (getCachedGuideDay(channelId, fromMs) || state.guideRequests[cacheKey]) return;
+    if ((!refresh && getCachedGuideDay(channelId, fromMs)) || state.guideRequests[cacheKey]) return;
     var serverAtStart = state.serverUrl;
     var requestRecord = { xhr: null };
     state.guideRequests[cacheKey] = requestRecord;
@@ -3990,7 +3995,7 @@
           catalogDayStart(state.catalog.dayIndex).getTime() === fromMs;
         if (state.serverUrl !== serverAtStart || error || !data ||
             data.channelId !== channelId || !isArray(data.programs)) {
-          if (isSelected) elements.guideMessage.textContent = 'The guide is unavailable right now.';
+          if (isSelected) elements.guideMessage.textContent = getCachedGuideDay(channelId, fromMs) ? 'Showing saved guide — refresh unavailable. Reopen to retry.' : 'The guide is unavailable right now.';
           return;
         }
         var entry = {
@@ -4029,6 +4034,10 @@
       catalog.dayStarts = cached.dayStarts;
       updateCatalogDayLabels();
       renderCatalogWeekDay(cached);
+      if (Date.now() - cached.fetchedAt >= GUIDE_CACHE_TTL_MS) {
+        elements.guideMessage.textContent = 'Showing saved guide — refreshing…';
+        requestGuideDay(catalog.channelId, fromMs, true);
+      }
       return;
     }
     if (state.guideRequests[cacheKey]) {
@@ -4063,6 +4072,8 @@
   function renderCatalogPrograms(programs, truncated, coverageEnd, channelId) {
     var catalog = state.catalog;
     if (!catalog) return;
+    var oldFocus = closestFocusable(document.activeElement);
+    var focusedStart = oldFocus && elements.guideList.contains(oldFocus) ? oldFocus.getAttribute('data-guide-start') : null;
     clearChildren(elements.guideList);
     var serverNow = Date.now() + state.clockOffsetMs;
     if (!programs.length) {
@@ -4111,6 +4122,11 @@
         selectGuideChannelLive(event.currentTarget.getAttribute('data-guide-channel'), selectedStart);
       }, false);
       elements.guideList.appendChild(item);
+    }
+    if (focusedStart) {
+      var restored = elements.guideList.querySelector('[data-guide-start="' + escapeAttribute(focusedStart) + '"]');
+      if (restored) focusNode(restored);
+      else focusCatalogProgram(null);
     }
     if (catalog.focusProgramsOnLoad) {
       var minute = catalog.focusMinute;
@@ -4175,7 +4191,7 @@
     if (catalogRailScrollFrame && window.cancelAnimationFrame) window.cancelAnimationFrame(catalogRailScrollFrame);
     guideScrollFrame = null;
     catalogRailScrollFrame = null;
-    abortGuideRequestsExcept(null);
+    // Let the selected fetch finish into the cache for the next opening.
     state.overlay = null;
     state.catalog = null;
     renderOverlayState();
@@ -4371,7 +4387,7 @@
   }
 
   function handleKeyDown(event) {
-    var code = event.keyCode || event.which;
+    var code = event.keyCode || event.which || (event.key === 'Enter' ? 13 : 0);
     var target = event.target;
     var isTextInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA');
     if (state.view === 'player' && code !== 13) showChrome();
@@ -4479,6 +4495,12 @@
       if (active && active !== elements.serverInput && active.offsetParent !== null) {
         event.preventDefault();
         active.click();
+      } else if (state.overlay === 'guide' && state.catalog) {
+        event.preventDefault();
+        tuneCatalogChannelLive(state.catalog.channelId);
+      } else if (state.view === 'channels' && !state.overlay) {
+        event.preventDefault();
+        tuneChannel(state.previewChannelIndex, true);
       }
       return;
     }

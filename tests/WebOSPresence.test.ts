@@ -195,7 +195,7 @@ describe('LG webOS presence telemetry', () => {
     expect(script).toContain('state.catalog.dayStarts = entry.dayStarts')
     expect(script).toContain('var cacheKey = guideDayCacheKey(catalog.channelId, fromMs)')
     expect(script).toContain('function getCachedGuideDay(channelId, fromMs)')
-    expect(script).toContain('Date.now() - entry.fetchedAt >= GUIDE_CACHE_TTL_MS')
+    expect(script).toContain('Date.now() - entry.fetchedAt >= 30 * 60 * 1000')
     expect(script).toContain('fetchedAt: Date.now()')
     expect(script).toContain('state.guideRequests[cacheKey] = requestRecord')
     expect(script).toContain('requestRecord.xhr = requestJson(')
@@ -245,7 +245,7 @@ describe('LG webOS presence telemetry', () => {
     expect(script).toContain('function runGuidePrefetch()')
     expect(script).toContain("state.overlay === 'guide' || Object.keys(state.guideRequests).length")
     expect(script).toContain('requestGuideDay(next.channelId, next.fromMs)')
-    expect(script).toContain('function requestGuideDay(channelId, fromMs)')
+    expect(script).toContain('function requestGuideDay(channelId, fromMs, refresh)')
     expect(script).toContain("'/guide?hours=24&from=' + fromMs")
     expect(script).toContain('var cached = getCachedGuideDay(catalog.channelId, fromMs)')
     expect(script).toContain('requestGuideDay(catalog.channelId, fromMs)')
@@ -255,7 +255,7 @@ describe('LG webOS presence telemetry', () => {
       script.indexOf('function closeOverlays()'),
       script.indexOf('function openSetup()')
     )
-    expect(closeOverlayBody).toContain('abortGuideRequestsExcept(null)')
+    expect(closeOverlayBody).not.toContain('abortGuideRequestsExcept(null)')
     expect(closeOverlayBody).toContain('scheduleGuidePrefetch(GUIDE_PREFETCH_STAGGER_MS)')
   })
 
