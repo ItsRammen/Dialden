@@ -1,3 +1,4 @@
+import { PlaybackIncidentService } from './services/PlaybackIncidentService'
 import { ScheduleCardService } from './services/ScheduleCardService'
 /**
  * ToastTV Admin Web Server
@@ -550,6 +551,13 @@ export async function createServer(
   )
   const clientPresenceController = createClientPresenceController({
     presence: clientPresenceService,
+    incidents: new PlaybackIncidentService(getDataPath('diagnostics/playback-incidents.json'), (channelId) => {
+      const worker = channelWorkers.getState(channelId)
+      return { workerStatusAtReceipt: worker?.status ?? 'not-running',
+        workerProgramAtReceipt: worker?.currentScheduleItemId ?? null,
+        workerRevisionAtReceipt: worker?.timelineRevision ?? null,
+        workerFallbackAtReceipt: worker?.usingFallback ? 'yes' : 'no' }
+    }),
     onPresenceChanged: async (current, previous) => {
       // A heartbeat keeps the client's entire lineup alive, not just the
       // watched channel. Unknown sessions (legacy clients) are a no-op.

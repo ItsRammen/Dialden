@@ -7,7 +7,7 @@
   var STORAGE_CLIENT_NAME = 'toasttv.clientName.v1';
   var STORAGE_SESSION_OWNER = 'toasttv.sessionOwner.v1';
   var STORAGE_SESSION_OWNER_EPOCH = 'toasttv.sessionOwnerEpoch.v1';
-  var CLIENT_VERSION = '0.7.2';
+  var CLIENT_VERSION = '0.7.3';
   var DEFAULT_SERVER = 'http://TOWER:1993';
   var POLL_INTERVAL_MS = 30000;
   var CHANNEL_REFRESH_INTERVAL_MS = 15000;
@@ -2393,6 +2393,7 @@
   function recoverStableTunerPlayback() {
     if (state.tunerRecoveryInFlight || !state.tuner || !currentChannel()) return;
     clearTuningFreezeFrame();
+    reportPlaybackIncident('recovery-started');
     var failedTuner = state.tuner;
     var channelId = currentChannel().id;
     var generation = ++state.tuneGeneration;
@@ -3379,6 +3380,7 @@
   }
 
   function handleMediaError() {
+    if (state.view === 'player') reportPlaybackIncident('media-error');
     if (state.view !== 'player') return;
     if (state.tunerInPlaceSwitch && state.previousTune && state.tuner) {
       var restoreChannelId = state.tunerRollbackChannelId || state.previousTune.channelId;
@@ -3628,6 +3630,7 @@
   }
 
   function showPlaybackError(title, message) {
+    reportPlaybackIncident('playback-failed');
     if (state.previousTune) {
       var attemptedChannel = currentChannel();
       var previousStillPlaying = state.hasCommittedVideo;
@@ -4925,6 +4928,7 @@
   }
 
   function retryLiveStream(message) {
+    reportPlaybackIncident('recovery-started');
     if (state.activeSource && state.activeSource.tunerSessionId) {
       recoverStableTunerPlayback();
       return;
@@ -5025,6 +5029,18 @@
     // Some TVs expose a permanently unsupported zero counter.
     if (!(frames > 0)) frames = null;
     var source = state.activeSource;
+    if (pendingPlaybackIncident && state.view === 'player' && !state.tuning && !state.localPaused &&
+        currentChannel() && currentChannel().id === pendingPlaybackIncident.channelId) {
+      var nowTime = Number(video.currentTime) || 0;
+      if (pendingPlaybackIncident.time !== null && nowTime > pendingPlaybackIncident.time + 0.25 &&
+          (frames === null || pendingPlaybackIncident.frames === null || frames > pendingPlaybackIncident.frames)) {
+        reportPlaybackIncident('recovered', Date.now() - pendingPlaybackIncident.startedAt);
+        pendingPlaybackIncident = null;
+      } else {
+        pendingPlaybackIncident.time = nowTime;
+        pendingPlaybackIncident.frames = frames;
+      }
+    }
     var stalled = playbackProgressWatchdog({
       enabled: state.view === 'player' && !state.tuning && !state.localPaused &&
         !state.awaitingGesture && !document.hidden && source && source.mode === 'channel-hls',
@@ -5032,6 +5048,7 @@
       now: Date.now(), time: Number(video.currentTime) || 0, frames: frames
     });
     if (!stalled || state.tunerRecoveryInFlight) return;
+    reportPlaybackIncident('stall');
     logTunerStatus('warn', 'No playback progress for 20 seconds; reconnecting live playback');
     clearBufferingTimers();
     if (source.tunerSessionId) recoverStableTunerPlayback();
@@ -5224,15 +5241,59 @@
     }, 75);
   }
 
+  var playbackIncidentQueue = [];
+  var incidentSerial = 0;
+  var incidentLastAt = {};
+  var pendingPlaybackIncident = null;
+  var presenceRequestInFlight = false;
+  function reportPlaybackIncident(event, recoveryMs) {
+    var now = Date.now();
+    if (incidentLastAt[event] && now - incidentLastAt[event] < 2000) return;
+    incidentLastAt[event] = now;
+    var video = activeVideo();
+    var channel = currentChannel();
+    var source = state.activeSource || {};
+    var program = state.currentNow && state.currentNow.program;
+    var row = { id: now + '-' + (++incidentSerial), event: event, version: CLIENT_VERSION,
+      clientTimeMs: now, estimatedServerTimeMs: now + state.clockOffsetMs,
+      channelId: channel ? channel.id : '', programId: program ? program.id : '',
+      timelineRevision: state.currentNow ? state.currentNow.timelineRevision : '',
+      sessionId: source.tunerSessionId || '', mediaTime: Number(video.currentTime) || 0,
+      readyState: video.readyState, networkState: video.networkState, bufferAhead: 0,
+      errorCode: video.error ? video.error.code : 0 };
+    try {
+      for (var i = 0; i < video.buffered.length; i++) if (video.buffered.start(i) <= row.mediaTime && video.buffered.end(i) >= row.mediaTime) row.bufferAhead = video.buffered.end(i) - row.mediaTime;
+      if (video.getVideoPlaybackQuality) { var quality = video.getVideoPlaybackQuality(); row.frames = quality.totalVideoFrames; row.droppedFrames = quality.droppedVideoFrames; }
+    } catch (ignoreStats) {}
+    if (typeof recoveryMs === 'number') row.recoveryMs = recoveryMs;
+    ['channelId', 'programId', 'timelineRevision', 'sessionId'].forEach(function (key) { row[key] = String(row[key] || '').slice(0, 100); });
+    playbackIncidentQueue.push(row);
+    if (playbackIncidentQueue.length > 30) playbackIncidentQueue.shift();
+    if (event === 'stall' || event === 'recovery-started' || event === 'media-error') {
+      if (!pendingPlaybackIncident || pendingPlaybackIncident.channelId !== row.channelId) pendingPlaybackIncident = { channelId: row.channelId, startedAt: now, time: null, frames: null };
+    }
+    queuePresenceHeartbeat();
+  }
+
   function sendPresenceHeartbeat() {
-    if (!state.serverUrl || !state.clientId) return;
+    if (!state.serverUrl || !state.clientId || presenceRequestInFlight) return;
     var channel = state.view === 'player' ? currentChannel() : null;
     if (state.view === 'player' && state.tuning && state.previousTune && state.previousTune.channelId) {
       var previousIndex = findChannelIndex(state.previousTune.channelId);
       if (previousIndex >= 0) channel = state.channels[previousIndex];
     }
     var mode = currentPlaybackMode();
+    var batch = playbackIncidentQueue.slice(0, 1);
     var xhr = new XMLHttpRequest();
+    presenceRequestInFlight = true;
+    xhr.onload = function () {
+      presenceRequestInFlight = false;
+      if (xhr.status >= 200 && xhr.status < 300 && batch.length) {
+        playbackIncidentQueue = playbackIncidentQueue.filter(function (row) { return row.id !== batch[0].id; });
+        if (playbackIncidentQueue.length) queuePresenceHeartbeat();
+      }
+    };
+    xhr.onerror = xhr.ontimeout = xhr.onabort = function () { presenceRequestInFlight = false; };
     try {
       xhr.open('POST', state.serverUrl + '/api/client/v1/heartbeat', true);
       xhr.timeout = 5000;
@@ -5241,9 +5302,10 @@
         clientId: state.clientId,
         name: state.clientName,
         channelId: channel ? channel.id : null,
-        playbackMode: mode
+        playbackMode: mode,
+        incidents: batch
       }));
-    } catch (ignore) {}
+    } catch (ignore) { presenceRequestInFlight = false; }
   }
 
   function currentPlaybackMode() {

@@ -421,7 +421,7 @@ export function renderHeadlessDashboardContent(
 
       <section class="headless-clients" aria-labelledby="headless-clients-title">
         <div class="headless-section-heading">
-          <div><p class="headless-eyebrow">Clients</p><h2 id="headless-clients-title">TV connections</h2></div>
+          <div><p class="headless-eyebrow">Clients</p><h2 id="headless-clients-title">TV connections</h2></div><a href="/diagnostics/playback">Playback incidents</a>
         </div>
         ${
           clients.length === 0
