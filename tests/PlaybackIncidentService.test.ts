@@ -38,6 +38,7 @@ test('heartbeat acknowledges persisted incidents and exposes escaped admin diagn
     const app = new Hono().route('/', createClientPresenceController({ presence: new ClientPresenceService(), incidents: new PlaybackIncidentService(join(dir, 'events.json')) }))
     const response = await app.request('/api/client/v1/heartbeat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clientId: 'tv', name: 'TV', playbackMode: 'buffering', channelId: 'nick', incidents: [{ id: '1', event: 'stall', channelId: '<script>bad</script>' }] }) })
     expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ acceptedIncidentIds: ['1'] })
     const json = await (await app.request('/api/admin/v1/playback-incidents')).json() as { incidents: unknown[] }
     expect(json.incidents).toHaveLength(1)
     const html = await (await app.request('/diagnostics/playback')).text()

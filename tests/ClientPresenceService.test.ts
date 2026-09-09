@@ -115,3 +115,9 @@ describe('ClientPresenceService', () => {
     ).toThrow('retention must be at least the TTL')
   })
 })
+
+test('presence exposes an installed app version without requiring it from older clients', () => {
+  const service = new ClientPresenceService()
+  expect(service.recordHeartbeat({ clientId: 'tv', name: 'TV', playbackMode: 'idle', appVersion: '0.7.5' }).appVersion).toBe('0.7.5')
+  expect(service.recordHeartbeat({ clientId: 'tv', name: 'TV', playbackMode: 'idle' }).appVersion).toBeUndefined()
+})

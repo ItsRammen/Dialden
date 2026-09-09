@@ -7,7 +7,7 @@
   var STORAGE_CLIENT_NAME = 'toasttv.clientName.v1';
   var STORAGE_SESSION_OWNER = 'toasttv.sessionOwner.v1';
   var STORAGE_SESSION_OWNER_EPOCH = 'toasttv.sessionOwnerEpoch.v1';
-  var CLIENT_VERSION = '0.7.4';
+  var CLIENT_VERSION = '0.7.5';
   var DEFAULT_SERVER = 'http://TOWER:1993';
   var POLL_INTERVAL_MS = 30000;
   var CHANNEL_REFRESH_INTERVAL_MS = 15000;
@@ -5040,8 +5040,13 @@
   }
 
   var playbackProgressWatchdog = null;
+  var tuningWatchdog = null;
   function checkPlaybackProgress() {
     if (!playbackProgressWatchdog) playbackProgressWatchdog = window.ToastTVPlaybackPolicy.createProgressWatchdog(20000);
+    if (!tuningWatchdog) tuningWatchdog = window.ToastTVPlaybackPolicy.createProgressWatchdog(45000);
+    // Repeated internal tune generations must not hide a stuck reconnect.
+    if (tuningWatchdog({ enabled: state.view === 'player' && state.tuning && !state.localPaused && !state.awaitingGesture && !document.hidden,
+      key: currentChannel() ? currentChannel().id : '', now: Date.now(), time: 0, frames: null })) reportPlaybackIncident('tuning-timeout');
     var video = activeVideo();
     var frames = null;
     try {
@@ -5268,7 +5273,26 @@
   var incidentLastAt = {};
   var pendingPlaybackIncident = null;
   var presenceRequestInFlight = false;
+  var incidentStorageKey = null;
+  function restorePlaybackIncidents() {
+    if (!state.serverUrl) return;
+    var key = 'dialden.playback-incidents.v1:' + state.serverUrl;
+    if (incidentStorageKey === key) return;
+    incidentStorageKey = key;
+    playbackIncidentQueue = [];
+    try {
+      var saved = JSON.parse(readStorage(key) || '[]');
+      if (Array.isArray(saved)) playbackIncidentQueue = saved.filter(function (row) {
+        return row && typeof row.id === 'string' && typeof row.event === 'string' &&
+          row.clientTimeMs > Date.now() - 7 * 86400000;
+      }).slice(-30);
+    } catch (ignoreRestore) {}
+  }
+  function persistPlaybackIncidents() {
+    if (incidentStorageKey) writeStorage(incidentStorageKey, JSON.stringify(playbackIncidentQueue));
+  }
   function reportPlaybackIncident(event, recoveryMs) {
+    restorePlaybackIncidents();
     var now = Date.now();
     if (incidentLastAt[event] && now - incidentLastAt[event] < 2000) return;
     incidentLastAt[event] = now;
@@ -5291,6 +5315,7 @@
     ['channelId', 'programId', 'timelineRevision', 'sessionId'].forEach(function (key) { row[key] = String(row[key] || '').slice(0, 100); });
     playbackIncidentQueue.push(row);
     if (playbackIncidentQueue.length > 30) playbackIncidentQueue.shift();
+    persistPlaybackIncidents();
     if (event === 'stall' || event === 'recovery-started' || event === 'media-error') {
       if (!pendingPlaybackIncident || pendingPlaybackIncident.channelId !== row.channelId) pendingPlaybackIncident = { channelId: row.channelId, startedAt: now, time: null, frames: null };
     }
@@ -5299,6 +5324,7 @@
 
   function sendPresenceHeartbeat() {
     if (!state.serverUrl || !state.clientId || presenceRequestInFlight) return;
+    restorePlaybackIncidents();
     var channel = state.view === 'player' ? currentChannel() : null;
     if (state.view === 'player' && state.tuning && state.previousTune && state.previousTune.channelId) {
       var previousIndex = findChannelIndex(state.previousTune.channelId);
@@ -5311,8 +5337,13 @@
     xhr.onload = function () {
       presenceRequestInFlight = false;
       if (xhr.status >= 200 && xhr.status < 300 && batch.length) {
-        playbackIncidentQueue = playbackIncidentQueue.filter(function (row) { return row.id !== batch[0].id; });
-        if (playbackIncidentQueue.length) queuePresenceHeartbeat();
+        var acknowledged = [];
+        try { acknowledged = JSON.parse(xhr.responseText).acceptedIncidentIds || []; } catch (ignoreAck) {}
+        if (Array.isArray(acknowledged) && acknowledged.indexOf(batch[0].id) >= 0) {
+          playbackIncidentQueue = playbackIncidentQueue.filter(function (row) { return row.id !== batch[0].id; });
+          persistPlaybackIncidents();
+          if (playbackIncidentQueue.length) queuePresenceHeartbeat();
+        }
       }
     };
     xhr.onerror = xhr.ontimeout = xhr.onabort = function () { presenceRequestInFlight = false; };
@@ -5323,6 +5354,7 @@
       xhr.send(JSON.stringify({
         clientId: state.clientId,
         name: state.clientName,
+        appVersion: CLIENT_VERSION,
         channelId: channel ? channel.id : null,
         playbackMode: mode,
         incidents: batch

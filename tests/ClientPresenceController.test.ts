@@ -40,6 +40,7 @@ describe('client presence API', () => {
     expect(response.headers.get('Cache-Control')).toBe('no-store')
     expect(await response.json()).toEqual({
       ok: true,
+      acceptedIncidentIds: [],
       clientId: 'webos-abcd1234',
       serverTimeMs: 1_700_000_000_000,
       heartbeatIntervalMs: 15_000,

@@ -80,10 +80,11 @@ export function createClientPresenceController(
         .getSnapshot()
         .clients.find((client) => client.clientId === clientId)
       const presence = deps.presence.recordHeartbeat(body as ClientHeartbeatInput)
-      await deps.incidents?.record(presence.clientId, (body as { incidents?: unknown }).incidents)
+      const acceptedIncidentIds = await deps.incidents?.record(presence.clientId, (body as { incidents?: unknown }).incidents) ?? []
       await deps.onPresenceChanged?.(presence, previous)
       return c.json({
         ok: true,
+        acceptedIncidentIds,
         clientId: presence.clientId,
         serverTimeMs: Date.parse(presence.lastSeenAt),
         heartbeatIntervalMs: deps.presence.heartbeatIntervalMs,

@@ -3,7 +3,7 @@ import { mkdir, writeFile, rename } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
 export interface PlaybackIncident { clientId: string; receivedAt: string; id: string; event: string; [key: string]: string | number | null }
-const events = new Set(['stall', 'media-error', 'recovery-started', 'recovered', 'playback-failed'])
+const events = new Set(['stall', 'media-error', 'recovery-started', 'recovered', 'playback-failed', 'tuning-timeout'])
 /** Bounded persistent incident ring. No media URLs, paths or raw error strings. */
 export class PlaybackIncidentService {
   private rows: PlaybackIncident[] = []
@@ -12,8 +12,8 @@ export class PlaybackIncidentService {
     try { if (existsSync(path)) { const rows = JSON.parse(readFileSync(path, 'utf8')); if (Array.isArray(rows)) this.rows = rows.slice(-500) } } catch { /* Start a fresh ring if the old diagnostic file is unreadable. */ }
   }
   snapshot(): PlaybackIncident[] { return this.rows.filter((row) => Date.parse(row.receivedAt) >= Date.now() - 7 * 86400000).reverse() }
-  async record(clientId: string, input: unknown): Promise<void> {
-    if (!Array.isArray(input)) return
+  async record(clientId: string, input: unknown): Promise<string[]> {
+    if (!Array.isArray(input)) return []
     const batch: PlaybackIncident[] = []
     for (const raw of input.slice(0, 2)) {
       if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string' || raw.id.length > 100 || !events.has(raw.event)) continue
@@ -35,5 +35,6 @@ export class PlaybackIncidentService {
     })
     this.queue = task
     await task
+    return batch.map((row) => row.id)
   }
 }

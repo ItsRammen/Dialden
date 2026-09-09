@@ -13,6 +13,7 @@ export type ClientPresenceStatus = 'connected' | 'offline'
 export interface ClientHeartbeatInput {
   readonly clientId: string
   readonly name: string
+  readonly appVersion?: string
   readonly channelId?: string | null
   readonly playbackMode: ClientPlaybackMode
 }
@@ -20,6 +21,7 @@ export interface ClientHeartbeatInput {
 export interface ClientPresenceRecord {
   readonly clientId: string
   readonly name: string
+  readonly appVersion?: string
   readonly channelId: string | null
   readonly playbackMode: ClientPlaybackMode
   readonly status: ClientPresenceStatus
@@ -49,6 +51,7 @@ export interface ClientPresenceServiceOptions {
 interface StoredClientPresence {
   readonly clientId: string
   name: string
+  appVersion?: string
   channelId: string | null
   playbackMode: ClientPlaybackMode
   readonly firstSeenAtMs: number
@@ -128,6 +131,7 @@ export class ClientPresenceService {
       lastSeenAtMs: observedAtMs,
     }
 
+    stored.appVersion = typeof input.appVersion === 'string' && /^[0-9]+\.[0-9]+\.[0-9]+$/.test(input.appVersion) && input.appVersion.length <= 24 ? input.appVersion : undefined
     stored.name = normalized.name
     stored.channelId = normalized.channelId
     stored.playbackMode = normalized.playbackMode
@@ -186,6 +190,7 @@ export class ClientPresenceService {
     return {
       clientId: client.clientId,
       name: client.name,
+      ...(client.appVersion ? { appVersion: client.appVersion } : {}),
       channelId: client.channelId,
       playbackMode: client.playbackMode,
       status: connected ? 'connected' : 'offline',
