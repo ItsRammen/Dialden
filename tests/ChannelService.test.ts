@@ -2210,3 +2210,36 @@ test('expired but covered lineup returns immediately while one refresh runs', as
   } finally { release(); await internal.preparedLineupInFlight?.promise }
   expect(calls).toBe(1)
 })
+
+test('Nick nights favour live comedy without letting a large cartoon library dominate', async () => {
+  const repository = mock<IMediaRepository>()
+  repository.getAll.mockResolvedValue([
+    ...Array.from({ length: 40 }, (_, index) => ({ ...video(index + 1, 'Cartoon'), collectionGenres: ['Animation', 'Comedy'] })),
+    ...Array.from({ length: 15 }, (_, index) => ({ ...video(index + 101, 'Comedy'), collectionGenres: ['Comedy'] })),
+  ])
+  const nightPolicy: LibraryPolicyDocument = {
+    ...policy,
+    roots: { tv: { collections: [{ name: 'Cartoon', groups: ['night'] }, { name: 'Comedy', groups: ['night'] }] } },
+    channels: [{ ...policy.channels![0]!, slots: [{ days: ['mon'], start: '21:00', end: '24:00', groups: ['night'] }], automation: { preset: 'network-copy', networkId: 'nickelodeon', airtime: 'all-day', eraStartYear: 1991, eraEndYear: 2026, selectionMode: 'automatic' } }],
+  }
+  const service = new ChannelService(repository, nightPolicy, { now: () => new Date('2026-08-24T13:00:00Z') })
+  const guide = await service.getGuide('kids-club', 3)
+  const titles = guide!.programs.filter((p) => p.type !== 'bumper').map((p) => p.collectionTitle)
+  expect(titles.filter((title) => title === 'Comedy').length).toBeGreaterThan(titles.filter((title) => title === 'Cartoon').length)
+  expect(titles.length).toBeGreaterThan(10)
+  for (let i = 2; i < titles.length; i++) expect(titles[i] === titles[i-1] && titles[i] === titles[i-2]).toBe(false)
+})
+
+test('Nick overnight and late groups include the approved station pool instead of one fallback show', () => {
+  const service = new ChannelService(mock<IMediaRepository>(), policy)
+  const collections = [
+    { id: 1, rootId: 'tv', libraryKind: 'tv', identityKey: '["the angry beavers",1997]', collectionTitle: 'The Angry Beavers', displayTitle: 'The Angry Beavers', firstAirYear: 1997, genres: ['Animation', 'Comedy'], networks: ['Nickelodeon'], studios: [], eligibleFiles: 100 },
+    { id: 2, rootId: 'tv', libraryKind: 'tv', identityKey: '["icarly",2007]', collectionTitle: 'iCarly', displayTitle: 'iCarly', firstAirYear: 2007, genres: ['Comedy'], networks: ['Nickelodeon'], studios: [], eligibleFiles: 10 },
+  ]
+  const assignments = (service as any).automatedCollectionGroups('nick', { collections }, { preset: 'network-copy', networkId: 'nickelodeon', airtime: 'all-day', eraStartYear: 1991, eraEndYear: 2026 })
+  for (const id of [1, 2]) {
+    const groups: string[] = assignments.find((row: any) => row.collectionId === id).groups
+    expect(groups.some((group) => group.endsWith('-overnight'))).toBe(true)
+    expect(groups.some((group) => group.endsWith('-late'))).toBe(true)
+  }
+})

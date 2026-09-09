@@ -1396,16 +1396,20 @@ export class ChannelService {
     const missingGroups = [...scheduledGroups].filter(
       (scheduledGroup) => !assignedGroups.has(scheduledGroup)
     )
-    const fallback = [...preview.collections].sort(
-      (left, right) =>
-        Number(right.libraryKind === 'tv') - Number(left.libraryKind === 'tv') ||
-        right.eligibleFiles - left.eligibleFiles ||
-        this.compareText(left.displayTitle, right.displayTitle)
-    )[0]
-    if (fallback && missingGroups.length > 0) {
-      plannedGroups.set(fallback.id, [
-        ...new Set([...(plannedGroups.get(fallback.id) ?? []), ...missingGroups]),
-      ])
+    // Empty dayparts draw from the approved station pool, never one collection
+    // selected merely because it has the largest episode count.
+    const television = preview.collections.filter((collection) => collection.libraryKind === 'tv')
+    const fallbackPool = television.length ? television : preview.collections
+    const nightMix = request.preset === 'network-copy' && request.networkId === 'nickelodeon'
+    for (const collection of fallbackPool) {
+      const expanded = [...missingGroups]
+      if (nightMix) {
+        for (const suffix of ['late', 'overnight']) {
+          const nightGroup = `${group}-${suffix}`
+          if (scheduledGroups.has(nightGroup)) expanded.push(nightGroup)
+        }
+      }
+      plannedGroups.set(collection.id, [...new Set([...(plannedGroups.get(collection.id) ?? []), ...expanded])])
     }
     const byKey = new Map(
       this.withoutConfiguredGroupTree(group).map((assignment) => [
@@ -1767,8 +1771,20 @@ export class ChannelService {
       const planned: MediaItem[] = []
       let plannedSeconds = 0
       let planIndex = 0
+      const eveningMix = channel.automation?.preset === 'network-copy' && channel.automation.networkId === 'nickelodeon' &&
+        (slot.start === '00:00' || this.timeToMinutes(slot.start) >= 19 * 60) && !channel.marathon?.enabled
+      const showCounts = new Map<string, number>()
+      const showKey = (item: MediaItem) => item.collectionIdentityKey ?? `${item.rootId}:${item.collectionTitle ?? item.id}`
+      const weights = new Map(ordered.map((item) => {
+        const genres = new Set((item.collectionGenres ?? []).map((genre) => genre.toLowerCase()))
+        return [item.id, genres.has('comedy') && !genres.has('animation') && slot.start !== '19:00' ? 2 : 1]
+      }))
+      let previousShow = ''
+      let showRun = 0
       while (planned.length < MAX_PROGRAMS_PER_SLOT) {
         let picked: MediaItem | undefined
+        let pickedIndex = 0
+        let bestScore = Infinity
         for (let attempt = 0; attempt < ordered.length; attempt++) {
           const candidate = ordered[(planIndex + attempt) % ordered.length]
           if (!candidate) continue
@@ -1778,12 +1794,23 @@ export class ChannelService {
             candidate.durationSeconds +
             minBreakSeconds * breaksAfter
           if (committed <= slotSeconds) {
-            picked = candidate
-            planIndex = (planIndex + attempt + 1) % ordered.length
-            break
+            const key = showKey(candidate)
+            const weight = weights.get(candidate.id) ?? 1
+            const score = (showCounts.get(key) ?? 0) / weight + (key === previousShow && showRun >= 2 ? 1_000_000 : 0)
+            if (!eveningMix || score < bestScore) {
+              picked = candidate
+              pickedIndex = (planIndex + attempt + 1) % ordered.length
+              bestScore = score
+            }
+            if (!eveningMix) break
           }
         }
         if (!picked) break
+        planIndex = pickedIndex
+        const pickedShow = showKey(picked)
+        showCounts.set(pickedShow, (showCounts.get(pickedShow) ?? 0) + 1)
+        showRun = pickedShow === previousShow ? showRun + 1 : 1
+        previousShow = pickedShow
         planned.push(picked)
         plannedSeconds += picked.durationSeconds
       }
@@ -2409,7 +2436,7 @@ export class ChannelService {
       ? { enabled: true, frequency: this.interludeFrequency() }
       : undefined
     return this.hash(
-      JSON.stringify({ scheduleVersion: 'whole-clips-and-cards-v3', channel, catalogHash: source.catalogHash, interlude })
+      JSON.stringify({ scheduleVersion: 'night-variety-v4', channel, catalogHash: source.catalogHash, interlude })
     )
       .toString(16)
       .padStart(8, '0')
@@ -2422,7 +2449,7 @@ export class ChannelService {
     const interlude = this.interludePolicy.enabled
       ? { enabled: true, frequency: this.interludeFrequency() }
       : undefined
-    return this.hash(JSON.stringify({ scheduleVersion: 'whole-clips-and-cards-v3', channel, catalog, interlude }))
+    return this.hash(JSON.stringify({ scheduleVersion: 'night-variety-v4', channel, catalog, interlude }))
       .toString(16)
       .padStart(8, '0')
   }

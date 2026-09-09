@@ -440,7 +440,7 @@ export async function createServer(
     indexer,
     metadata: metadataService,
     refreshSchedules: async () => {
-      channelService.invalidateScheduleCatalog()
+      await reconcileGeneratedStations()
       await daemon.getEngine().refreshCache(true)
       await playbackService.reconcilePrequeue()
     },
@@ -449,7 +449,7 @@ export async function createServer(
     library: collectionLibraryService,
     metadata: metadataService,
     refreshSchedules: async () => {
-      channelService.invalidateScheduleCatalog()
+      await reconcileGeneratedStations()
       await daemon.getEngine().refreshCache(true)
       await playbackService.reconcilePrequeue()
     },
@@ -523,7 +523,7 @@ export async function createServer(
     audit: daemon.getRepository(),
     assistantStore: daemon.getRepository(),
     refreshSchedules: async () => {
-      channelService.invalidateScheduleCatalog()
+      await reconcileGeneratedStations()
       await daemon.getEngine().refreshCache(true)
       await playbackService.reconcilePrequeue()
     },
