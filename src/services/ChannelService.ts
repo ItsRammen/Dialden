@@ -842,7 +842,7 @@ export class ChannelService {
     }
   }
 
-  private async getPreparedLineup(): Promise<PreparedLineup> {
+  private async getPreparedLineup(forceRefresh = false): Promise<PreparedLineup> {
     const epoch = this.scheduleEpoch
     const now = Date.now()
     if (
@@ -851,11 +851,21 @@ export class ChannelService {
     ) {
       return this.preparedLineup
     }
+    // Serve a still-covered timeline immediately while renewing the expensive
+    // catalog. Re-evaluate now/next against the current clock on every request.
+    const cached = this.preparedLineup
+    const at = this.clock.now().getTime()
+    if (!forceRefresh && cached?.epoch === epoch && now - cached.expiresAt < 5 * 60_000 &&
+        cached.channels.every(({ offAir, programs }) => offAir || programs.some((program) => Date.parse(program.scheduledStart) > at))) {
+      void this.getPreparedLineup(true).catch((error) => console.warn('Lineup refresh failed', error))
+      return cached
+    }
     if (this.preparedLineupInFlight?.epoch === epoch) {
       return this.preparedLineupInFlight.promise
     }
 
     const promise = (async (): Promise<PreparedLineup> => {
+      if (forceRefresh) await this.yieldToEventLoop()
       const source = await this.getScheduleSource()
       if (source.epoch !== this.scheduleEpoch) return this.getPreparedLineup()
       const around = this.clock.now()

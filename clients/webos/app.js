@@ -7,7 +7,7 @@
   var STORAGE_CLIENT_NAME = 'toasttv.clientName.v1';
   var STORAGE_SESSION_OWNER = 'toasttv.sessionOwner.v1';
   var STORAGE_SESSION_OWNER_EPOCH = 'toasttv.sessionOwnerEpoch.v1';
-  var CLIENT_VERSION = '0.7.5';
+  var CLIENT_VERSION = '0.7.6';
   var DEFAULT_SERVER = 'http://TOWER:1993';
   var POLL_INTERVAL_MS = 30000;
   var CHANNEL_REFRESH_INTERVAL_MS = 15000;
@@ -526,6 +526,10 @@
       state.scheduleHydratedAt = 0;
       state.channels = data.channels;
       state.channelNow = {};
+      try {
+        var savedLineup = JSON.parse(readStorage('dialden.lineup.v1:' + normalized) || 'null');
+        if (savedLineup && Date.now() - savedLineup.savedAt < 30 * 60000 && savedLineup.schedules) state.channelNow = savedLineup.schedules;
+      } catch (ignoreSavedLineup) {}
       state.reconnectAttempt = 0;
       recordClockSample(data.serverTimeMs, timing);
       if (remember || !readStorage(STORAGE_SERVER)) writeStorage(STORAGE_SERVER, normalized);
@@ -1589,6 +1593,7 @@
           renderChannelScheduleCard(channel, state.channelNow[channel.id], true);
         }
       }
+      writeStorage('dialden.lineup.v1:' + state.serverUrl, JSON.stringify({ savedAt: Date.now(), schedules: state.channelNow }));
       scheduleGuidePrefetch(100);
     });
   }
@@ -1598,7 +1603,7 @@
     for (index = 0; index < state.channels.length; index += 1) {
       var channel = state.channels[index];
       var schedule = state.channelNow[channel.id];
-      if (schedule && isNowResult(schedule)) renderChannelScheduleCard(channel, schedule, false);
+      if (schedule && isNowResult(schedule)) renderChannelScheduleCard(channel, schedule, !state.scheduleHydratedAt || Date.now() - state.scheduleHydratedAt >= SCHEDULE_REFRESH_INTERVAL_MS);
     }
   }
 
@@ -1897,12 +1902,13 @@
     var targetIndex = normalizeChannelIndex(index);
     var channel = state.channels[targetIndex];
     if (!channel) return;
-    if (state.requestedChannelId === channel.id) return;
+    if (state.requestedChannelId === channel.id) { showToast('Tuning ' + channel.name + '…'); return; }
     if (state.view === 'player' && !state.tuning && state.committedChannelId === channel.id) {
       state.channelIndex = targetIndex;
       showChrome();
       return;
     }
+    showToast('Tuning ' + channel.name + '…');
     var isChannelChange = state.view === 'player' &&
       (state.committedChannelId || state.previousTune) &&
       state.committedChannelId !== channel.id;
@@ -3230,6 +3236,7 @@
         state.tuneMetrics = null;
       }
       setPlayerStatus('Playing live');
+      writeStorage('dialden.lineup.v1:' + state.serverUrl, JSON.stringify({ savedAt: Date.now(), schedules: state.channelNow }));
       scheduleGuidePrefetch(100);
       scheduleChromeHide();
       queuePresenceHeartbeat();
@@ -4007,6 +4014,8 @@
           fetchedAt: Date.now()
         };
         state.guideCache[cacheKey] = entry;
+        var cacheKeys = Object.keys(state.guideCache).sort(function (a, b) { return state.guideCache[a].fetchedAt - state.guideCache[b].fetchedAt; });
+        while (cacheKeys.length > 24) delete state.guideCache[cacheKeys.shift()];
         var previewChannel = state.channels[state.previewChannelIndex];
         if (state.view === 'channels' && previewChannel && previewChannel.id === channelId &&
             (fromMs === localCatalogDayStart(0).getTime() ||
@@ -4028,7 +4037,7 @@
     var dayIndex = catalog.dayIndex;
     var fromMs = catalogDayStart(dayIndex).getTime();
     var cacheKey = guideDayCacheKey(catalog.channelId, fromMs);
-    abortGuideRequestsExcept(cacheKey);
+    // Let other channel requests finish so returning to them can use the cache.
     var cached = getCachedGuideDay(catalog.channelId, fromMs);
     if (cached) {
       catalog.dayStarts = cached.dayStarts;
@@ -4132,7 +4141,10 @@
       var minute = catalog.focusMinute;
       catalog.focusProgramsOnLoad = false;
       catalog.focusMinute = null;
-      window.setTimeout(function () { focusCatalogProgram(minute); }, 20);
+      var focusBeforeLoad = document.activeElement;
+      window.setTimeout(function () {
+        if (state.catalog === catalog && state.overlay === 'guide' && document.activeElement === focusBeforeLoad) focusCatalogProgram(minute);
+      }, 20);
     }
   }
 
@@ -4387,7 +4399,7 @@
   }
 
   function handleKeyDown(event) {
-    var code = event.keyCode || event.which || (event.key === 'Enter' ? 13 : 0);
+    var code = event.keyCode || event.which || (event.key === 'Enter' || event.key === 'OK' || event.key === 'Accept' ? 13 : 0);
     var target = event.target;
     var isTextInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA');
     if (state.view === 'player' && code !== 13) showChrome();
@@ -4492,6 +4504,18 @@
 
     if (code === 13) {
       var active = closestFocusable(document.activeElement);
+      var selectedChannel = active && active.getAttribute('data-catalog-channel');
+      var selectedIndex = active && active.getAttribute('data-channel-index');
+      if (state.overlay === 'guide' && selectedChannel) {
+        event.preventDefault();
+        if (!event.repeat) tuneCatalogChannelLive(selectedChannel);
+        return;
+      }
+      if (state.view === 'channels' && !state.overlay && selectedIndex !== null && selectedIndex !== undefined) {
+        event.preventDefault();
+        if (!event.repeat) tuneChannel(Number(selectedIndex), true);
+        return;
+      }
       if (active && active !== elements.serverInput && active.offsetParent !== null) {
         event.preventDefault();
         active.click();

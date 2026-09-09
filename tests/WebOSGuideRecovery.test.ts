@@ -23,3 +23,13 @@ test('unchanged card logos reuse the loaded image', () => {
   runInNewContext(extract('  function renderChannelCardLogo(', '  function channelBrandingUrl('), context)
   context.renderChannelCardLogo('nick', {})
 })
+
+test('remote OK tunes the focused channel directly even without offsetParent', () => {
+  const tuned: number[] = []
+  const card = { getAttribute: (key: string) => key === 'data-channel-index' ? '2' : null }
+  const context: any = { state: { view: 'channels', overlay: null }, document: { activeElement: card }, elements: {}, closestFocusable: () => card, tuneChannel: (index: number) => tuned.push(index) }
+  runInNewContext(extract('  function handleKeyDown(event)', '  function moveFocus('), context)
+  context.handleKeyDown({ key: 'OK', target: { tagName: 'BUTTON' }, preventDefault: () => {} })
+  context.handleKeyDown({ key: 'OK', repeat: true, target: { tagName: 'BUTTON' }, preventDefault: () => {} })
+  expect(tuned).toEqual([2])
+})

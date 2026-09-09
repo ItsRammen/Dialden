@@ -2188,3 +2188,25 @@ describe('ChannelService', () => {
     }
   })
 })
+
+test('expired but covered lineup returns immediately while one refresh runs', async () => {
+  const repository = mock<IMediaRepository>()
+  repository.getAll.mockResolvedValue([video(1, 'Bluey (2018)')])
+  const service = new ChannelService(repository, policy, { now: () => new Date('2026-08-23T22:35:00.000Z') })
+  const first = await service.getLineupSchedule()
+  const internal = service as any
+  internal.preparedLineup.expiresAt = Date.now() - 1
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  const original = internal.getScheduleSource.bind(service)
+  let calls = 0
+  internal.getScheduleSource = async () => { calls++; await gate; return original() }
+  try {
+    const second = await service.getLineupSchedule()
+    const third = await service.getLineupSchedule()
+    expect(second.schedules).toEqual(first.schedules)
+    expect(third.schedules).toEqual(first.schedules)
+    expect(calls).toBe(0) // The response wins before background work starts.
+  } finally { release(); await internal.preparedLineupInFlight?.promise }
+  expect(calls).toBe(1)
+})

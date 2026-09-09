@@ -472,13 +472,16 @@ export function createChannelController({
       const id = c.req.param('id')
       const variant = textValue(c.req.query('variant')) || undefined
       if (!logos?.has(id, variant)) return c.text('Channel logo not found', 404)
-      return new Response(Bun.file(logos.path(id, variant)), {
-        headers: {
-          'content-type': 'image/png',
-          'cache-control': 'private, no-cache',
-          'x-content-type-options': 'nosniff',
-        },
-      })
+      const file = Bun.file(logos.path(id, variant))
+      const etag = `W/"${file.size}-${file.lastModified}"`
+      const headers = {
+        'content-type': 'image/png',
+        'cache-control': 'private, max-age=60',
+        etag,
+        'x-content-type-options': 'nosniff',
+      }
+      if (c.req.header('If-None-Match') === etag) return new Response(null, { status: 304, headers })
+      return new Response(file, { headers })
     } catch (error) {
       return c.text(safeMessage(error), 400)
     }
