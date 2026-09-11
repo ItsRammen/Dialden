@@ -133,13 +133,23 @@ export class FFProbeClient implements IMediaProbe {
       '-of',
       'json',
       filePath,
-    ])
+    ], { stdout: 'pipe', stderr: 'pipe' })
 
-    const output = await new Response(proc.stdout).text()
-    const exitCode = await proc.exited
-
+    const timeout = setTimeout(() => proc.kill(), 30_000)
+    let output: string
+    let diagnostic: string
+    let exitCode: number
+    try {
+      [output, diagnostic, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
+      ])
+    } finally { clearTimeout(timeout) }
     if (exitCode !== 0) {
-      throw new Error(`ffprobe failed for ${filePath}`)
+      const reason = /permission denied/i.test(diagnostic) ? 'Permission denied: check the container user and folder permissions.'
+        : /no such file|not found/i.test(diagnostic) ? 'File unavailable: check the media mount or rescan after restoring it.'
+        : /EBML header|moov atom not found|invalid data found/i.test(diagnostic) ? 'Invalid or missing media header: verify the source file; a normal rescan cannot rebuild missing data.'
+        : 'Media inspection failed or timed out. Retry the check; if it persists, verify the source file.'
+      throw new Error(reason)
     }
 
     try {

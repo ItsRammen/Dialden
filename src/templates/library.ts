@@ -168,7 +168,7 @@ export function renderLibraryContent(props: LibraryProps): string {
     )
   } else if (filter === 'errors') {
     mediaContent = renderMediaSection(
-      'Technical failures',
+      'Files needing attention',
       '',
       filteredMedia,
       view,
@@ -200,6 +200,16 @@ export function renderLibraryContent(props: LibraryProps): string {
       </div>
       
       ${renderLibraryNavigation('files')}
+      ${filter === 'errors' ? `<section class="media-technical-issue" aria-label="File check help">
+        <strong>Retry inspection before changing the file</strong>
+        <p>Missing duration blocks playback. Compatibility warnings may only mean the server needs to transcode. Approving a show does not fix a damaged file.</p>
+        <form hx-post="/api/rescan" hx-target="#library-content" hx-swap="outerHTML" hx-disabled-elt="find button">
+          <input type="hidden" name="view" value="${view}"><input type="hidden" name="filter" value="errors">
+          <button type="submit" class="btn btn-primary">Retry file checks</button>
+          <span class="htmx-indicator" role="status">Checking the library…</span>
+        </form>
+        <p>This runs a library scan and retries unreadable files. Originals are unchanged. Invalid or missing headers usually need a repaired or replacement source.</p>
+      </section>` : ''}
       <!-- Toolbar -->
       <div class="library-toolbar">
         <div class="search-box">
@@ -232,7 +242,7 @@ export function renderLibraryContent(props: LibraryProps): string {
           ${renderLibraryLink('All Media', { ...navigation, filter: 'all', page: 1 }, `btn btn-small ${filter === 'all' ? 'active' : ''}`)}
           ${renderLibraryLink('Playable', { ...navigation, filter: 'approved', page: 1 }, `btn btn-small ${filter === 'approved' ? 'active' : ''}`)}
           ${renderLibraryLink('Not scheduled', { ...navigation, filter: 'blocked', page: 1 }, `btn btn-small ${filter === 'blocked' ? 'active' : ''}`)}
-          ${renderLibraryLink('File errors', { ...navigation, filter: 'errors', page: 1 }, `btn btn-small library-filter-errors ${filter === 'errors' ? 'active' : ''}`)}
+          ${renderLibraryLink('File checks', { ...navigation, filter: 'errors', page: 1 }, `btn btn-small library-filter-errors ${filter === 'errors' ? 'active' : ''}`)}
           ${renderLibraryLink('Videos', { ...navigation, filter: 'videos', page: 1 }, `btn btn-small ${filter === 'videos' ? 'active' : ''}`)}
           ${renderLibraryLink('Station assets', { ...navigation, filter: 'interludes', page: 1 }, `btn btn-small ${filter === 'interludes' ? 'active' : ''}`)}
         </div>
@@ -244,7 +254,7 @@ export function renderLibraryContent(props: LibraryProps): string {
       </div>
       
       ${
-        mediaWritable
+        mediaWritable && filter !== 'errors'
           ? `<!-- Upload Dropzone -->
       <div class="dropzone"
            hx-post="/api/upload"
@@ -487,7 +497,7 @@ function renderTechnicalIssue(item: MediaItem): string {
     ? item.warning
     : 'The media probe did not return a valid duration.'
   return `<div class="media-technical-issue" role="note">
-    <strong>Technical failure</strong>
+    <strong>${item.durationSeconds <= 0 ? 'Cannot schedule: duration unavailable' : 'Compatibility warning'}</strong>
     <span>${escapeHtml(detail)}</span>
     <code title="${escapeHtml(item.path)}">${escapeHtml(item.path)}</code>
   </div>`

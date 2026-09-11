@@ -498,7 +498,9 @@ describe('LibraryController', () => {
       search: '',
     })
 
-    expect(markup).toContain('Technical failures')
+    expect(markup).toContain('Files needing attention')
+    expect(markup).toContain('Retry file checks')
+    expect(markup).toContain('Cannot schedule: duration unavailable')
     expect(markup).toContain('ffprobe returned invalid data')
     expect(markup).toContain('/media/tv/Bluey/broken-episode.mkv')
   })

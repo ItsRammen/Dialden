@@ -75,6 +75,7 @@ export class MediaIndexer {
     completedAt: null,
     error: null,
   }
+  private readonly probeFailures = new Map<string, string>()
   private hardwareProfile: HardwareProfile | null = null
   private lastProgressEventAtMs: number | null = null
 
@@ -612,9 +613,13 @@ export class MediaIndexer {
           ? this.detectMediaType(filename, isInterlude)
           : 'video'
       const { start: dateStart, end: dateEnd } = this.detectDates(filename)
-      const warning = probeSucceeded
-        ? this.generateWarning(metadata.codec)
-        : (descriptor.existing?.warning ?? this.generateWarning(metadata.codec))
+      const warning = probeFailed
+        ? (this.probeFailures.get(descriptor.filePath) ?? 'Media inspection failed. Retry the file check.')
+        : probeSucceeded && metadata.durationSeconds <= 0
+          ? 'No usable duration found. Retry inspection; if unchanged, the source may need remuxing or replacement.'
+          : probeSucceeded ? this.generateWarning(metadata.codec)
+          : (descriptor.existing?.warning ?? this.generateWarning(metadata.codec))
+      this.probeFailures.delete(descriptor.filePath)
       const compatibility = probeSucceeded
         ? this.checkCompatibility(metadata)
         : (descriptor.existing?.compatibility ?? this.checkCompatibility(metadata))
@@ -877,8 +882,12 @@ export class MediaIndexer {
       const batchResults = await Promise.all(
         batch.map(async (filePath) => {
           try {
-            return await this.mediaProbe.getMetadata(filePath)
+            const metadata = await this.mediaProbe.getMetadata(filePath)
+            this.probeFailures.delete(filePath)
+            return metadata
           } catch (error) {
+            this.probeFailures.set(filePath, (error instanceof Error ? error.message : 'Media inspection failed').slice(0, 500))
+            if (this.probeFailures.size > 1000) this.probeFailures.delete(this.probeFailures.keys().next().value!)
             /* One line. Passing the error object prints the bundle's source
                around the throw site, which for a handful of unreadable files
                buries every other log line on the box. */

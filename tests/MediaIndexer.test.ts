@@ -727,6 +727,7 @@ describe('MediaIndexer', () => {
         policyEnabled: false,
         rootAvailable: false,
         mtime: null,
+        warning: 'transient ffprobe failure',
       })
     )
   })
