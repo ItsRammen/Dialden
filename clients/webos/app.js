@@ -7,7 +7,7 @@
   var STORAGE_CLIENT_NAME = 'toasttv.clientName.v1';
   var STORAGE_SESSION_OWNER = 'toasttv.sessionOwner.v1';
   var STORAGE_SESSION_OWNER_EPOCH = 'toasttv.sessionOwnerEpoch.v1';
-  var CLIENT_VERSION = '0.7.6';
+  var CLIENT_VERSION = '0.7.7';
   var DEFAULT_SERVER = 'http://TOWER:1993';
   var POLL_INTERVAL_MS = 30000;
   var CHANNEL_REFRESH_INTERVAL_MS = 15000;
@@ -383,6 +383,7 @@
          accepted channel under a tuning screen forever. */
       stabilizeTuning();
     } else if (!state.localPaused) {
+      if (state.view === 'player' && !document.hidden && !event.currentTarget.seeking) reportPlaybackIncident('stall', undefined, event.type);
       scheduleBufferingRecovery(event.currentTarget);
     }
     queuePresenceHeartbeat();
@@ -5064,9 +5065,11 @@
   }
 
   var playbackProgressWatchdog = null;
+  var playbackReportWatchdog = null;
   var tuningWatchdog = null;
   function checkPlaybackProgress() {
     if (!playbackProgressWatchdog) playbackProgressWatchdog = window.ToastTVPlaybackPolicy.createProgressWatchdog(20000);
+    if (!playbackReportWatchdog) playbackReportWatchdog = window.ToastTVPlaybackPolicy.createProgressWatchdog(5000);
     if (!tuningWatchdog) tuningWatchdog = window.ToastTVPlaybackPolicy.createProgressWatchdog(45000);
     // Repeated internal tune generations must not hide a stuck reconnect.
     if (tuningWatchdog({ enabled: state.view === 'player' && state.tuning && !state.localPaused && !state.awaitingGesture && !document.hidden,
@@ -5092,12 +5095,14 @@
         pendingPlaybackIncident.frames = frames;
       }
     }
-    var stalled = playbackProgressWatchdog({
+    var progressSample = {
       enabled: state.view === 'player' && !state.tuning && !state.localPaused &&
         !state.awaitingGesture && !document.hidden && source && source.mode === 'channel-hls',
       key: state.tuneGeneration + ':' + (source ? source.url : ''),
       now: Date.now(), time: Number(video.currentTime) || 0, frames: frames
-    });
+    };
+    if (playbackReportWatchdog(progressSample)) reportPlaybackIncident('stall', undefined, 'no-progress');
+    var stalled = playbackProgressWatchdog(progressSample);
     if (!stalled || state.tunerRecoveryInFlight) return;
     reportPlaybackIncident('stall');
     logTunerStatus('warn', 'No playback progress for 20 seconds; reconnecting live playback');
@@ -5315,7 +5320,7 @@
   function persistPlaybackIncidents() {
     if (incidentStorageKey) writeStorage(incidentStorageKey, JSON.stringify(playbackIncidentQueue));
   }
-  function reportPlaybackIncident(event, recoveryMs) {
+  function reportPlaybackIncident(event, recoveryMs, trigger) {
     restorePlaybackIncidents();
     var now = Date.now();
     if (incidentLastAt[event] && now - incidentLastAt[event] < 2000) return;
@@ -5336,6 +5341,7 @@
       if (video.getVideoPlaybackQuality) { var quality = video.getVideoPlaybackQuality(); row.frames = quality.totalVideoFrames; row.droppedFrames = quality.droppedVideoFrames; }
     } catch (ignoreStats) {}
     if (typeof recoveryMs === 'number') row.recoveryMs = recoveryMs;
+    if (trigger) row.trigger = String(trigger).slice(0, 40);
     ['channelId', 'programId', 'timelineRevision', 'sessionId'].forEach(function (key) { row[key] = String(row[key] || '').slice(0, 100); });
     playbackIncidentQueue.push(row);
     if (playbackIncidentQueue.length > 30) playbackIncidentQueue.shift();

@@ -51,3 +51,27 @@ test('stuck tuning is reported even when internal recovery generations keep chan
   now += 60000; context.checkPlaybackProgress()
   expect(events).toEqual(['tuning-timeout'])
 })
+
+test('active buffering reports immediately but seeking and paused playback do not', () => {
+  const events: unknown[] = []
+  const video = { seeking: false }
+  const context: any = { state: { view: 'player', tuning: false, localPaused: false }, document: { hidden: false }, tuneVideo: () => video, reportPlaybackIncident: (...args: unknown[]) => events.push(args), scheduleBufferingRecovery: () => {}, queuePresenceHeartbeat: () => {} }
+  runInNewContext(app.slice(app.indexOf('  function handleVideoWaiting('), app.indexOf('  function activeVideo(')), context)
+  context.handleVideoWaiting({ currentTarget: video, type: 'waiting' })
+  expect(events).toEqual([['stall', undefined, 'waiting']])
+  video.seeking = true
+  context.handleVideoWaiting({ currentTarget: video, type: 'waiting' })
+  video.seeking = false; context.state.localPaused = true
+  context.handleVideoWaiting({ currentTarget: video, type: 'stalled' })
+  expect(events).toHaveLength(1)
+})
+
+test('silent stalls are reported at five seconds without triggering early recovery', () => {
+  const events: unknown[] = []
+  let now = 1000
+  const context: any = { window: { ToastTVPlaybackPolicy: require('../clients/webos/playback-policy.js') }, Date: { now: () => now }, document: { hidden: false }, state: { view: 'player', tuning: false, activeSource: { mode: 'channel-hls', url: '/live' }, tuneGeneration: 1 }, pendingPlaybackIncident: null, activeVideo: () => ({ currentTime: 12 }), currentChannel: () => ({ id: 'nick' }), reportPlaybackIncident: (...args: unknown[]) => events.push(args) }
+  runInNewContext(app.slice(app.indexOf('  var playbackProgressWatchdog ='), app.indexOf('  function tickClock()')), context)
+  context.checkPlaybackProgress()
+  now += 4999; context.checkPlaybackProgress(); expect(events).toEqual([])
+  now++; context.checkPlaybackProgress(); expect(events).toEqual([['stall', undefined, 'no-progress']])
+})

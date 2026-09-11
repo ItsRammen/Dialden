@@ -18,7 +18,7 @@ export class PlaybackIncidentService {
     for (const raw of input.slice(0, 2)) {
       if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string' || raw.id.length > 100 || !events.has(raw.event)) continue
       const row: PlaybackIncident = { clientId, id: raw.id, event: raw.event, receivedAt: new Date().toISOString() }
-      for (const key of ['channelId', 'programId', 'timelineRevision', 'sessionId', 'version']) if (typeof raw[key] === 'string') row[key] = raw[key].slice(0, 100)
+      for (const key of ['channelId', 'programId', 'timelineRevision', 'sessionId', 'version', 'trigger']) if (typeof raw[key] === 'string') row[key] = raw[key].slice(0, 100)
       for (const key of ['clientTimeMs', 'estimatedServerTimeMs', 'mediaTime', 'bufferAhead', 'readyState', 'networkState', 'frames', 'droppedFrames', 'errorCode', 'recoveryMs']) if (typeof raw[key] === 'number' && Number.isFinite(raw[key])) row[key] = raw[key]
       if (typeof row.channelId === 'string' && this.context) Object.assign(row, this.context(row.channelId))
       batch.push(row)

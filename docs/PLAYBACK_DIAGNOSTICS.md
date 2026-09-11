@@ -9,3 +9,5 @@ The TV retains up to 30 pending reports in local storage (when available), scope
 This captures evidence, not automatic root-cause classification. Empty buffers suggest delivery starvation; advancing media clocks with stalled frame counters suggest a decoder issue. Correlate the recorded programme/timeline and worker state with server logs before drawing a conclusion.
 
 Normal heartbeats from app 0.7.5 include `appVersion`, visible in `/api/admin/v1/clients`, so an outdated installation can be distinguished from missing reports. A TV that stops executing JavaScript cannot record its own freeze; absence of a heartbeat is evidence of lost contact, not proof of a decoder or server failure.
+
+App 0.7.7 records active-playback `waiting`/`stalled` events immediately (excluding tuning, deliberate pauses, seeking, and background playback). These use the backward-compatible `stall` event with a `trigger` field; they indicate observed buffering, not a confirmed prolonged freeze. Silent lack of progress is reported after five seconds; the recovery watchdog retains its twenty-second threshold.
