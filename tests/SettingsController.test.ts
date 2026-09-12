@@ -47,6 +47,15 @@ describe('SettingsController', () => {
     expect(configService.update.mock.calls.at(-1)?.[0].library).not.toHaveProperty('stationAssetsWritable')
   })
 
+  test('audio switches save independently and older forms preserve them', async () => {
+    const body = new FormData()
+    body.set('audioSettingsPresent', 'true'); body.set('nightMode', 'true')
+    await app.request('/api/config', { method: 'POST', body })
+    expect(configService.update.mock.calls.at(-1)?.[0].playback).toMatchObject({ audioNormalization: false, nightMode: true })
+    await app.request('/api/config', { method: 'POST', body: new FormData() })
+    expect(configService.update.mock.calls.at(-1)?.[0].playback).not.toHaveProperty('audioNormalization')
+  })
+
   test('POST /api/config parses form data correctly', async () => {
     const formData = new FormData()
     formData.append('serverPort', '8080')

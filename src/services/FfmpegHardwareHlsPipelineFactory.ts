@@ -176,7 +176,7 @@ export class FfmpegHardwareHlsPipelineFactory extends FfmpegContinuousHlsPipelin
       }
       chains.push(
         `[${audio}:a:${audioStreamIndex}]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,` +
-          `aresample=async=1:first_pts=0,atrim=duration=${decimal(seconds)},asetpts=PTS-STARTPTS[a${index}]`
+          `${request.sequence[index]?.audioFilter ?? ''}aresample=async=1:first_pts=0,atrim=duration=${decimal(seconds)},asetpts=PTS-STARTPTS[a${index}]`
       )
     })
 

@@ -185,6 +185,15 @@ export function renderSettings(props: SettingsProps): string {
           </section>
           </div>
           ${renderTranscodingStatus(props.transcodingStatus)}
+          <section class="settings-card card" aria-label="Channel audio">
+            <h3>Channel audio</h3>
+            <input type="hidden" name="audioSettingsPresent" value="true">
+            <div class="setting-row settings-toggle-row"><label for="audioNormalization">Consistent volume</label><label class="toggle" aria-label="Enable consistent volume"><input id="audioNormalization" type="checkbox" name="audioNormalization" value="true" ${config.playback.audioNormalization !== false ? 'checked' : ''}><span class="toggle-slider"></span></label></div>
+            <p class="hint">Balances shows and bumpers using cached loudness measurements. Originals stay unchanged. One background task measures upcoming audio; levels apply when a stream is next prepared.</p>
+            <div class="setting-row settings-toggle-row"><label for="nightMode">Night mode</label><label class="toggle" aria-label="Enable night mode"><input id="nightMode" type="checkbox" name="nightMode" value="true" ${config.playback.nightMode === true ? 'checked' : ''}><span class="toggle-slider"></span></label></div>
+            <p class="hint">Softens loud effects. Applies to server-generated channel streams, not direct file playback.</p>
+            <div hx-get="/api/admin/v1/audio-normalization/status" hx-trigger="load, every 15s" hx-swap="innerHTML"></div>
+          </section>
         </section>
 
         <section class="settings-group" id="library-services">

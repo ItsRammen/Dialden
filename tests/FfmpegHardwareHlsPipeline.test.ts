@@ -321,3 +321,10 @@ describe('benign FFmpeg chatter', () => {
     expect(detail).toBe('last line')
   })
 })
+
+test('hardware video pipeline applies the same CPU audio normalization before concat', () => {
+  const command = factory().command(request([item({ audioFilter: 'volume=-3.000dB,alimiter=limit=0.794328:level=false:latency=1,' })]))
+  const graph = command[command.indexOf('-filter_complex') + 1]!
+  expect(graph).toContain('channel_layouts=stereo,volume=-3.000dB,alimiter=')
+  expect(graph).toContain('atrim=duration=60')
+})

@@ -347,3 +347,17 @@ describe('FfmpegContinuousHlsPipelineFactory', () => {
     expect(command).toContain('900')
   })
 })
+
+test('start applies cached audio adjustment after selecting the source audio track', async () => {
+  let command: readonly string[] = []
+  const selected: unknown[] = []
+  const factory = new FfmpegContinuousHlsPipelineFactory('ffmpeg', {
+    spawn: (args) => { command = args; return { exited: Promise.resolve(0), kill: () => {} } },
+  }, { hasAudio: async () => true, selectAudioStream: async () => 1 }, Date.now, undefined, {
+    settings: async () => ({ enabled: true, nightMode: false }),
+    filter: (path: string, stream: number) => { selected.push([path, stream]); return 'volume=-3.000dB,alimiter=limit=0.794328:level=false:latency=1,' },
+  } as never)
+  const handle = await factory.start(request()); await handle.completed
+  expect(selected[0]).toEqual(['/media/a.mkv', 1])
+  expect(command[command.indexOf('-filter_complex') + 1]).toContain('channel_layouts=stereo,volume=-3.000dB,alimiter=')
+})

@@ -20,9 +20,11 @@ async function main(): Promise<void> {
     localPlaybackEnabled: !runtime.headless,
     mediaReadOnly: runtime.mediaReadOnly,
   })
+  let audioNormalization: { stop(): Promise<void> } | undefined
   let channelWorkers: ContinuousChannelWorkerManager | undefined
 
   const shutdown = async (): Promise<void> => {
+    await audioNormalization?.stop()
     await channelWorkers?.shutdown()
     await daemon.stop()
   }
@@ -52,6 +54,7 @@ async function main(): Promise<void> {
     const server = await createServer(daemon, runtime)
     const { app, playbackService } = server
     channelWorkers = server.channelWorkers
+    audioNormalization = server.audioNormalization
 
     console.log(`🌐 Admin UI: http://localhost:${runtime.port}`)
 

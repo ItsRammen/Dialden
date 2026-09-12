@@ -47,6 +47,8 @@ export interface AppConfig {
     heartbeatIntervalMs: number
   }
   playback: {
+    audioNormalization?: boolean
+    nightMode?: boolean
     safeMode: boolean // Exclude incompatible files from queue (default: true)
   }
   library: {
@@ -262,6 +264,8 @@ export class ConfigRepository {
         ),
       },
       playback: {
+        audioNormalization: s['playback.audioNormalization'] !== 'false',
+        nightMode: s['playback.nightMode'] === 'true',
         safeMode: s['playback.safeMode'] !== 'false', // Default true
       },
       library: {

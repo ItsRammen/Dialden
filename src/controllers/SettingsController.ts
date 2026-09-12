@@ -17,6 +17,7 @@ import type { FfmpegTranscodingStatus } from '../services/FfmpegTranscodingBacke
 import type { TierDecision } from '../services/ChannelQualityTierService'
 
 interface SettingsControllerDeps {
+  onAudioUpdated?: (enabled: boolean) => void
   config: ConfigService
   media: MediaService
   hardware?: IHardwareDetectionService
@@ -115,6 +116,7 @@ export function createSettingsController(deps: SettingsControllerDeps) {
       },
       playback: {
         safeMode: body['safeMode'] === 'true',
+        ...(body['audioSettingsPresent'] === 'true' ? { audioNormalization: body['audioNormalization'] === 'true', nightMode: body['nightMode'] === 'true' } : {}),
       },
       library: {
         ...(body['stationAssetsSettingPresent'] === 'true' ? { stationAssetsWritable: body['stationAssetsWritable'] === 'true' } : {}),
@@ -125,6 +127,7 @@ export function createSettingsController(deps: SettingsControllerDeps) {
     }
 
     await config.update(partial)
+    if (body['audioSettingsPresent'] === 'true') deps.onAudioUpdated?.(body['audioNormalization'] === 'true')
     await deps.onInterludeUpdated?.({
       enabled: partial.interlude?.enabled === true,
       frequency: partial.interlude?.frequency ?? 1,

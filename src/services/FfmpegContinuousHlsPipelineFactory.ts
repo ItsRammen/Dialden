@@ -1,3 +1,4 @@
+import type { AudioNormalizationService } from './AudioNormalizationService'
 import type {
   ChannelPipelineFactory,
   ChannelPipelineHandle,
@@ -245,11 +246,13 @@ export class FfmpegContinuousHlsPipelineFactory implements ChannelPipelineFactor
     protected readonly spawner: ChannelProcessSpawner = BUN_SPAWNER,
     protected readonly audioProbe: ChannelAudioProbe = new FfprobeChannelAudioProbe('ffprobe'),
     protected readonly now: () => number = Date.now,
-    readonly transcodingStatus: FfmpegTranscodingStatus = SOFTWARE_TRANSCODING
+    readonly transcodingStatus: FfmpegTranscodingStatus = SOFTWARE_TRANSCODING,
+    private readonly normalization?: AudioNormalizationService
   ) {}
 
   async start(request: ChannelPipelineRequest): Promise<ChannelPipelineHandle> {
     if (request.sequence.length === 0) throw new Error('Continuous HLS pipeline needs at least one source')
+    const audioSettings = await this.normalization?.settings()
     const sequence = await Promise.all(
       request.sequence.map(async (item) => {
         let audio = { hasAudio: false, audioStreamIndex: 0 }
@@ -266,7 +269,7 @@ export class FfmpegContinuousHlsPipelineFactory implements ChannelPipelineFactor
             audio = { hasAudio: true, audioStreamIndex: 0 }
           }
         }
-        return { ...item, ...audio }
+        return { ...item, ...audio, audioFilter: audio.hasAudio && audioSettings ? this.normalization?.filter(item.sourcePath, audio.audioStreamIndex, audioSettings) : undefined }
       })
     )
     const command = this.command({ ...request, sequence, position: sequence[0] ?? request.position })
@@ -365,7 +368,7 @@ export class FfmpegContinuousHlsPipelineFactory implements ChannelPipelineFactor
       )
       chains.push(
         `[${audio}:a:${audioStreamIndex}]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,` +
-          `aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS[a${index}]`
+          `${request.sequence[index]?.audioFilter ?? ''}aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS[a${index}]`
       )
       chains.push(`${normalizedVideo}null[v${index}]`)
     })

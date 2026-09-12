@@ -15,6 +15,7 @@ export interface ChannelTimelinePosition {
   /** Set false for silent media so the pipeline synthesizes normalized audio. */
   readonly hasAudio?: boolean
   /** Zero-based audio-stream ordinal selected from the source container. */
+  readonly audioFilter?: string
   readonly audioStreamIndex?: number
   /**
    * 'hw' marks a source the hardware decoder is known to handle. Currently

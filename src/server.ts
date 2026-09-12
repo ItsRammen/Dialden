@@ -1,3 +1,4 @@
+import { AudioNormalizationService } from './services/AudioNormalizationService'
 import { PlaybackIncidentService } from './services/PlaybackIncidentService'
 import { ScheduleCardService } from './services/ScheduleCardService'
 /**
@@ -70,6 +71,7 @@ import { BunVirtualTunerFiles } from './services/BunVirtualTunerFiles'
 import { loadRuntimeConfig, type RuntimeConfig } from './config/runtime'
 
 export interface ServerResult {
+  audioNormalization: AudioNormalizationService
   app: Hono
   playbackService: PlaybackService
   channelWorkers: ContinuousChannelWorkerManager
@@ -184,6 +186,10 @@ export async function createServer(
     () => transcodingStatus.activeBackend === 'intel-qsv',
     new ScheduleCardService(getDataPath('schedule-cards'))
   )
+  const audioNormalization = new AudioNormalizationService(getDataPath('audio-normalization/measurements.json'), async () => {
+    const config = await configService.get()
+    return { enabled: config.playback.audioNormalization !== false, nightMode: config.playback.nightMode === true }
+  })
   const channelWorkers = new ContinuousChannelWorkerManager(
     channelTimeline,
     fullHardwarePipeline
@@ -192,14 +198,16 @@ export async function createServer(
           undefined,
           undefined,
           undefined,
-          transcodingStatus
+          transcodingStatus,
+          audioNormalization
         )
       : new FfmpegContinuousHlsPipelineFactory(
           'ffmpeg',
           undefined,
           undefined,
           undefined,
-          transcodingStatus
+          transcodingStatus,
+          audioNormalization
         ),
     new BunChannelWorkerFiles(),
     {
@@ -358,7 +366,12 @@ export async function createServer(
     mediaWritable: !daemon.isMediaReadOnly,
   })
 
+  app.get('/api/admin/v1/audio-normalization/status', (c) => {
+    const status = audioNormalization.status()
+    return c.html(`<p class="hint">${status.measured} tracks measured · ${status.queued} waiting · ${status.analyzing ? 'Measuring one track' : 'Idle'}${status.failures ? ` · ${status.failures} checks failed; playback continues` : ''}</p>`)
+  })
   const settingsController = createSettingsController({
+    onAudioUpdated: (enabled) => { if (!enabled) audioNormalization.pauseAnalysis() },
     config: configService,
     media: mediaService,
     hardware: daemon.getHardwareService(),
@@ -641,5 +654,5 @@ export async function createServer(
     return c.html(renderDashboard(updateInfo?.updateAvailable))
   })
 
-  return { app, playbackService, channelWorkers, transcodingStatus }
+  return { app, playbackService, channelWorkers, transcodingStatus, audioNormalization }
 }
