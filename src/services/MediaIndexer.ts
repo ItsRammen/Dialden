@@ -616,7 +616,7 @@ export class MediaIndexer {
       const warning = probeFailed
         ? (this.probeFailures.get(descriptor.filePath) ?? 'Media inspection failed. Retry the file check.')
         : probeSucceeded && metadata.durationSeconds <= 0
-          ? 'No usable duration found. Retry inspection; if unchanged, the source may need remuxing or replacement.'
+          ? 'No usable duration found: this file may have missing metadata, be incomplete, or be corrupted. Play it and check its runtime and episode content. If it is complete and correct, try remuxing a copy; otherwise replace it.'
           : probeSucceeded ? this.generateWarning(metadata.codec)
           : (descriptor.existing?.warning ?? this.generateWarning(metadata.codec))
       this.probeFailures.delete(descriptor.filePath)

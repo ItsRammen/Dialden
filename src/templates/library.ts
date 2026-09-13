@@ -201,14 +201,14 @@ export function renderLibraryContent(props: LibraryProps): string {
       
       ${renderLibraryNavigation('files')}
       ${filter === 'errors' ? `<section class="media-technical-issue" aria-label="File check help">
-        <strong>Retry inspection before changing the file</strong>
-        <p>Missing duration blocks playback. Compatibility warnings may only mean the server needs to transcode. Approving a show does not fix a damaged file.</p>
+        <strong>Check the cause before retrying</strong>
+        <p>Files without a usable duration cannot be scheduled. Some have access problems; others may be corrupted or incomplete. Check the message on each file. Compatibility warnings may only mean transcoding is needed.</p>
         <form hx-post="/api/rescan" hx-target="#library-content" hx-swap="outerHTML" hx-disabled-elt="find button">
           <input type="hidden" name="view" value="${view}"><input type="hidden" name="filter" value="errors">
           <button type="submit" class="btn btn-primary">Retry file checks</button>
           <span class="htmx-indicator" role="status">Checking the library…</span>
         </form>
-        <p>This runs a library scan and retries unreadable files. Originals are unchanged. Invalid or missing headers usually need a repaired or replacement source.</p>
+        <p>Retry after fixing access permissions or restoring or replacing a file. This only repeats inspection: it does not repair corruption or verify that a file contains the correct episode. A detected duration or a Plex library entry does not prove the file is complete or correct.</p>
       </section>` : ''}
       <!-- Toolbar -->
       <div class="library-toolbar">
@@ -496,9 +496,18 @@ function renderTechnicalIssue(item: MediaItem): string {
   const detail = item.warning?.trim()
     ? item.warning
     : 'The media probe did not return a valid duration.'
+  const missingHeader = /invalid or missing media header|EBML header|moov atom not found/i.test(detail)
+  const missingDuration = item.durationSeconds <= 0 &&
+    /no usable duration|did not return a valid duration/i.test(detail)
+  const guidance = missingHeader
+    ? 'This file may be corrupted or incomplete. Check playback and restore or replace it if broken. A retry cannot rebuild missing media data.'
+    : missingDuration
+      ? 'Check that the file plays fully and contains the correct episode. Missing duration can mean missing metadata, an incomplete file, or corruption. Only consider remuxing a copy if the content is complete and correct; otherwise replace it.'
+      : ''
   return `<div class="media-technical-issue" role="note">
-    <strong>${item.durationSeconds <= 0 ? 'Cannot schedule: duration unavailable' : 'Compatibility warning'}</strong>
+    <strong>${missingHeader ? 'Cannot schedule: file may be corrupted or incomplete' : item.durationSeconds <= 0 ? 'Cannot schedule: duration unavailable' : 'Compatibility warning'}</strong>
     <span>${escapeHtml(detail)}</span>
+    ${guidance && !/this file may|Play it and check/i.test(detail) ? `<span>${escapeHtml(guidance)}</span>` : ''}
     <code title="${escapeHtml(item.path)}">${escapeHtml(item.path)}</code>
   </div>`
 }

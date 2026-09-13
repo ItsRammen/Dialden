@@ -147,7 +147,7 @@ export class FFProbeClient implements IMediaProbe {
     if (exitCode !== 0) {
       const reason = /permission denied/i.test(diagnostic) ? 'Permission denied: check the container user and folder permissions.'
         : /no such file|not found/i.test(diagnostic) ? 'File unavailable: check the media mount or rescan after restoring it.'
-        : /EBML header|moov atom not found|invalid data found/i.test(diagnostic) ? 'Invalid or missing media header: verify the source file; a normal rescan cannot rebuild missing data.'
+        : /EBML header|moov atom not found|invalid data found/i.test(diagnostic) ? 'Invalid or missing media header: this file may be corrupted or incomplete. Check that it plays correctly; restore or replace it if broken. Retrying cannot rebuild missing media data.'
         : 'Media inspection failed or timed out. Retry the check; if it persists, verify the source file.'
       throw new Error(reason)
     }
