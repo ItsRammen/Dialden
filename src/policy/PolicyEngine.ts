@@ -1,3 +1,4 @@
+import { hasRegionalRatingRules, regionalRatingDecision } from './RegionalRatings'
 /** Pure, fail-closed content-rating policy evaluation. */
 
 export type PolicyDecision = 'allow' | 'review' | 'block'
@@ -27,6 +28,7 @@ export interface RatingPolicyProfile {
 export interface PolicyMetadata {
   readonly matchStatus: MetadataMatchStatus
   readonly certification?: string | null
+  readonly certificationRegion?: string | null
 }
 
 export type PolicyReason =
@@ -198,6 +200,17 @@ export function evaluatePolicy(
   const certification = normalizeRating(metadata.certification ?? '')
   if (MISSING_RATINGS.has(certification)) {
     return review('rating_missing', certification || null)
+  }
+  const region = metadata.certificationRegion?.trim().toUpperCase() ?? ''
+  const defaultRules = DEFAULT_KIDS_7_POLICY.rules
+  const usesDefaultKids7 = profile.id === DEFAULT_KIDS_7_POLICY.id && profile.age === 7 &&
+    (['allow', 'review', 'block'] as const).every((band) =>
+      rules[band].size === defaultRules[band].length && defaultRules[band].every((rating) => rules[band].has(rating)))
+  if (usesDefaultKids7 && hasRegionalRatingRules(region)) {
+    const decision = regionalRatingDecision(region, certification)
+    if (!decision) return review('rating_unrecognized', certification)
+    return { decision, certification, reason: decision === 'allow' ? 'rating_allowed' :
+      decision === 'block' ? 'rating_blocked' : 'rating_requires_review' }
   }
   if (rules.allow.has(certification)) {
     return {

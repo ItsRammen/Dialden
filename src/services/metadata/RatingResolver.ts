@@ -1,3 +1,4 @@
+import { AUTOMATIC_RATING_REGIONS } from '../../policy/RegionalRatings'
 import type {
   CertificationLookup,
   ProviderRating,
@@ -13,7 +14,7 @@ const RELEASE_TYPE_PRIORITY = new Map<number, number>([
 ])
 
 /**
- * Select the first configured region with data. Conflicting certifications in
+ * Select the first configured region with data, then supported automatic fallbacks. Conflicting certifications in
  * that region are deliberately ambiguous; a fallback must not hide conflict.
  */
 export function resolveCertification(
@@ -23,7 +24,7 @@ export function resolveCertification(
   const cleaned = ratings
     .map(cleanRating)
     .filter((rating): rating is ProviderRating => rating !== null)
-  const regions = uniqueRegions(orderedRegions)
+  const regions = uniqueRegions([...orderedRegions, ...AUTOMATIC_RATING_REGIONS])
 
   for (const region of regions) {
     const regionalRatings = cleaned

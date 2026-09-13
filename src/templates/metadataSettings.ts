@@ -190,7 +190,7 @@ export function renderMetadataSettings(
                    value="${escapeHtml(fallbackRegions)}"
                    placeholder="US, GB"
                    ${errors.fallbackRatingRegions ? 'aria-invalid="true" aria-describedby="fallbackRatingRegions-error"' : ''}>
-            <span class="hint">Optional comma-separated country codes, checked from left to right when the primary region has no rating.</span>
+            <span class="hint">Optional country codes, checked in order after the primary region. If none have a rating, check US, CA, AU, GB, IE, then JP, KR, HK, TW, DE and FR. Kids 7 understands supported regional labels; unknown or conflicting ratings still need review. Refresh existing metadata to use the expanded lookup.</span>
             ${renderFieldError(
               'fallbackRatingRegions',
               errors.fallbackRatingRegions

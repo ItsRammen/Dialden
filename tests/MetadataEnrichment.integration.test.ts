@@ -600,6 +600,32 @@ describe('metadata enrichment and policy integration', () => {
     })
   })
 
+  test('regional ratings activate on refresh, persist across restarts, and preserve parent decisions', async () => {
+    const collection = await addCollection('Bluey', 2018)
+    const provider = providerFor({ candidates: [{ provider: 'tmdb', externalId: '82728',
+      mediaType: 'tv', title: 'Bluey', year: 2018 }], certification: 'ALL', certificationRegion: 'KR' })
+    const service = new MetadataEnrichmentService(repository, provider, runtimeConfig)
+    await service.runPending()
+    expect(await repository.getCollectionById(collection.id)).toMatchObject({
+      certification: 'ALL', certificationRegion: 'KR', policyDecision: 'allow',
+    })
+    const restarted = new MetadataEnrichmentService(repository, provider, runtimeConfig)
+    await restarted.reapplyCachedPolicies()
+    expect(await repository.getCollectionById(collection.id)).toMatchObject({ policyDecision: 'allow' })
+    // Simulate an old cache, predating regional interpretation. Restarting
+    // alone must retain the old unrecognized-rating decision.
+    await repository.setSetting(`metadata_regional_rating_v1:${collection.id}`, '')
+    await repository.updateCollectionPolicy(collection.id, 'review', 'rating_unrecognized', 'kids-7')
+    await restarted.reapplyCachedPolicies()
+    expect(await repository.getCollectionById(collection.id)).toMatchObject({ policyDecision: 'review' })
+    await repository.updateCollectionOverride(collection.id, 'block')
+    await restarted.reevaluateLibrary()
+    expect(await repository.getCollectionById(collection.id)).toMatchObject({
+      policyDecision: 'allow', parentOverride: 'block', effectiveDecision: 'block',
+      certification: 'ALL', certificationRegion: 'KR',
+    })
+  })
+
   test('re-evaluates cached ratings when policy rules change without TMDB calls', async () => {
     const collection = await addCollection('Bluey', 2018)
     const originalService = new MetadataEnrichmentService(

@@ -613,7 +613,7 @@ export function metadataReason(collection: MediaCollection): string | undefined 
   if (collection.metadataStatus === 'unmatched') return 'No reliable title match was found.'
   if (collection.metadataStatus === 'not_configured') return 'TMDB is not configured on the server.'
   if (collection.ratingStatus === 'ambiguous') return 'Conflicting certifications were returned for the selected region.'
-  if (collection.ratingStatus === 'missing') return 'No certification was available in the preferred or fallback regions.'
+  if (collection.ratingStatus === 'missing') return 'No certification was available in the preferred or supported fallback regions. Refresh metadata to check for regional ratings.'
   return undefined
 }
 

@@ -344,7 +344,7 @@ export class MetadataEnrichmentService {
       })
       if (collections.length === 0) break
       for (const collection of collections) {
-        const evaluation = this.evaluateCachedPolicy(collection)
+        const evaluation = await this.evaluateCachedPolicy(collection)
         if (
           collection.policyDecision !== evaluation.decision ||
           collection.policyReason !== evaluation.reason ||
@@ -847,9 +847,14 @@ export class MetadataEnrichmentService {
         )
       }
     }
+    // Opt in only when this collection actually receives a fresh lookup.
+    // Startup policy reapplication must not reinterpret old cached ratings.
+    await this.repository.setSetting(`metadata_regional_rating_v1:${collection.id}`,
+      JSON.stringify([externalId, rating.selected?.region ?? null, certification]))
     const evaluation = evaluatePolicy(this.profile, {
       matchStatus: status,
       certification,
+      certificationRegion: rating.selected?.region ?? null,
     })
     await this.repository.updateCollectionPolicy(
       collection.id,
@@ -1139,14 +1144,18 @@ export class MetadataEnrichmentService {
     return this.profile?.id?.trim() || 'unconfigured'
   }
 
-  private evaluateCachedPolicy(collection: MediaCollection): PolicyEvaluation {
+  private async evaluateCachedPolicy(collection: MediaCollection): Promise<PolicyEvaluation> {
     if (collection.metadataStatus === 'not_configured') {
       return evaluatePolicy(this.profile, null)
     }
     const matchStatus = collection.metadataStatus
     const certification =
       collection.ratingStatus === 'resolved' ? collection.certification : null
-    return evaluatePolicy(this.profile, { matchStatus, certification })
+    const refreshed = await this.repository.getSetting(`metadata_regional_rating_v1:${collection.id}`)
+    const currentRating = JSON.stringify([collection.metadataExternalId, collection.certificationRegion, certification])
+    return evaluatePolicy(this.profile, { matchStatus, certification,
+      ...(refreshed === currentRating ? { certificationRegion: collection.certificationRegion } : {}),
+    })
   }
 }
 
