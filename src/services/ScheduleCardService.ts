@@ -26,6 +26,15 @@ export function scheduleCardLines(request: ScheduleCardRequest): string[] {
     const text = value.replace(/[\r\n\t]+/g, ' ').trim()
     return text.length > max ? text.slice(0, max - 1) + '…' : text
   }
+  const previous = request.programs.filter((p) =>
+    ['program', 'movie', 'short'].includes(p.type) &&
+    Date.parse(p.scheduledEnd) <= Date.parse(request.program.scheduledStart)).at(-1)
+  const next = upcoming[0]
+  const continuation = request.program.continuationTitle ||
+    (previous?.collectionTitle && previous.collectionTitle === next?.collectionTitle ? next.collectionTitle : undefined)
+  if (continuation) {
+    return [clean(request.channelName, 42), 'MORE AFTER THE BREAK', clean(continuation, 48)]
+  }
   return [clean(request.channelName, 42), hour.length ? 'COMING UP IN THE NEXT HOUR' : 'COMING UP',
     ...pool.slice(page * 4, page * 4 + 4).map((p) =>
       time.format(new Date(p.scheduledStart)) + '   ' + clean(p.collectionTitle || p.title, 48)),

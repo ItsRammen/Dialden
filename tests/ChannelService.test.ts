@@ -1172,6 +1172,36 @@ describe('ChannelService', () => {
     expect(longer.map((item) => item.mediaId)).toEqual([90])
   })
 
+  test('keeps the return and matching announcement after a slot tail without moving the next show', () => {
+    const service = new ChannelService(mock<IMediaRepository>(), policy)
+    const channel = { ...policy.channels![0]!, id: 'nick', name: 'Nick' }
+    const start = Date.parse('2026-08-23T06:00:00Z')
+    const closing = { ...interlude(91, 5), filename: 'nickelodeon--filler--generic-break-in--2009--N1-01.mp4' }
+    const announcement = { ...interlude(92, 5), filename: 'nickelodeon--up-next--dora-the-explorer--2009--N1-02.mp4' }
+    const scheduled = (item: any, at: number) => (service as any).scheduledProgram(channel, item, new Date(at), new Date(at + item.durationSeconds * 1000))
+    const next = scheduled(video(2, 'Dora the Explorer'), start + 40_000)
+    const rows = [scheduled(video(1, 'LazyTown'), start - 600_000), scheduled(closing, start),
+      (service as any).scheduleCard(channel, start + 5000, start + 40_000), next]
+    ;(service as any).closeBoundaryBreaks(rows, channel, [closing, announcement])
+    expect(rows.slice(1).map((row) => row.mediaId)).toEqual([0, 91, 92, 2])
+    expect(rows[1].durationSeconds).toBe(30)
+    expect(rows[2].sourceDurationSeconds).toBe(5)
+    expect(rows[3].sourceDurationSeconds).toBe(5)
+    expect(rows[4].scheduledStart).toBe(new Date(start + 40_000).toISOString())
+    for (let i = 2; i < rows.length; i++) expect(rows[i].scheduledStart).toBe(rows[i - 1].scheduledEnd)
+  })
+
+  test('a short break retains the generic return when no named announcement exists', () => {
+    const service = new ChannelService(mock<IMediaRepository>(), policy)
+    const channel = { ...policy.channels![0]!, id: 'nick', name: 'Nick' }
+    const closing = { ...interlude(91, 5), filename: 'nickelodeon--filler--generic-break-in--2009--N1-01.mp4' }
+    const rows: any[] = []
+    ;(service as any).emitBreakPod(rows, channel, [closing], { startMs: 0, limitMs: 10000,
+      budgetSeconds: 10, current: video(1, 'Dora'), next: video(2, 'Dora'), recent: [], seed: 'return' })
+    expect(rows.map((row) => row.mediaId)).toEqual([91])
+    expect(rows[0].sourceDurationSeconds).toBe(5)
+  })
+
   test('absorbs a small boundary remainder without shortening or separating clips', () => {
     const service = new ChannelService(mock<IMediaRepository>(), policy)
     const channel = { ...policy.channels![0]!, id: 'nick', name: 'Nick' }

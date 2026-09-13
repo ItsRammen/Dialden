@@ -100,6 +100,7 @@ export interface ScheduledProgram {
   readonly channelId: string
   readonly mediaId: number
   readonly generated?: 'schedule-card'
+  readonly continuationTitle?: string
   readonly title: string
   readonly collectionTitle: string
   readonly episodeLabel?: string
@@ -1911,7 +1912,64 @@ export class ChannelService {
       }
     }
 
+    this.closeBoundaryBreaks(programs, channel, source.interludeMedia)
     return programs
+  }
+
+  /** A slot's filler tail must finish before its return sting. Resolve the
+   * next show from the completed plan, including across slot boundaries. */
+  private closeBoundaryBreaks(programs: ScheduledProgram[], channel: LibraryChannelPolicy, assets: readonly MediaItem[]): void {
+    const byId = new Map(assets.map((item) => [item.id, item]))
+    for (let end = 0; end < programs.length; end++) {
+      const next = programs[end]!
+      if (!['program', 'movie', 'short'].includes(next.type)) continue
+      let start = end
+      while (start > 0 && ['interlude', 'bumper'].includes(programs[start - 1]!.type)) start--
+      const previous = programs[start - 1]
+      if (previous?.collectionTitle && previous.collectionTitle === next.collectionTitle) {
+        for (let i = start; i < end; i++) {
+          if (programs[i]!.generated === 'schedule-card') {
+            programs[i] = { ...programs[i]!, continuationTitle: next.collectionTitle }
+          }
+        }
+      }
+      const rows = programs.slice(start, end)
+      const closingIndex = rows.findIndex((row, index) => {
+        const asset = byId.get(row.mediaId)
+        return asset && parseStationAssetFilename(asset.filename)?.role === 'break-in' &&
+          rows.slice(index + 1).some((later) => later.generated === 'schedule-card')
+      })
+      if (closingIndex < 0) continue
+      const closing = rows.splice(closingIndex, 1)[0]!
+      rows.push(closing)
+      const card = rows.findLast((row) => row.generated === 'schedule-card')
+      if (card && previous) {
+        const announcement = selectStationTransitionAsset(assets.filter((item) =>
+          this.interludeActiveOn(item, new Date(next.scheduledStart), channel.timezone)), {
+          station: this.stationAssetKey(channel),
+          currentShow: stationShowKey(previous.collectionTitle || previous.title),
+          nextShow: stationShowKey(next.collectionTitle || next.title),
+          position: 'break-in', seed: next.id + '|boundary',
+          maximumDurationSeconds: Math.max(0, card.durationSeconds - 15),
+          recentlyPlayed: rows.map((row) => byId.get(row.mediaId)?.filename ?? ''),
+        })
+        if (announcement && parseStationAssetFilename(announcement.filename)?.kind === 'bumper-up-next') {
+          const durationSeconds = card.durationSeconds - announcement.durationSeconds
+          rows[rows.indexOf(card)] = { ...card, durationSeconds, durationMs: durationSeconds * 1000, sourceDurationSeconds: durationSeconds }
+          rows.push(this.scheduledProgram(channel, announcement, new Date(0), new Date(announcement.durationSeconds * 1000)))
+        }
+      }
+      let cursor = Date.parse(programs[start]!.scheduledStart)
+      const retimed = rows.map((row) => {
+        const startMs = cursor
+        cursor += row.durationMs
+        return { ...row, scheduledStart: new Date(startMs).toISOString(),
+          id: `${channel.id}:${startMs}:${row.generated || row.mediaId}`,
+          scheduledEnd: new Date(cursor).toISOString() }
+      })
+      programs.splice(start, end - start, ...retimed)
+      end = start + rows.length
+    }
   }
 
   private groupsFor(item: MediaItem): ReadonlySet<string> {
@@ -2251,6 +2309,7 @@ export class ChannelService {
       options.recent.splice(0, options.recent.length, ...previousHistory)
       cursorMs = options.startMs
       if (transition) emit(transition)
+      else if (breakIn) emit(breakIn)
       return cursorMs
     }
 
@@ -2436,7 +2495,7 @@ export class ChannelService {
       ? { enabled: true, frequency: this.interludeFrequency() }
       : undefined
     return this.hash(
-      JSON.stringify({ scheduleVersion: 'night-variety-v4', channel, catalogHash: source.catalogHash, interlude })
+      JSON.stringify({ scheduleVersion: 'boundary-returns-v5', channel, catalogHash: source.catalogHash, interlude })
     )
       .toString(16)
       .padStart(8, '0')
@@ -2449,7 +2508,7 @@ export class ChannelService {
     const interlude = this.interludePolicy.enabled
       ? { enabled: true, frequency: this.interludeFrequency() }
       : undefined
-    return this.hash(JSON.stringify({ scheduleVersion: 'night-variety-v4', channel, catalog, interlude }))
+    return this.hash(JSON.stringify({ scheduleVersion: 'boundary-returns-v5', channel, catalog, interlude }))
       .toString(16)
       .padStart(8, '0')
   }

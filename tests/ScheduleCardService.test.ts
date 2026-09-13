@@ -23,6 +23,17 @@ describe('schedule cards', () => {
     expect(text).not.toContain('Too far away')
     expect(text).not.toContain('\nCard')
   })
+  test('same-show breaks promise more of the show instead of listing its next episode', () => {
+    const input = request()
+    input.programs = [item(8, -10, 'Dora the Explorer'), input.program, item(9, 1, 'Dora the Explorer')]
+    expect(scheduleCardLines(input)).toEqual([input.channelName, 'MORE AFTER THE BREAK', 'Dora the Explorer'])
+  })
+  test('keeps same-show context when playback starts during the break', () => {
+    const input = request()
+    input.program = { ...input.program, continuationTitle: 'Dora the Explorer' }
+    input.programs = [input.program, item(9, 1, 'Dora the Explorer')]
+    expect(scheduleCardLines(input)).toEqual([input.channelName, 'MORE AFTER THE BREAK', 'Dora the Explorer'])
+  })
   test.skipIf(!Bun.which('ffmpeg') || !Bun.which('ffprobe'))('renders punctuation safely, includes audio, and reuses identical cached cards', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'schedule-card-test-')); dirs.push(dir)
     const service = new ScheduleCardService(dir)

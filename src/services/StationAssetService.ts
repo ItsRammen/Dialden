@@ -350,7 +350,7 @@ export function selectStationTransitionAsset(
     entry.descriptor.kind === 'bumper-up-next' &&
     sameStationShow(entry.descriptor.next, context.nextShow)
   const ident = (entry: Entry): boolean =>
-    entry.descriptor.kind === 'ident-general'
+    entry.descriptor.kind === 'ident-general' && !entry.descriptor.role && !entry.descriptor.sequence
   const priorities: Array<(entry: Entry) => boolean> =
     context.position === 'break-out'
       ? /* Nothing generic here: an ident leaving the show would just be another
