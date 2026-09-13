@@ -1033,6 +1033,24 @@ describe('ChannelService', () => {
     expect(programs.filter((item) => item.mediaId === 90).length).toBeLessThanOrEqual(1)
   })
 
+  test('reserves enough time for Disney IDs even when Nick Jr has shorter clips', async () => {
+    const repository = mock<IMediaRepository>()
+    const disney = { ...interlude(91, 10), filename: 'disney-channel--ident--generic-wand-id--2003--DisneyMickey.mp4' }
+    const nick = { ...interlude(92, 5), filename: 'nick-jr--filler--generic-break-in--2014--N1-01.mp4' }
+    repository.getAll.mockResolvedValue([
+      ...Array.from({ length: 6 }, (_, i) => ({ ...video(i + 1, 'Bluey (2018)'), durationSeconds: 295 })), disney, nick,
+    ])
+    const service = new ChannelService(repository, { ...policy, channels: [{
+      id: 'disney_channel', name: 'Disney Channel', enabled: true, timezone: 'UTC',
+      slots: [{ days: ['sun'], start: '06:00', end: '06:30', groups: ['comfort'] }],
+    }] }, { now: () => new Date('2026-08-23T06:00:00Z') }, undefined, { enabled: true, frequency: 1 })
+    const rows = (await service.getGuide('disney_channel', 1))!.programs
+    expect(rows.filter((row) => row.type === 'program')).toHaveLength(5)
+    expect(rows.filter((row) => row.mediaId === 91).length).toBeGreaterThanOrEqual(4)
+    expect(rows.some((row) => row.mediaId === 92)).toBe(false)
+    for (const row of rows.filter((row) => row.mediaId === 91)) expect(row.sourceDurationSeconds).toBe(10)
+  })
+
   test('spreads a slot remainder across its breaks instead of banking it as a tail', async () => {
     /* The shape that produced 30 identical bumpers on the real Nickelodeon
        06:00-09:00 block: a three-hour slot carrying one show whose episodes are

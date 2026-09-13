@@ -2160,10 +2160,13 @@ export class ChannelService {
   ): MediaItem[] {
     if (!this.interludePolicy.enabled) return []
     return this.deterministicShuffle(
-      source.interludeMedia.filter(
-        (item) =>
+      source.interludeMedia.filter((item) => {
+        const descriptor = parseStationAssetFilename(item.filename)
+        // Break budgets must use this station's clips, not a shorter sting
+        // belonging to another network that can never be selected here.
+        return (!descriptor || descriptor.station === this.stationAssetKey(channel)) &&
           this.interludeActiveOn(item, at, channel.timezone)
-      ),
+      }),
       `${seed}|interludes|${slot.start}|${slot.end}`
     )
   }
@@ -2495,7 +2498,7 @@ export class ChannelService {
       ? { enabled: true, frequency: this.interludeFrequency() }
       : undefined
     return this.hash(
-      JSON.stringify({ scheduleVersion: 'boundary-returns-v5', channel, catalogHash: source.catalogHash, interlude })
+      JSON.stringify({ scheduleVersion: 'station-break-budgets-v6', channel, catalogHash: source.catalogHash, interlude })
     )
       .toString(16)
       .padStart(8, '0')
@@ -2508,7 +2511,7 @@ export class ChannelService {
     const interlude = this.interludePolicy.enabled
       ? { enabled: true, frequency: this.interludeFrequency() }
       : undefined
-    return this.hash(JSON.stringify({ scheduleVersion: 'boundary-returns-v5', channel, catalog, interlude }))
+    return this.hash(JSON.stringify({ scheduleVersion: 'station-break-budgets-v6', channel, catalog, interlude }))
       .toString(16)
       .padStart(8, '0')
   }
