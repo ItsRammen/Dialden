@@ -166,7 +166,7 @@ export function evaluatePolicy(
     return review('policy_missing')
   }
 
-  const rules = normalizeAndValidatePolicy(profile)
+  let rules = normalizeAndValidatePolicy(profile)
   if (!rules) return review('policy_invalid')
   if (metadata === null || metadata === undefined) {
     return review('metadata_missing')
@@ -197,6 +197,18 @@ export function evaluatePolicy(
     return review('metadata_invalid')
   }
 
+  // The original shipped Kids 7 file was persisted with only US bands.
+  // Treat that exact preset as the default after a fresh regional lookup;
+  // never merge additions into a profile that a user actually customized.
+  const originalRules = {
+    allow: ['G', 'TV-Y', 'TV-Y7', 'TV-G'], review: ['PG', 'TV-PG'],
+    block: ['PG-13', 'TV-14', 'R', 'TV-MA', 'NC-17'],
+  }
+  if (metadata.certificationRegion && profile.id === 'kids-7' && profile.age === 7 &&
+      (['allow', 'review', 'block'] as const).every((band) =>
+        rules![band].size === originalRules[band].length && originalRules[band].every((rating) => rules![band].has(rating)))) {
+    rules = normalizeAndValidatePolicy(DEFAULT_KIDS_7_POLICY)!
+  }
   const certification = normalizeRating(metadata.certification ?? '')
   if (MISSING_RATINGS.has(certification)) {
     return review('rating_missing', certification || null)

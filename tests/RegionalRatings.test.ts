@@ -28,6 +28,22 @@ describe('approved Kids 7 regional ratings', () => {
       matchStatus: 'matched', certification: 'ALL', certificationRegion: 'KR',
     }).decision).toBe('review')
   })
+  test('recognizes the exact old default after refresh but preserves custom policy edits', () => {
+    const old = { id: 'kids-7', name: 'Kids 7', age: 7, rules: {
+      allow: ['G', 'TV-Y', 'TV-Y7', 'TV-G'], review: ['PG', 'TV-PG'], block: ['PG-13', 'TV-14', 'R', 'TV-MA', 'NC-17'],
+    } }
+    expect(evaluatePolicy(old, { matchStatus: 'matched', certification: 'ALL', certificationRegion: 'KR' }).decision).toBe('allow')
+    expect(evaluatePolicy(old, { matchStatus: 'matched', certification: '15', certificationRegion: 'GB' }).decision).toBe('block')
+    expect(evaluatePolicy(old, { matchStatus: 'matched', certification: 'ALL' }).decision).toBe('review')
+    expect(evaluatePolicy({ ...old, rules: { ...old.rules, allow: ['G'] } },
+      { matchStatus: 'matched', certification: 'ALL', certificationRegion: 'KR' }).decision).toBe('review')
+  })
+  test('an unrated placeholder does not hide a usable regional certification', () => {
+    const result = resolveCertification([{ region: 'US', certification: 'NR' }, { region: 'KR', certification: '15' }], ['US'])
+    expect(result.selected).toEqual({ region: 'KR', certification: '15' })
+    expect(result.all).toHaveLength(2)
+    expect(resolveCertification([{ region: 'US', certification: 'NR' }], ['US']).status).toBe('missing')
+  })
   test('manual approvals and blocks still win', () => {
     expect(resolveEffectiveDecision(decide('KR', 'ALL').decision, 'block').decision).toBe('block')
     expect(resolveEffectiveDecision(decide('KR', '15').decision, 'allow').decision).toBe('allow')

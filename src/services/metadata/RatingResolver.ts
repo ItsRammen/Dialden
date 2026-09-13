@@ -28,7 +28,8 @@ export function resolveCertification(
 
   for (const region of regions) {
     const regionalRatings = cleaned
-      .filter((rating) => rating.region === region)
+      .filter((rating) => rating.region === region &&
+        !/^(NR|N\/R|N\/A|UNRATED|NOT RATED|UNKNOWN)$/i.test(rating.certification))
       .sort(compareRatings)
     if (regionalRatings.length === 0) continue
 
