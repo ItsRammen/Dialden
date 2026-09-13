@@ -17,6 +17,7 @@ import { MetadataProviderError } from '../metadata/types'
 import {
   renderAssistantTestResult,
   renderMetadataSettings,
+  renderMetadataStatus,
   renderMetadataTestResult,
   type MetadataSettingsDraft,
 } from '../templates/metadataSettings'
@@ -49,6 +50,8 @@ export function createMetadataSettingsController(
       await loadPersistedReviewAssistantConfig(assistantStore)
     )
   }
+
+  controller.get('/settings/metadata/status', (c) => c.html(renderMetadataStatus(metadata.getPublicConfig(), metadata.getState())))
 
   controller.get('/settings/metadata', async (c) => {
     const result = c.req.query('test')

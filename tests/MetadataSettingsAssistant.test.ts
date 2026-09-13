@@ -177,7 +177,7 @@ describe('metadata settings tabs', () => {
     expect(html).not.toContain('hidden>')
     expect(html).toContain('TMDB v3 API key')
     expect(html).toContain('Review assistant')
-    expect(html).toContain('Re-evaluate library decisions')
+    expect(html).toContain('Refresh library metadata')
   })
 })
 

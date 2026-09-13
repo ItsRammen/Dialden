@@ -57,6 +57,18 @@ function validForm(secret = ''): FormData {
 }
 
 describe('metadata settings controller', () => {
+  test('live status reads current service state without checking the provider', async () => {
+    let calls = 0
+    const response = await appFor(service({ getState: () => ({ ...state, providerHealth: 'connected', failed: 3 }),
+      testConfiguration: async () => { calls++ } })).request('/settings/metadata/status')
+    const html = await response.text()
+    expect(html).toContain('Connected')
+    expect(html).toContain('Failed this run')
+    expect(html).toContain('every 10s')
+    expect(html).not.toContain('<html')
+    expect(calls).toBe(0)
+  })
+
   test('GET renders editable redacted settings', async () => {
     const secret = 'server-secret-must-never-render'
     const response = await appFor(service()).request('/settings/metadata')
@@ -247,9 +259,9 @@ describe('metadata settings controller', () => {
     const response = await appFor(service()).request('/settings/metadata')
     const html = await response.text()
 
-    expect(html).toContain('Apply updated rules')
-    expect(html).toContain('Retry Needs Review')
-    expect(html).toContain('Rebuild all metadata')
+    expect(html).toContain('Recheck saved ratings')
+    expect(html).toContain('Retry unresolved titles')
+    expect(html).toContain('Refresh all metadata & ratings')
     expect(html).toContain('Explicit Parent approve and Parent block choices are never replaced')
     expect(html).toContain('Manual TMDB identities remain locked')
   })

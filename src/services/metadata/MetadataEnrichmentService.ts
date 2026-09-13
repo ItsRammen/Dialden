@@ -1078,16 +1078,15 @@ export class MetadataEnrichmentService {
     if (!this.provider.configured) return
     this.state = {
       ...this.state,
-      providerHealth: this.state.failed > 0 ? 'degraded' : 'connected',
-      providerMessage:
-        this.state.failed > 0
-          ? this.state.providerMessage ??
-            'One or more metadata records failed during the latest refresh.'
-          : null,
+      providerHealth: 'connected',
+      providerMessage: null,
     }
   }
 
   private markProviderFailure(error: unknown): void {
+    // A bad title ID or a local processing failure is not an API outage.
+    if (!(error instanceof MetadataProviderError) ||
+        ['invalid_external_id', 'not_found', 'aborted'].includes(error.code)) return
     this.state = {
       ...this.state,
       providerHealth: this.provider.configured ? 'degraded' : 'not_configured',

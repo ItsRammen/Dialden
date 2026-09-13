@@ -1,0 +1,13 @@
+.metadata-shortcuts { display:flex; flex-wrap:wrap; gap:12px; margin:18px 0 24px; }
+.metadata-shortcuts a { padding:10px 14px; border:1px solid #334155; border-radius:8px; background:#101b2e; color:#b4d0ff; text-decoration:none; }
+.metadata-shortcuts a:hover, .metadata-shortcuts a:focus-visible { border-color:#689aff; background:#192943; }
+.metadata-settings .settings-tabs { position:sticky; top:0; z-index:3; background:#0b1220; padding:10px 0; }
+.metadata-settings .metadata-maintenance-actions { align-items:stretch; gap:16px; }
+.metadata-settings .metadata-maintenance-actions form { border-radius:12px; padding:22px; }
+.metadata-settings .metadata-maintenance-actions form:last-child { border-color:#5985d8; background:#14223a; }
+.metadata-settings .metadata-status-panel dl { display:flex; flex-wrap:wrap; gap:18px; }
+.metadata-settings details > summary { cursor:pointer; padding:12px 0; font-weight:600; }
+.metadata-settings details[open] > summary { margin-bottom:12px; }
+.metadata-settings .metadata-settings-note { margin-top:18px; }
+.metadata-settings .metadata-form-actions { flex-wrap:wrap; gap:12px; }
+@media(max-width:640px) { .metadata-shortcuts { display:grid; } .metadata-settings .settings-tabs { position:static; } .metadata-settings .metadata-status-panel { display:block; } .metadata-settings .metadata-status-panel dl { margin-top:18px; } }

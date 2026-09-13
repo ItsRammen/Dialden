@@ -111,12 +111,12 @@ describe('headless dashboard metadata health', () => {
     })
   })
 
-  test('shows configured-but-unverified metadata as unavailable, not connected', async () => {
+  test('shows an unchecked configured connection without claiming an outage', async () => {
     const view = await dashboard(metadataState()).build()
 
-    expect(view.metadata.status).toBe('offline')
+    expect(view.metadata.status).toBe('unverified')
     expect(view.metadata.statusMessage).toContain(
-      'no successful provider request has been observed'
+      'configured but not checked yet'
     )
     expect(view.server.status).toBe('degraded')
     expect(view.warnings).toContainEqual({
@@ -159,13 +159,14 @@ describe('headless dashboard metadata health', () => {
     })
   })
 
-  test('keeps health degraded while a persisted metadata error row exists', async () => {
+  test('keeps collection errors visible without misreporting a connected API', async () => {
     const view = await dashboard(
       metadataState({ providerHealth: 'connected' }),
       [{} as MediaCollection]
     ).build()
 
-    expect(view.metadata.status).toBe('degraded')
+    expect(view.metadata.status).toBe('connected')
+    expect(view.metadata.statusMessage).toContain('library records still need attention')
     expect(view.server.status).toBe('degraded')
     expect(view.warnings?.some((warning) => warning.severity === 'critical')).toBe(
       true

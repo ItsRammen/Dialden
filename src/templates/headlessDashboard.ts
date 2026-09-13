@@ -89,6 +89,7 @@ export type HeadlessMetadataStatus =
   | 'not_configured'
   | 'degraded'
   | 'offline'
+  | 'unverified'
 
 export interface HeadlessMetadataViewModel {
   readonly providerName: string
@@ -154,6 +155,7 @@ const METADATA_STATUS: Record<HeadlessMetadataStatus, string> = {
   not_configured: 'Not configured',
   degraded: 'Needs attention',
   offline: 'Unavailable',
+  unverified: 'Not checked',
 }
 
 function count(value: number): string {
@@ -468,7 +470,11 @@ export function renderHeadlessDashboard(
          }
          function metadata(state) {
            if (!state) return;
-           text('headless-metadata-status', state.status);
+           var health = state.providerHealth || 'unverified';
+           var labels = { connected: 'Connected', degraded: 'Needs attention', not_configured: 'Not configured', unverified: 'Not checked' };
+           text('headless-metadata-status', labels[health] || 'Not checked');
+           var badge = document.getElementById('headless-metadata-status');
+           if (badge) badge.className = 'headless-status headless-metadata-' + health;
            if (state.status === 'completed' || state.status === 'failed' || state.status === 'not_configured') scheduleReload();
          }
          function scheduleReload() {

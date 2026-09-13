@@ -30,6 +30,24 @@ export interface MetadataSettingsRenderOptions {
   readonly draft?: MetadataSettingsDraft
 }
 
+export function renderMetadataStatus(config: PublicMetadataConfig, state: MetadataJobState): string {
+  const health = metadataHealth(config, state)
+  return `<section id="metadata-live-status" hx-get="/settings/metadata/status" hx-trigger="every 10s" hx-swap="outerHTML" class="metadata-status-panel" aria-label="TMDB provider status">
+        <div>
+          <span class="metadata-status-dot metadata-status-${health.tone}" aria-hidden="true"></span>
+          <div>
+            <strong>${escapeHtml(health.label)}</strong>
+            <span>${escapeHtml(health.detail)}</span>
+          </div>
+        </div>
+        <dl>
+          <div><dt>Background job</dt><dd>${escapeHtml(formatJobStatus(state.status))}</dd></div>
+          <div><dt>Processed this run</dt><dd>${state.processed.toLocaleString('en-US')}</dd></div>
+          <div><dt>Needs review this run</dt><dd>${state.needsReview.toLocaleString('en-US')}</dd></div>
+        <div><dt>Failed this run</dt><dd>${state.failed.toLocaleString('en-US')}</dd></div></dl>
+      </section>`
+}
+
 export function renderMetadataSettings(
   config: PublicMetadataConfig,
   state: MetadataJobState,
@@ -44,7 +62,6 @@ export function renderMetadataSettings(
     config.fallbackRatingRegions.join(', ')
   const requestTimeout =
     options.draft?.requestTimeoutMs ?? String(config.requestTimeoutMs)
-  const health = metadataHealth(config, state)
   /* Saving the assistant redirects back here, so land on the tab the operator
      was actually working in rather than throwing them back to TMDB. */
   const assistantTab =
@@ -52,9 +69,9 @@ export function renderMetadataSettings(
     (options.assistantSaved === true ||
       options.assistantTestResult !== undefined)
   const tabs: { id: string; label: string }[] = [
-    { id: 'provider', label: 'The Movie Database' },
-    ...(options.assistant ? [{ id: 'assistant', label: 'Review assistant' }] : []),
-    { id: 'maintenance', label: 'Maintenance' },
+    { id: 'provider', label: 'Connection & ratings' },
+    ...(options.assistant ? [{ id: 'assistant', label: 'Automatic review' }] : []),
+    { id: 'maintenance', label: 'Refresh library' },
   ]
   const activeTab = options.maintenanceStarted || options.reevaluationUnavailable ? 'maintenance' : assistantTab ? 'assistant' : 'provider'
   const panel = (id: string, body: string): string =>
@@ -62,34 +79,26 @@ export function renderMetadataSettings(
 
   return renderLayout(
     'Metadata and review',
-    `<div class="settings metadata-settings">
+    `<link rel="stylesheet" href="/css/metadata-workspace.css"><div class="settings metadata-settings">
 
 
       <header class="metadata-settings-header">
         <div>
           <p class="metadata-eyebrow">Library enrichment</p>
           <h1>Metadata and review</h1>
-          <p class="metadata-lede">Connect your metadata provider, configure automatic reviews, and maintain your library.</p>
+          <p class="metadata-lede">Find titles and regional ratings, choose how reviews work, and refresh existing library records.</p>
         </div>
       </header>
 
       ${renderSettingsNavigation('metadata')}
       ${renderPageAlert(options)}
 
-      <section class="metadata-status-panel" aria-label="TMDB provider status">
-        <div>
-          <span class="metadata-status-dot metadata-status-${health.tone}" aria-hidden="true"></span>
-          <div>
-            <strong>${escapeHtml(health.label)}</strong>
-            <span>${escapeHtml(health.detail)}</span>
-          </div>
-        </div>
-        <dl>
-          <div><dt>Background job</dt><dd>${escapeHtml(formatJobStatus(state.status))}</dd></div>
-          <div><dt>Processed</dt><dd>${state.processed.toLocaleString('en-US')}</dd></div>
-          <div><dt>Needs review</dt><dd>${state.needsReview.toLocaleString('en-US')}</dd></div>
-        </dl>
-      </section>
+      ${renderMetadataStatus(config, state)}
+      <nav class="metadata-shortcuts" aria-label="Library review shortcuts">
+        <a href="/library/review/metadata">Fix matches & missing ratings</a>
+        <a href="/library/review">Review approvals</a>
+        <a href="#maintenance">Refresh existing ratings</a>
+      </nav>
 
       <div class="settings-tabs" role="tablist" aria-label="Metadata settings sections">
         ${tabs
@@ -233,10 +242,10 @@ export function renderMetadataSettings(
         </div>
       </form>
 
-      <aside class="metadata-settings-note">
-        <strong>About existing environment values</strong>
+      <details class="metadata-settings-note">
+        <summary>Advanced: Docker environment defaults</summary>
         <p><code>TMDB_API_KEY</code>, language, region, and timeout environment values are used only as bootstrap defaults until this page is saved. Saved appdata settings take precedence on later starts.</p>
-      </aside>`
+      </details>`
       )}
 
       ${options.assistant ? panel('assistant', renderAssistantCard(options)) : ''}
@@ -247,25 +256,25 @@ export function renderMetadataSettings(
         <div class="card-header metadata-card-heading">
           <div>
             <p class="metadata-step">Library maintenance</p>
-            <h2>Re-evaluate library decisions</h2>
+            <h2>Refresh library metadata</h2>
           </div>
         </div>
-        <p>Choose the smallest operation that fits the change. Parent approvals and blocks are always preserved.</p>
+        <p>Added rating regions or changed matching settings? Use Refresh all metadata & ratings. For a few unresolved titles, retry the review queue. Manual approvals and blocks stay in place.</p>
         <div class="metadata-maintenance-actions">
           <form method="post" action="/settings/metadata/reapply-policy">
-            <h3>Apply updated rules</h3>
-            <p>Recalculate the Kids 7 policy and station eligibility from cached metadata. No TMDB requests.</p>
-            <button class="btn btn-secondary" type="submit">Apply cached rules</button>
+            <h3>Recheck saved ratings</h3>
+            <p>Apply policy rules to metadata already stored in Dialden. Does not fetch missing or newly supported regional ratings.</p>
+            <button class="btn btn-secondary" type="submit">Recheck saved ratings</button>
           </form>
           <form method="post" action="/settings/metadata/retry-review" onsubmit="return confirm('Retry automatic matching and ratings only for unresolved collections?');">
-            <h3>Retry Needs Review</h3>
-            <p>Retry ambiguous, unmatched, unrated, and failed collections without touching parent-decided titles.</p>
-            <button class="btn btn-primary" type="submit" ${config.configured ? '' : 'disabled'}>Retry review queue</button>
+            <h3>Retry unresolved titles</h3>
+            <p>Fetch matches and ratings for titles still awaiting review. Skips manually decided and already-blocked titles.</p>
+            <button class="btn btn-primary" type="submit" ${config.configured ? '' : 'disabled'}>Retry unresolved titles</button>
           </form>
           <form method="post" action="/settings/metadata/reevaluate" onsubmit="return confirm('Rebuild automatic metadata for the whole library? This may make many TMDB requests.');">
-            <h3>Rebuild all metadata</h3>
-            <p>Refresh every automatic match, provider field, episode record, rating, and category.</p>
-            <button class="btn btn-secondary" type="submit" ${config.configured ? '' : 'disabled'}>Rebuild entire library</button>
+            <h3>Refresh all metadata & ratings</h3>
+            <p>Fetch fresh ratings across supported regions and refresh automatic matches and episode details. Covers the whole library and may take a while.</p>
+            <button class="btn btn-secondary" type="submit" ${config.configured ? '' : 'disabled'}>Refresh all metadata & ratings</button>
           </form>
         </div>
         <p class="hint"><strong>Manual TMDB identities remain locked.</strong> Explicit Parent approve and Parent block choices are never replaced.</p>
@@ -452,6 +461,8 @@ const TAB_SCRIPT = `<script>
   var tabs = [].slice.call(bar.querySelectorAll('.settings-tab'))
   if (!tabs.length) return
   function select(id) {
+    if (!tabs.some(function (tab) { return tab.getAttribute('data-tab') === id })) return
+    window.history.replaceState(null, '', '#' + id)
     tabs.forEach(function (tab) {
       var on = tab.getAttribute('data-tab') === id
       tab.classList.toggle('is-active', on)
@@ -479,7 +490,9 @@ const TAB_SCRIPT = `<script>
     tabs[next].focus()
   })
   var opening = bar.querySelector('.settings-tab.is-active') || tabs[0]
-  select(opening.getAttribute('data-tab'))
+  var requested = window.location.hash.slice(1)
+  select(tabs.some(function (tab) { return tab.getAttribute('data-tab') === requested }) ? requested : opening.getAttribute('data-tab'))
+  window.addEventListener('hashchange', function () { select(window.location.hash.slice(1)) })
 })()
 </script>`
 
@@ -544,6 +557,7 @@ function renderAssistantCard(options: MetadataSettingsRenderOptions): string {
           <span>Use the assistant for cases policy cannot settle</span>
         </label>
 
+        <details class="metadata-advanced"><summary>Assistant connection settings</summary>
         <div class="form-group">
           <label for="assistantBaseUrl">Provider endpoint</label>
           <input type="url" id="assistantBaseUrl" name="baseUrl" value="${escapeHtml(assistant.baseUrl)}" spellcheck="false" placeholder="https://openrouter.ai/api/v1">
@@ -570,9 +584,11 @@ function renderAssistantCard(options: MetadataSettingsRenderOptions): string {
             : ''
         }
 
-        <h3>What to do with each outstanding case</h3>
+        </details>
+        <h3>Automatic decisions</h3>
+        <p>These rules work without an AI assistant. Use the optional assistant only for cases assigned to it.</p>
         ${treatment('reviewBand', 'Certification in the review band', policy.reviewBand, 'Ratings your profile nominates for a parent to judge, such as PG.', false)}
-        ${treatment('missingRating', 'No certification anywhere', policy.missingRating, 'Matched, but no rating in any configured region.', false)}
+        ${treatment('missingRating', 'No certification anywhere', policy.missingRating, 'Matched, but no rating in configured or supported fallback regions.', false)}
         ${treatment('unrecognizedRating', 'Unrecognised certification', policy.unrecognizedRating, 'A rating the profile has no rule for.', false)}
         ${treatment('ambiguousMetadata', 'More than one plausible title', policy.ambiguousMetadata, 'The case an assistant is best at: choosing between candidates already found.', true)}
         ${treatment('unmatchedMetadata', 'No reliable title match', policy.unmatchedMetadata, 'Nothing matched well enough to rate.', true)}
@@ -613,7 +629,7 @@ function renderAssistantCard(options: MetadataSettingsRenderOptions): string {
                 hx-target="#assistant-run-result"
                 hx-swap="innerHTML"
                 hx-disabled-elt="this">
-          Preview a run
+          Preview review decisions
         </button>
         <button class="btn btn-secondary"
                 type="button"
@@ -657,7 +673,7 @@ function metadataHealth(
       detail: 'The latest TMDB provider check succeeded.',
     }
   }
-  if (state.providerHealth === 'degraded' || state.status === 'failed') {
+  if (state.providerHealth === 'degraded') {
     return {
       tone: 'warning',
       label: 'Connection needs attention',
@@ -668,7 +684,7 @@ function metadataHealth(
   }
   return {
     tone: 'idle',
-    label: 'Configured, not yet verified',
+    label: 'Not checked yet',
     detail: 'Test the connection to verify the saved key and network access.',
   }
 }

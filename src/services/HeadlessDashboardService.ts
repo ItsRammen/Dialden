@@ -109,18 +109,15 @@ export class HeadlessDashboardService {
         metadata.status === 'failed' ||
         metadata.failed > 0 ||
         metadataErrors.length > 0)
-    const metadataVerified =
-      metadataConfig.configured &&
-      metadata.providerHealth === 'connected' &&
-      !metadataDegraded
+    const providerDegraded = metadataConfig.configured && metadata.providerHealth === 'degraded'
+    const metadataVerified = metadataConfig.configured && metadata.providerHealth === 'connected'
     const metadataStatusMessage = !metadataConfig.configured
-      ? 'Add a TMDB API key under Metadata and review to enable automatic collection matching.'
-      : metadataDegraded
-        ? metadata.providerMessage ??
-          'One or more metadata records failed and need attention.'
+      ? 'Add a TMDB API key in Connection & ratings to enable automatic matching.'
+      : providerDegraded
+        ? metadata.providerMessage ?? 'The latest provider request failed. Test the connection in metadata settings.'
         : metadataVerified
-          ? undefined
-          : 'TMDB is configured, but no successful provider request has been observed yet.'
+          ? metadataDegraded ? 'TMDB is connected. Some library records still need attention.' : undefined
+          : 'TMDB is configured but not checked yet. Test the connection in metadata settings.'
 
     if (summary.reviewCollections > 0) {
       warnings.push({
@@ -268,11 +265,11 @@ export class HeadlessDashboardService {
         providerName: 'TMDB',
         status: !metadataConfig.configured
           ? 'not_configured'
-          : metadataDegraded
+          : providerDegraded
             ? 'degraded'
             : metadataVerified
               ? 'connected'
-              : 'offline',
+              : 'unverified',
         preferredRegion: metadataConfig.preferredRatingRegion,
         matchedCollections: summary.metadataMatchedCollections,
         pendingCollections: summary.metadataPendingCollections,

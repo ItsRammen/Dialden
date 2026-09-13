@@ -456,6 +456,16 @@ describe('metadata enrichment and policy integration', () => {
     })
   })
 
+  test('a successful connection test clears provider failure without erasing failed-record counts', async () => {
+    await addCollection('Network Failure', 2024)
+    const service = new MetadataEnrichmentService(repository, providerFor({ searchError:
+      new MetadataProviderError('network unavailable', { code: 'network', provider: 'tmdb' }) }), runtimeConfig)
+    await service.runPending()
+    expect(service.getState()).toMatchObject({ failed: 1, providerHealth: 'degraded' })
+    await service.testConnection()
+    expect(service.getState()).toMatchObject({ failed: 1, providerHealth: 'connected', providerMessage: null })
+  })
+
   test('degrades and redacts provider failures instead of leaking credentials', async () => {
     const collection = await addCollection('Network Failure', 2024)
     const error = new MetadataProviderError(
