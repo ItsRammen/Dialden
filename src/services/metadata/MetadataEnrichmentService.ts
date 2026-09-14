@@ -950,7 +950,13 @@ export class MetadataEnrichmentService {
    */
   private async matchOnSupportingEvidence(collection: MediaCollection, candidates: readonly MetadataCandidateRecord[]): Promise<boolean> {
     // Bound provider work. An unexamined plausible rival prevents an automatic match.
-    const contenders = candidates.filter(c => c.confidence >= (collection.libraryKind === 'tv' ? 0.85 : 0.45))
+    // Keep exact-title ties focused; otherwise allow episode evidence to
+    // corroborate regional suffixes, alternative subtitles and near spellings.
+    // A low title score alone never authorizes a match.
+    const hasExactTVContender = collection.libraryKind === 'tv' && candidates.some(c => c.confidence >= 0.85)
+    const threshold = collection.libraryKind === 'tv' ? (hasExactTVContender ? 0.85 : 0.45)
+      : candidates.some(c => c.confidence >= 0.45) ? 0.45 : 0.3
+    const contenders = candidates.filter(c => c.confidence >= threshold)
     if (!contenders.length || contenders.length > 5) return false
     try {
       const media = await this.repository.getCollectionMedia(collection.id)
@@ -961,6 +967,7 @@ export class MetadataEnrichmentService {
         const seasons = [...new Set(local.map(m => m.seasonNumber!))].sort((a,b) => a-b).slice(0, 2)
         for (const candidate of contenders) {
           const matches = new Set<string>()
+          const matchedTitles = new Set<string>()
           for (const season of seasons) {
             const episodes = await this.provider.getTVSeason(candidate.externalId, season, { language: this.config.language })
             for (const episode of episodes) {
@@ -972,11 +979,14 @@ export class MetadataEnrichmentService {
                 const ordinary = file.episodeNumber === episode.episodeNumber && normalizeTitle(cleaned) === normalizeTitle(episode.title)
                 const paired = stories.length === 2 && stories.some((story, index) =>
                   story === normalizeTitle(episode.title) && episode.episodeNumber === file.episodeNumber! * 2 - 1 + index)
-                if (ordinary || paired) matches.add(`${file.seasonNumber}:${file.episodeNumber}`)
+                if (ordinary || paired) {
+                  matches.add(`${file.seasonNumber}:${file.episodeNumber}`)
+                  matchedTitles.add(normalizeTitle(episode.title))
+                }
               }
             }
           }
-          evidence.push({ candidate, count: matches.size, detail: `Matched ${matches.size} episode files by story title and season/episode position.` })
+          evidence.push({ candidate, count: Math.min(matches.size, matchedTitles.size), detail: `Matched ${matches.size} episode files by story title and season/episode position.` })
         }
       } else if (collection.libraryKind === 'movie' && collection.year !== null && contenders.length === 1 &&
         normalizeTitle(contenders[0]!.title) !== normalizeTitle(collection.parsedTitle)) {

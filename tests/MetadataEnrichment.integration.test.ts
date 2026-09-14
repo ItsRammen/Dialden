@@ -208,8 +208,8 @@ describe('metadata enrichment and policy integration', () => {
     expect(await repository.getCollectionById(item.id)).toMatchObject({ metadataExternalId: '2153', metadataStatus: 'matched' })
   })
 
-  for (const rivalMatches of [false, true]) test('episode evidence resolves a title tie only when unique: ' + rivalMatches, async () => {
-    const item = await addCollection('Arthur')
+  for (const localTitle of ['Arthur', 'Arthur (US)']) for (const rivalMatches of [false, true]) test('episode evidence resolves a title tie only when unique: ' + localTitle + rivalMatches, async () => {
+    const item = await addCollection(localTitle)
     const titles = ['A difficult day', 'The school trip', 'A new friend']
     for (let i = 0; i < titles.length; i++) await repository.upsertMedia({
       ...mediaInput(item.id, 'Arthur', 'Arthur - S01E0' + (i + 1) + '.mkv'),
@@ -242,6 +242,19 @@ describe('metadata enrichment and policy integration', () => {
     provider.getMovie = async (...args) => ({ ...await original(...args), runtimeMinutes: 96 })
     await new MetadataEnrichmentService(repository, provider, runtimeConfig).runPending()
     expect(await repository.getCollectionById(item!.id)).toMatchObject({ metadataStatus: runtime === 96 ? 'matched' : 'ambiguous' })
+  })
+
+  for (const hasAlias of [true, false]) test('low-score movie title requires a provider alias: ' + hasAlias, async () => {
+    const [item] = await repository.upsertCollections([{
+      rootId: 'movies', libraryKind: 'movie', identityKey: 'f1', sourceTitle: 'F1 The Movie (2025)',
+      parsedTitle: 'F1 The Movie', year: 2025,
+    }])
+    await repository.upsertMedia({ ...mediaInput(item!.id, 'F1 The Movie'), rootId: 'movies', libraryKind: 'movie', durationSeconds: 155 * 60 })
+    const provider = providerFor({ candidates: [{ provider: 'tmdb', externalId: '911430', mediaType: 'movie', title: 'F1', year: 2025 }], certification: 'PG-13' })
+    const original = provider.getMovie.bind(provider)
+    provider.getMovie = async (...args) => ({ ...await original(...args), runtimeMinutes: 155, alternativeTitles: hasAlias ? ['F1 The Movie'] : [] })
+    await new MetadataEnrichmentService(repository, provider, runtimeConfig).runPending()
+    expect(await repository.getCollectionById(item!.id)).toMatchObject({ metadataStatus: hasAlias ? 'matched' : 'unmatched' })
   })
 
   async function addCollection(title: string, year: number | null = null) {
