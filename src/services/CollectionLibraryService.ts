@@ -33,6 +33,7 @@ export class CollectionLibraryService {
     return this.repository.getCollections({
       ...options,
       effectiveDecision: 'review',
+      excludeParentalGuidance: true,
     })
   }
 

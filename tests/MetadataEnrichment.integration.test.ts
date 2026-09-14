@@ -161,6 +161,21 @@ describe('metadata enrichment and policy integration', () => {
     await repository.close()
   })
 
+  test('PG opt-in browsing preserves review decisions without crowding the review queue', async () => {
+    const item = await addCollection('Family Show', 2024)
+    const service = new MetadataEnrichmentService(repository, providerFor({
+      candidates: [{ provider: 'tmdb', externalId: '123', mediaType: 'tv', title: 'Family Show', originalTitle: 'Family Show', year: 2024 }],
+      certification: 'TV-PG',
+    }), runtimeConfig)
+    await service.runPending()
+    expect(await repository.getCollectionById(item.id)).toMatchObject({
+      parentOverride: null, policyDecision: 'review', scheduleEligibleCount: 0,
+    })
+    expect(await repository.getCollections({ effectiveDecision: 'review', excludeParentalGuidance: true })).toHaveLength(0)
+    expect((await repository.getCollections({ parentalGuidanceOnly: true })).map(c => c.id)).toEqual([item.id])
+    expect((await repository.getAll())[0]?.collectionCertification).toBe('TV-PG')
+  })
+
   async function addCollection(title: string, year: number | null = null) {
     const [collection] = await repository.upsertCollections([
       {

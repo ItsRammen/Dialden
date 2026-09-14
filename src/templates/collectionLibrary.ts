@@ -161,7 +161,7 @@ export interface CollectionLibraryViewModel {
   readonly updateAvailable?: boolean
   readonly currentPath?: string
   readonly search?: string
-  readonly filter?: CollectionPolicyDecision | 'all' | 'unmatched'
+  readonly filter?: CollectionPolicyDecision | 'all' | 'unmatched' | 'guidance'
   readonly bulkAction?: string
   readonly bulkReturnPath?: string
   readonly pagination?: CollectionPaginationViewModel
@@ -656,7 +656,7 @@ export function renderCollectionReview(
       <div class="collection-section-heading">
         <div>
           <p class="collection-eyebrow">Review queue</p>
-          <h2 id="collection-review-title">Needs review (${count(review.totalCollections)})</h2>
+          <h2 id="collection-review-title">Needs review (${count(review.totalCollections)})</h2><p>PG and TV-PG titles are excluded from automatic lineups by default. Manage deliberate exceptions in channel settings. <a href="/library/tv?status=guidance">Browse PG shows</a> · <a href="/library/movies?status=guidance">Browse PG movies</a></p>
         </div>
         <nav aria-label="Review queues">
           <a href="/library/review">Approval ${count(review.approvalCollections)}</a>
@@ -716,8 +716,8 @@ export function renderCollectionLibraryContent(
         view.activeView === 'tv' || view.activeView === 'movies'
           ? `<div class="collection-library-tools">
               <nav aria-label="Approval filters">
-                ${(['all', 'allow', 'review', 'block', 'unmatched'] as const)
-                  .map((filter) => `<a${view.filter === filter ? ' aria-current="page"' : ''} href="${currentPath}?status=${filter}">${filter === 'allow' ? 'Approved' : filter === 'review' ? 'Needs review' : filter === 'block' ? 'Blocked' : filter === 'unmatched' ? 'Unmatched' : 'All'}</a>`)
+                ${(['all', 'allow', 'review', 'block', 'unmatched', 'guidance'] as const)
+                  .map((filter) => `<a${view.filter === filter ? ' aria-current="page"' : ''} href="${currentPath}?status=${filter}">${filter === 'guidance' ? 'PG · explicit selection' : filter === 'allow' ? 'Approved' : filter === 'review' ? 'Needs review' : filter === 'block' ? 'Blocked' : filter === 'unmatched' ? 'Unmatched' : 'All'}</a>`)
                   .join('')}
               </nav>
               <form method="get" action="${currentPath}" role="search">

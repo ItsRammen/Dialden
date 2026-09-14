@@ -133,6 +133,8 @@ const MEDIA_COLUMNS = `
   collection_id,
   (SELECT identity_key FROM media_collections
     WHERE media_collections.id = media.collection_id) AS collection_identity_key,
+  (SELECT certification FROM media_collections
+    WHERE media_collections.id = media.collection_id) AS collection_certification,
   (SELECT metadata_title FROM media_collections
     WHERE media_collections.id = media.collection_id) AS collection_metadata_title,
   (SELECT genres_json FROM media_collections
@@ -142,6 +144,8 @@ const MEDIA_COLUMNS = `
 `
 
 /** One fail-closed expression shared by every collection query/projection. */
+const PG_OPT_IN_SQL = `COALESCE(collection.rating_status = 'resolved' AND collection.policy_reason = 'rating_requires_review' AND UPPER(TRIM(collection.certification)) IN ('PG', 'TV-PG') AND collection.parent_override IS NULL, 0)`
+
 const COLLECTION_EFFECTIVE_DECISION_SQL = `CASE
   WHEN collection.parent_override IS NULL THEN CASE
     WHEN collection.policy_decision IN ('allow', 'review', 'block')
@@ -959,6 +963,8 @@ export class MediaRepository implements IMediaRepository {
       clauses.push(`${COLLECTION_EFFECTIVE_DECISION_SQL} = ?`)
       values.push(options.effectiveDecision)
     }
+    if (options.excludeParentalGuidance) clauses.push(`NOT (${PG_OPT_IN_SQL})`)
+    if (options.parentalGuidanceOnly) clauses.push(`UPPER(TRIM(collection.certification)) IN ('PG', 'TV-PG') AND collection.rating_status = 'resolved'`)
     if (options.metadataStatus) {
       clauses.push('collection.metadata_status = ?')
       values.push(options.metadataStatus)
@@ -1129,7 +1135,7 @@ export class MediaRepository implements IMediaRepository {
           AS movie_collections,
         COALESCE(SUM(CASE WHEN effective_decision = 'allow' THEN 1 ELSE 0 END), 0)
           AS approved_collections,
-        COALESCE(SUM(CASE WHEN effective_decision = 'review' THEN 1 ELSE 0 END), 0)
+        COALESCE(SUM(CASE WHEN effective_decision = 'review' AND pg_opt_in = 0 THEN 1 ELSE 0 END), 0)
           AS review_collections,
         COALESCE(SUM(CASE WHEN effective_decision = 'block' THEN 1 ELSE 0 END), 0)
           AS blocked_collections,
@@ -1148,6 +1154,7 @@ export class MediaRepository implements IMediaRepository {
           THEN 1 ELSE 0 END), 0) AS metadata_review_collections
       FROM (
         SELECT library_kind, metadata_status, rating_status,
+          ${PG_OPT_IN_SQL} AS pg_opt_in,
           ${COLLECTION_EFFECTIVE_DECISION_SQL} AS effective_decision
         FROM media_collections AS collection
         WHERE present = 1
@@ -1855,6 +1862,7 @@ export class MediaRepository implements IMediaRepository {
       libraryKind: this.normalizeLibraryKind(row.library_kind),
       collectionTitle:
         (row.collection_title as string) ?? (row.filename as string),
+      collectionCertification: (row.collection_certification as string | null) ?? null,
       collectionMetadataTitle:
         (row.collection_metadata_title as string | null) ?? null,
       collectionGenres: this.parseStringArray(row.collection_genres_json),

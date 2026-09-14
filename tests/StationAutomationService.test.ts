@@ -99,6 +99,40 @@ function video(collectionTitle: string, id = 501): MediaItem {
 }
 
 describe('station automation', () => {
+  test('PG exceptions apply only to the chosen channel and survive file rescans', async () => {
+    const records = [collection(1, 'Bluey'), collection(2, 'Family Show', { certification: 'TV-PG' })]
+    let pgId = 502
+    const repository = {
+      getCollections: async () => records,
+      getAll: async () => [video('Bluey'), { ...video('Family Show', pgId), collectionCertification: 'TV-PG', collectionId: 2 }],
+    } as unknown as IMediaRepository
+    const service = new ChannelService(repository, {
+      version: 1, roots: { tv: { collections: [] } }, channels: [],
+    }, { now: () => new Date('2026-08-23T06:00:00Z') })
+    for (const id of ['first', 'second']) await service.createAutomatedStation({
+      id, name: id, timezone: 'UTC', preset: 'all-approved-tv', airtime: 'all-day',
+    })
+    expect((await service.getGuide('first', 1))?.programs.some(p => p.mediaId === pgId)).toBe(false)
+    const first = service.administrationSnapshot()!.channels.find(c => c.id === 'first')!
+    service.update('first', { ...first, pgExceptions: [JSON.stringify(['tv', 'tv', 'family show'])] })
+    await service.reconcileAutomatedStations()
+    expect((await service.getGuide('first', 1))?.programs.some(p => p.mediaId === pgId)).toBe(true)
+    expect((await service.getGuide('second', 1))?.programs.some(p => p.mediaId === pgId)).toBe(false)
+    pgId = 999
+    service.invalidateScheduleCatalog()
+    expect((await service.getGuide('first', 1))?.programs.some(p => p.mediaId === pgId)).toBe(true)
+    service.update('first', { ...service.administrationSnapshot()!.channels.find(c => c.id === 'first')!, pgExceptions: [] })
+    expect((await service.getGuide('first', 1))?.programs.some(p => p.mediaId === pgId)).toBe(false)
+  })
+
+  test('explicit selection can include approved PG while automatic discovery excludes it', async () => {
+    const catalog = await loadStationAutomationCatalog({
+      getCollections: async () => [collection(2, 'Family Show', { certification: 'PG' })],
+    } as unknown as IMediaRepository)
+    expect(selectStationCollections(catalog, { preset: 'all-approved-tv' })).toHaveLength(0)
+    expect(selectStationCollections(catalog, { preset: 'custom', selectionMode: 'explicit', collectionIds: [2] })).toHaveLength(1)
+  })
+
   test('expands bounded airtime templates into editable non-overlapping slots', () => {
     expect(stationAirtimeSlots('all-day', 'generated')).toEqual([
       {

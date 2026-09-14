@@ -317,6 +317,7 @@ function renderManualEditor(
   const suggested = replica?.networkId
     ? analyzeNetworkCopyProfile(replica.networkId, collections, { startYear: replica.eraStartYear, endYear: replica.eraEndYear }).matches.map((match) => match.collection)
     : collections
+  const pgOptions = collections.filter((c) => c.requiresPgException && (suggested.includes(c) || edit?.pgExceptions?.includes(collectionReferenceKey(c))))
   const shortOptions = collections.filter((c) => c.libraryKind === 'tv' && (suggested.includes(c) || edit?.shorts?.collections?.includes(collectionReferenceKey(c))))
 
   return `<section class="channel-admin-editor" id="editor" data-channel-editor>
@@ -353,6 +354,20 @@ function renderManualEditor(
       <section class="channel-builder-step" aria-labelledby="station-pattern-heading">
         ${renderStepHeading(3, 'Programming pattern', 'Optionally add recurring episode marathons to the normal mix.', 'station-pattern-heading')}
         ${renderMarathonSettings(edit?.marathon)}
+        <details class="channel-marathon" data-shorts-picker>
+          <summary>PG exceptions · ${(edit?.pgExceptions ?? []).length} selected</summary>
+          <input type="hidden" name="pgExceptionsPresent" value="1">
+          <p>Choose approved PG or TV-PG titles for this station. They are excluded from automatic selection by default.</p>
+          <p>Library blocks and network/era limits still apply. Titles explicitly chosen in Auto lineup are already included.</p>
+          <label>Search PG shows and movies<input type="search" data-shorts-search placeholder="Search by title" autocomplete="off"></label>
+          <p data-shorts-search-status role="status"></p>
+          <fieldset class="channel-shorts-collections"><legend>Allow on this channel</legend>
+          ${pgOptions.map((c) => `<label class="channel-admin-checkbox" data-shorts-option data-search-title="${escapeHtml(c.displayTitle.toLowerCase())}"><input type="checkbox" name="pgExceptions" value="${escapeHtml(collectionReferenceKey(c))}" ${edit?.pgExceptions?.includes(collectionReferenceKey(c)) ? 'checked' : ''}> ${escapeHtml(c.displayTitle)} <small>${escapeHtml(c.certification ?? 'PG')} · ${c.eligibleFiles} ready files${!suggested.includes(c) ? ' · Outside current network/era; not added automatically' : ''}</small></label>`).join('') || '<p>No approved PG titles match this station. Review the title in your library first, then return here to add an exception.</p>'}
+          ${(edit?.pgExceptions ?? []).filter((key) => !collections.some((c) => collectionReferenceKey(c) === key)).map((key) => `<label class="channel-admin-checkbox"><input type="checkbox" name="pgExceptions" value="${escapeHtml(key)}" checked> Saved exception unavailable or awaiting library approval: ${escapeHtml(key)}</label>`).join('')}
+          </fieldset>
+          <a href="/library/tv?status=guidance">Review PG shows</a> · <a href="/library/movies?status=guidance">Review PG movies</a>
+          <p>Save station changes to apply these selections. Removing a selection excludes it from the next automatic lineup unless it is part of an explicitly selected lineup.</p>
+        </details>
         <details class="channel-marathon" data-shorts-picker>
           <summary id="station-shorts-heading">Short programming · ${edit?.shorts?.enabled ? 'Enabled' : 'Disabled'} · ${(edit?.shorts?.collections ?? []).length} collections selected</summary>
           <p>Finish schedule blocks with complete short cartoons before allocating leftover time to breaks. Shorts appear as programmes in both guides.</p>

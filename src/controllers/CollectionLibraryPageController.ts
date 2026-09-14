@@ -1,3 +1,4 @@
+import { isGeneralParentalGuidance } from '../policy/ChannelParentalGuidance'
 import { Hono, type Context } from 'hono'
 import type { CollectionLibraryService } from '../services/CollectionLibraryService'
 import type { MetadataEnrichmentService } from '../services/metadata/MetadataEnrichmentService'
@@ -199,6 +200,8 @@ async function renderCollectionList(
   const unmatched = rawStatus === 'unmatched'
   const pageResult = await deps.library.list({
     kind,
+    ...(rawStatus === 'guidance' ? { parentalGuidanceOnly: true } : {}),
+    ...(filter === 'review' ? { excludeParentalGuidance: true } : {}),
     ...(filter ? { effectiveDecision: filter } : {}),
     ...(unmatched ? { metadataStatus: 'unmatched' as const } : {}),
     search,
@@ -223,7 +226,7 @@ async function renderCollectionList(
     currentPath,
     search,
     filter:
-      rawStatus === 'unmatched'
+      rawStatus === 'guidance' ? 'guidance' : rawStatus === 'unmatched'
         ? 'unmatched'
         : filter ?? 'all',
     updateAvailable: deps.updateAvailable?.(),
@@ -531,7 +534,7 @@ function metadataModel(collection: MediaCollection) {
 function decisionModel(collection: MediaCollection) {
   return {
     policyDecision: collection.policyDecision,
-    policyReason: humanizeReason(collection.policyReason),
+    policyReason: isGeneralParentalGuidance(collection.certification) ? 'Excluded from automatic lineups unless explicitly selected for that channel. Library approval and channel inclusion are separate.' : humanizeReason(collection.policyReason),
     parentOverride: collection.parentOverride,
     effectiveDecision: collection.effectiveDecision,
     effectiveReason:

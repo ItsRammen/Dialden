@@ -444,6 +444,7 @@ export function createChannelController({
       const channel = channels.update(
         id,
         { ...input,
+          ...(input.pgExceptions === undefined && existing?.pgExceptions ? { pgExceptions: existing.pgExceptions } : {}),
           ...(input.marathon === undefined && existing?.marathon ? { marathon: existing.marathon } : {}),
           // This editor changes presentation and schedule fields, not the
           // saved Auto lineup recipe. Only Auto setup replaces that recipe.
@@ -451,6 +452,7 @@ export function createChannelController({
         }
       )
       if (!channel) return c.text('Channel not found', 404)
+      if (existing?.automation && JSON.stringify(existing.pgExceptions ?? []) !== JSON.stringify(channel.pgExceptions ?? [])) await channels.reconcileAutomatedStations()
       await notifyChannelChanged(id)
       return c.redirect('/channels?changed=updated', 303)
     } catch (error) {
@@ -896,6 +898,7 @@ async function readFormChannel(
     timezone: textValue(data.get('timezone')),
     enabled: data.get('enabled') !== null,
     slots: parseChannelSlots(textValue(data.get('slots'))),
+    ...(data.has('pgExceptionsPresent') ? { pgExceptions: data.getAll('pgExceptions').map(textValue) } : {}),
     shorts: {
       enabled: data.get('shortsEnabled') === 'true',
       groups: data.getAll('shortsGroups').map(textValue),

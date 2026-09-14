@@ -113,6 +113,8 @@ export interface CollectionUpsertInput {
 }
 
 export interface CollectionListOptions {
+  readonly parentalGuidanceOnly?: boolean
+  readonly excludeParentalGuidance?: boolean
   readonly kind?: LibraryKind
   readonly effectiveDecision?: PolicyDecision
   readonly metadataStatus?: MetadataMatchStatus
@@ -288,6 +290,7 @@ export interface MediaItem {
   readonly collectionId?: number | null
   /** Durable collection identity from (root, kind, identity key). */
   readonly collectionIdentityKey?: string | null
+  readonly collectionCertification?: string | null
   readonly seasonNumber?: number | null
   readonly episodeNumber?: number | null
   readonly episodeTitle?: string | null

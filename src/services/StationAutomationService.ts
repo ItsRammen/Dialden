@@ -1,3 +1,4 @@
+import { channelCollectionKey, isGeneralParentalGuidance } from '../policy/ChannelParentalGuidance'
 import type { IMediaRepository } from '../repositories/IMediaRepository'
 import type { LibraryKind, MediaCollection } from '../types'
 import type { ChannelScheduleSlot } from '../config/library'
@@ -74,6 +75,8 @@ export interface StationCollectionOption {
   readonly studios: readonly string[]
   readonly firstAirYear?: number | null
   readonly eligibleFiles: number
+  readonly certification?: string | null
+  readonly requiresPgException?: boolean
 }
 
 export interface StationFacet {
@@ -186,6 +189,7 @@ export interface StationAutomationCatalog {
 }
 
 export interface StationSelectionRequest {
+  readonly pgExceptions?: readonly string[]
   readonly preset: StationPresetId
   readonly networkId?: StationNetworkId
   readonly eraStartYear?: number
@@ -576,6 +580,12 @@ export function selectStationCollections(
   catalog: StationAutomationCatalog,
   request: StationSelectionRequest
 ): StationCollectionOption[] {
+  const explicitlySelected = request.selectionMode === 'explicit' || request.collectionIds !== undefined
+  if (!explicitlySelected) {
+    catalog = { ...catalog, collections: catalog.collections.filter((collection) =>
+      !collection.requiresPgException || (request.pgExceptions ?? []).includes(
+        channelCollectionKey(collection.rootId, collection.libraryKind, collection.identityKey))) }
+  }
   if (catalog.truncated) {
     throw new Error(
       'Station automation is disabled because the playable catalog exceeds 5,000 collections'
@@ -802,6 +812,8 @@ function toOption(collection: MediaCollection): StationCollectionOption {
     studios: collection.studios ?? [],
     firstAirYear: collection.metadataYear ?? collection.year,
     eligibleFiles: collection.scheduleEligibleCount,
+    certification: collection.certification,
+    requiresPgException: isGeneralParentalGuidance(collection.certification),
   }
 }
 

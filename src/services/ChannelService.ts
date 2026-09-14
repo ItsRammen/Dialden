@@ -1,3 +1,4 @@
+import { channelCollectionKey, isGeneralParentalGuidance } from '../policy/ChannelParentalGuidance'
 import { selectBlockShorts } from './ShortProgrammingService'
 import type { IMediaRepository } from '../repositories/IMediaRepository'
 import type { MediaItem } from '../types'
@@ -396,6 +397,7 @@ export class ChannelService {
             eraStartYear: channel.automation.eraStartYear,
             eraEndYear: channel.automation.eraEndYear,
             selectionMode: 'automatic',
+            pgExceptions: channel.pgExceptions,
           })
         : catalog.collections
     const collectionIds = eligibleNetworkCollections
@@ -1021,7 +1023,7 @@ export class ChannelService {
     preview: StationBuildPreview
   }> {
     const catalog = await this.stationAutomationCatalog()
-    const collections = selectStationCollections(catalog, request)
+    const collections = selectStationCollections(catalog, { ...request, pgExceptions: request.pgExceptions ?? this.channels.find((c) => c.id === (request as StationBuildRequest).id)?.pgExceptions })
     return {
       catalog,
       preview: {
@@ -1104,6 +1106,7 @@ export class ChannelService {
               }
             : {}),
           selectionMode,
+          pgExceptions: channel.pgExceptions,
           airtime: automation.airtime,
           ...(automation.handoff ? { handoff: automation.handoff } : {}),
           ...(channel.marathon ? { marathon: channel.marathon } : {}),
@@ -1247,6 +1250,7 @@ export class ChannelService {
         timezone: request.timezone,
         slots: this.automatedScheduleSlots(request, group),
         automation: this.stationAutomationPolicy(request, selectedCollections),
+        ...(request.pgExceptions ? { pgExceptions: request.pgExceptions } : {}),
         ...(request.marathon ? { marathon: request.marathon } : {}),
       },
     ])[0] as LibraryChannelPolicy
@@ -1538,6 +1542,13 @@ export class ChannelService {
     }
   }
 
+  private channelAllowsGuidance(channel: LibraryChannelPolicy, item: MediaItem): boolean {
+    if (!channel.automation || !isGeneralParentalGuidance(item.collectionCertification)) return true
+    const key = channelCollectionKey(item.rootId ?? '', item.libraryKind ?? '', item.collectionIdentityKey ?? '')
+    if (channel.pgExceptions?.includes(key)) return true
+    return channel.automation.collectionRefs?.some((ref) => channelCollectionKey(ref.rootId, ref.libraryKind, ref.identityKey) === key) ?? false
+  }
+
   private programsForGroups(
     source: ScheduleSourceSnapshot,
     groups: readonly string[]
@@ -1641,7 +1652,7 @@ export class ChannelService {
     around: Date,
     horizonHours: number
   ): ScheduledProgram[] {
-    const eligible = this.programsForGroups(source, slot.groups)
+    const eligible = this.programsForGroups(source, slot.groups).filter((item) => this.channelAllowsGuidance(channel, item))
     if (eligible.length === 0) return []
 
     const orderedPrograms = this.withMarathons(
@@ -1719,7 +1730,7 @@ export class ChannelService {
     const programs: ScheduledProgram[] = []
     const recentBreakAssets: string[] = []
     const recentShorts: number[] = []
-    const shortsPool = channel.shorts?.enabled ? source.programMedia.filter((item) => this.isShortCollection(channel, source, item)) : []
+    const shortsPool = channel.shorts?.enabled ? source.programMedia.filter((item) => this.channelAllowsGuidance(channel, item) && this.isShortCollection(channel, source, item)) : []
     const shortsIds = new Set(shortsPool.map((item) => item.id))
     const slots = channel.slots
       .filter((slot) => slot.days.includes(date.weekday))
@@ -1736,7 +1747,7 @@ export class ChannelService {
         this.timeToMinutes(slot.end),
         channel.timezone
       )
-      const eligible = this.programsForGroups(source, slot.groups).filter((item) => !shortsIds.has(item.id))
+      const eligible = this.programsForGroups(source, slot.groups).filter((item) => this.channelAllowsGuidance(channel, item)).filter((item) => !shortsIds.has(item.id))
       if (eligible.length === 0) continue
 
       const dateKey = `${date.year}-${this.pad(date.month)}-${this.pad(date.day)}`
@@ -2480,6 +2491,7 @@ export class ChannelService {
         item.playbackOverride,
         item.collectionTitle,
         item.collectionMetadataTitle,
+        item.collectionCertification,
         item.seasonNumber,
         item.episodeNumber,
         item.episodeTitle,
@@ -2498,7 +2510,7 @@ export class ChannelService {
       ? { enabled: true, frequency: this.interludeFrequency() }
       : undefined
     return this.hash(
-      JSON.stringify({ scheduleVersion: 'station-break-budgets-v6', channel, catalogHash: source.catalogHash, interlude })
+      JSON.stringify({ scheduleVersion: 'channel-pg-exceptions-v7', channel, catalogHash: source.catalogHash, interlude })
     )
       .toString(16)
       .padStart(8, '0')
@@ -2511,7 +2523,7 @@ export class ChannelService {
     const interlude = this.interludePolicy.enabled
       ? { enabled: true, frequency: this.interludeFrequency() }
       : undefined
-    return this.hash(JSON.stringify({ scheduleVersion: 'station-break-budgets-v6', channel, catalog, interlude }))
+    return this.hash(JSON.stringify({ scheduleVersion: 'channel-pg-exceptions-v7', channel, catalog, interlude }))
       .toString(16)
       .padStart(8, '0')
   }

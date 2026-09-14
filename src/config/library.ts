@@ -150,6 +150,8 @@ export interface LibraryChannelPolicy {
   /** Absent/disabled preserves the ordinary deterministic programme order. */
   readonly marathon?: ChannelMarathonPolicy
   readonly shorts?: ChannelShortsPolicy
+  /** Approved-library PG titles deliberately allowed in this automatic lineup. */
+  readonly pgExceptions?: readonly string[]
   /** Optional provenance for an Auto-built station; legacy/manual channels omit it. */
   readonly automation?: ChannelAutomationPolicy
 }
@@ -341,6 +343,7 @@ export function validateLibraryChannels(input: unknown): LibraryChannelPolicy[] 
       branding?: unknown
       marathon?: unknown
       shorts?: unknown
+      pgExceptions?: unknown
       automation?: unknown
     }
     const id = typeof value.id === 'string' ? value.id.trim() : ''
@@ -472,6 +475,7 @@ export function validateLibraryChannels(input: unknown): LibraryChannelPolicy[] 
       ...(value.marathon === undefined
         ? {}
         : { marathon: validateChannelMarathon(value.marathon, id) }),
+      ...(value.pgExceptions === undefined ? {} : { pgExceptions: validatePgExceptions(value.pgExceptions) }),
       ...(value.shorts === undefined ? {} : { shorts: validateChannelShorts(value.shorts, id) }),
       ...(automation === undefined ? {} : { automation }),
     }
@@ -1021,4 +1025,13 @@ export function validateChannelShorts(input: unknown, channelId: string): Channe
   if (!Number.isInteger(maximumDurationSeconds) || Number(maximumDurationSeconds) < 30 || Number(maximumDurationSeconds) > 900) throw new Error('Maximum short duration must be 30–900 seconds')
   if (!Number.isInteger(maximumPerBlock) || Number(maximumPerBlock) < 1 || Number(maximumPerBlock) > 4) throw new Error('Shorts per block must be 1–4')
   return { enabled: value.enabled, groups, collections: [...new Set(collections as string[])], maximumDurationSeconds: Number(maximumDurationSeconds), maximumPerBlock: Number(maximumPerBlock) }
+}
+
+function validatePgExceptions(input: unknown): readonly string[] {
+  if (!Array.isArray(input) || input.length > 100 || input.some((key) => {
+    if (typeof key !== 'string' || key.length > 2048) return true
+    try { const parts = JSON.parse(key); return !Array.isArray(parts) || parts.length !== 3 ||
+      parts.some((part) => typeof part !== 'string' || !part) || !['tv', 'movie'].includes(parts[1]) } catch { return true }
+  })) throw new Error('Choose valid PG exception collections')
+  return [...new Set(input)]
 }
