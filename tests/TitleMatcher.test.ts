@@ -23,6 +23,14 @@ function candidate(
 }
 
 describe('strict metadata title matching', () => {
+  test('edition labels do not conceal the release year or become search terms', () => {
+    expect(parseCollectionTitle("Kingdom of Heaven (2005) {edition-Director's Cut}")).toEqual({
+      title: 'Kingdom of Heaven', normalizedTitle: 'kingdom of heaven', year: 2005,
+    })
+    expect(parseCollectionTitle('The Hobbit (2021) {edition-Book Edit}').year).toBe(2021)
+    expect(parseCollectionTitle('Film {Other subtitle}').title).toBe('Film {Other subtitle}')
+  })
+
   test('parses only a trailing parenthesized year', () => {
     expect(parseCollectionTitle('Bluey (2018)')).toEqual({
       title: 'Bluey',

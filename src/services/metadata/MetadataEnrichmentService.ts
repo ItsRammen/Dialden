@@ -34,6 +34,7 @@ import {
 } from '../../policy/PolicyEngine'
 import {
   cleanCollectionTitle,
+  parseCollectionTitle,
   matchMetadata,
   normalizeTitle,
   type ParsedCollectionTitle,
@@ -253,10 +254,12 @@ export class MetadataEnrichmentService {
         if (
           reviewOnly &&
           (collection.parentOverride !== null ||
-            collection.effectiveDecision !== 'review')
+            collection.effectiveDecision !== 'review' ||
+            (collection.ratingStatus === 'resolved' && collection.policyReason === 'rating_requires_review'))
         ) continue
         const keepManualIdentity =
           collection.metadataLocked && Boolean(collection.metadataExternalId)
+        const keepKnownIdentity = keepManualIdentity || (reviewOnly && collection.metadataStatus === 'matched' && Boolean(collection.metadataExternalId))
         const policyUpdated = await this.repository.updateCollectionPolicy(
           collection.id,
           'review',
@@ -268,7 +271,7 @@ export class MetadataEnrichmentService {
           collection.id,
           {
             provider: collection.metadataProvider ?? this.provider.id,
-            externalId: keepManualIdentity
+            externalId: keepKnownIdentity
               ? collection.metadataExternalId
               : null,
             status: 'pending',
@@ -668,6 +671,9 @@ export class MetadataEnrichmentService {
       return 'matched'
     }
 
+    // Reparse cached titles too: older scans kept edition tags after the year.
+    const reparsed = parseCollectionTitle(collection.parsedTitle)
+    collection = { ...collection, parsedTitle: reparsed.title, year: collection.year ?? reparsed.year ?? null }
     const searchInput = {
       title: collection.parsedTitle,
       ...(collection.year === null ? {} : { year: collection.year }),

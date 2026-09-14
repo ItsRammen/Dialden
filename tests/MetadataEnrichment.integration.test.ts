@@ -174,6 +174,20 @@ describe('metadata enrichment and policy integration', () => {
     expect(await repository.getCollections({ effectiveDecision: 'review', excludeParentalGuidance: true })).toHaveLength(0)
     expect((await repository.getCollections({ parentalGuidanceOnly: true })).map(c => c.id)).toEqual([item.id])
     expect((await repository.getAll())[0]?.collectionCertification).toBe('TV-PG')
+    expect((await service.retryReviewLibrary()).processed).toBe(0)
+  })
+
+  test('rating retries preserve a matched identity without searching again', async () => {
+    const item = await addCollection('Known Film', 2024)
+    const provider = providerFor({
+      candidates: [{ provider: 'tmdb', externalId: '456', mediaType: 'tv', title: 'Known Film', originalTitle: 'Known Film', year: 2024 }],
+      certification: null,
+    })
+    const service = new MetadataEnrichmentService(repository, provider, runtimeConfig)
+    await service.runPending()
+    provider.searchTV = async () => { throw new Error('Known identity must not be searched again') }
+    expect((await service.retryReviewLibrary()).failed).toBe(0)
+    expect(await repository.getCollectionById(item.id)).toMatchObject({ metadataExternalId: '456', metadataStatus: 'matched' })
   })
 
   async function addCollection(title: string, year: number | null = null) {

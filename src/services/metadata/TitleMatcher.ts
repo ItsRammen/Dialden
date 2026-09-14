@@ -47,9 +47,9 @@ export function parseCollectionTitle(
   options: { readonly stripMediaExtension?: boolean } = {}
 ): ParsedCollectionTitle {
   const trimmed = value.trim()
-  const titleWithNoExtension = options.stripMediaExtension
+  const titleWithNoExtension = (options.stripMediaExtension
     ? trimmed.replace(MEDIA_EXTENSION, '')
-    : trimmed
+    : trimmed).replace(/\s*\{edition-[^}]+\}\s*$/iu, '').trim()
   const yearMatch = TRAILING_YEAR.exec(titleWithNoExtension)
 
   if (yearMatch) {
