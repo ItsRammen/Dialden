@@ -33,6 +33,7 @@ export interface MetadataCandidate {
 }
 
 export interface ProviderTitleDetails extends MetadataCandidate {
+  readonly alternativeTitles?: readonly string[]
   readonly backdropPath?: string
   /**
    * Minutes. For a film this is the whole feature; for a series it is one

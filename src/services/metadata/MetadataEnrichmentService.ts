@@ -755,6 +755,7 @@ export class MetadataEnrichmentService {
           )
 
     if (result.status !== 'matched' || !result.candidate) {
+      if (await this.matchOnSupportingEvidence(collection, candidateRecords)) return 'matched'
       const byRuntime = await this.matchOnRuntime(collection, candidateRecords)
       if (byRuntime) return 'matched'
 
@@ -947,6 +948,68 @@ export class MetadataEnrichmentService {
    * matching could not, so it is recorded in the audit trail like any other
    * automatic decision and reverts with the rest of them.
    */
+  private async matchOnSupportingEvidence(collection: MediaCollection, candidates: readonly MetadataCandidateRecord[]): Promise<boolean> {
+    // Bound provider work. An unexamined plausible rival prevents an automatic match.
+    const contenders = candidates.filter(c => c.confidence >= (collection.libraryKind === 'tv' ? 0.85 : 0.45))
+    if (!contenders.length || contenders.length > 5) return false
+    try {
+      const media = await this.repository.getCollectionMedia(collection.id)
+      const evidence: { candidate: MetadataCandidateRecord; count: number; detail: string }[] = []
+      if (collection.libraryKind === 'tv' && this.provider.getTVSeason) {
+        const local = media.filter(m => m.seasonNumber && m.episodeNumber && m.episodeTitle &&
+          !/^(?:episode|pilot|part)\s*\d*$/i.test(m.episodeTitle))
+        const seasons = [...new Set(local.map(m => m.seasonNumber!))].sort((a,b) => a-b).slice(0, 2)
+        for (const candidate of contenders) {
+          const matches = new Set<string>()
+          for (const season of seasons) {
+            const episodes = await this.provider.getTVSeason(candidate.externalId, season, { language: this.config.language })
+            for (const episode of episodes) {
+              for (const file of local) {
+                if (file.seasonNumber !== episode.seasonNumber) continue
+                const cleaned = file.episodeTitle!.replace(/[._]/g, ' ')
+                  .replace(/\s+\d{3,4}p\b.*$/i, '').replace(/\s+/g, ' ').trim()
+                const stories = cleaned.split(/\s+-\s+|\s+\/\s+/).map(normalizeTitle)
+                const ordinary = file.episodeNumber === episode.episodeNumber && normalizeTitle(cleaned) === normalizeTitle(episode.title)
+                const paired = stories.length === 2 && stories.some((story, index) =>
+                  story === normalizeTitle(episode.title) && episode.episodeNumber === file.episodeNumber! * 2 - 1 + index)
+                if (ordinary || paired) matches.add(`${file.seasonNumber}:${file.episodeNumber}`)
+              }
+            }
+          }
+          evidence.push({ candidate, count: matches.size, detail: `Matched ${matches.size} episode files by story title and season/episode position.` })
+        }
+      } else if (collection.libraryKind === 'movie' && collection.year !== null && contenders.length === 1 &&
+        normalizeTitle(contenders[0]!.title) !== normalizeTitle(collection.parsedTitle)) {
+        const runtime = collectionRuntimeMinutes(media.map(m => m.durationSeconds))
+        if (!runtime) return false
+        for (const candidate of contenders) {
+          const details = await this.provider.getMovie(candidate.externalId, { language: this.config.language })
+          const title = normalizeTitle(collection.parsedTitle)
+          const aliases = [...(details.alternativeTitles ?? []), details.title, details.originalTitle ?? '']
+          // Long official subtitles often follow the familiar release title.
+          if (title.split(' ').length >= 3) aliases.push(details.title.split(':')[0]!)
+          const agrees = details.year === collection.year && details.runtimeMinutes !== undefined &&
+            Math.abs(runtime - details.runtimeMinutes) <= 3 && aliases.some(alias => normalizeTitle(alias) === title)
+          evidence.push({ candidate, count: agrees ? 3 : 0, detail: 'Alternative or shortened official title, release year and measured runtime agree.' })
+        }
+      }
+      const winners = evidence.filter(e => e.count >= 3)
+      if (winners.length !== 1 || evidence.some(e => e !== winners[0] && e.count > 0)) return false
+      const winner = winners[0]!
+      await this.hydrateMatch(collection, winner.candidate.externalId, 'matched', 0.98, candidates, false)
+      await this.audit?.recordReviewDecision({
+        runId: `evidence-${new Date().toISOString().slice(0, 10)}`, collectionId: collection.id,
+        action: 'match', source: 'policy', reason: 'metadata_ambiguous', detail: winner.detail,
+        model: null, promptVersion: null, confidence: 0.98, previousOverride: collection.parentOverride,
+        previousExternalId: collection.metadataExternalId, previousMetadataStatus: collection.metadataStatus,
+      })
+      return true
+    } catch {
+      // Missing season data or provider failures do not count against a rival.
+      return false
+    }
+  }
+
   private async matchOnRuntime(
     collection: MediaCollection,
     candidates: readonly MetadataCandidateRecord[]

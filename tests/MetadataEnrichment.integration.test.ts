@@ -190,6 +190,60 @@ describe('metadata enrichment and policy integration', () => {
     expect(await repository.getCollectionById(item.id)).toMatchObject({ metadataExternalId: '456', metadataStatus: 'matched' })
   })
 
+  test('paired story files match split provider episodes after release tags are removed', async () => {
+    const item = await addCollection('Arthur')
+    const stories = ['Arthurs Eyes', 'Bad Hair Day', 'The Real Teacher', 'Spelling Trouble', 'All Wet', 'Dino Dilemma']
+    for (let i = 0; i < 3; i++) await repository.upsertMedia({
+      ...mediaInput(item.id, 'Arthur', 'Arthur - S01E0' + (i + 1) + '.mkv'),
+      episodeNumber: i + 1, episodeTitle: stories[i*2]!.replaceAll(' ', '.') + '.-.' + stories[i*2+1]!.replaceAll(' ', '.') + '.480p.AMZN.WEBRip.x264',
+    })
+    const provider = providerFor({ candidates: [
+      { provider: 'tmdb', externalId: '2153', mediaType: 'tv', title: 'Arthur', year: 1996 },
+      { provider: 'tmdb', externalId: '291982', mediaType: 'tv', title: 'Arthur', year: 2025 },
+    ], certification: 'TV-Y' })
+    provider.getTVSeason = async (id, season) => stories.map((title, i) => ({
+      seasonNumber: season, episodeNumber: i + 1, title: id === '2153' ? title : 'Other story ' + i,
+    }))
+    await new MetadataEnrichmentService(repository, provider, runtimeConfig).runPending()
+    expect(await repository.getCollectionById(item.id)).toMatchObject({ metadataExternalId: '2153', metadataStatus: 'matched' })
+  })
+
+  for (const rivalMatches of [false, true]) test('episode evidence resolves a title tie only when unique: ' + rivalMatches, async () => {
+    const item = await addCollection('Arthur')
+    const titles = ['A difficult day', 'The school trip', 'A new friend']
+    for (let i = 0; i < titles.length; i++) await repository.upsertMedia({
+      ...mediaInput(item.id, 'Arthur', 'Arthur - S01E0' + (i + 1) + '.mkv'),
+      episodeNumber: i + 1, episodeTitle: titles[i]!,
+    })
+    const provider = providerFor({ candidates: [
+      { provider: 'tmdb', externalId: '2153', mediaType: 'tv', title: 'Arthur', year: 1996 },
+      { provider: 'tmdb', externalId: '291982', mediaType: 'tv', title: 'Arthur', year: 2025 },
+    ], certification: 'TV-Y' })
+    provider.getTVSeason = async (id, season) => titles.map((title, i) => ({
+      seasonNumber: season, episodeNumber: i + 1, title: id === '2153' || rivalMatches ? title : 'Different story ' + i,
+    }))
+    await new MetadataEnrichmentService(repository, provider, runtimeConfig).runPending()
+    expect(await repository.getCollectionById(item.id)).toMatchObject({
+      metadataStatus: rivalMatches ? 'ambiguous' : 'matched', metadataExternalId: rivalMatches ? null : '2153',
+    })
+  })
+
+  for (const runtime of [96, 150]) test('short official movie title requires measured runtime agreement: ' + runtime, async () => {
+    const [item] = await repository.upsertCollections([{
+      rootId: 'movies', libraryKind: 'movie', identityKey: 'borat-2', sourceTitle: 'Borat Subsequent Moviefilm (2020)',
+      parsedTitle: 'Borat Subsequent Moviefilm', year: 2020,
+    }])
+    await repository.upsertMedia({ ...mediaInput(item!.id, 'Borat Subsequent Moviefilm'), rootId: 'movies', libraryKind: 'movie', durationSeconds: runtime * 60 })
+    const provider = providerFor({ candidates: [{
+      provider: 'tmdb', externalId: '740985', mediaType: 'movie',
+      title: 'Borat Subsequent Moviefilm: Delivery of Prodigious Bribe to American Regime for Make Benefit Once Glorious Nation of Kazakhstan', year: 2020,
+    }], certification: 'R' })
+    const original = provider.getMovie.bind(provider)
+    provider.getMovie = async (...args) => ({ ...await original(...args), runtimeMinutes: 96 })
+    await new MetadataEnrichmentService(repository, provider, runtimeConfig).runPending()
+    expect(await repository.getCollectionById(item!.id)).toMatchObject({ metadataStatus: runtime === 96 ? 'matched' : 'ambiguous' })
+  })
+
   async function addCollection(title: string, year: number | null = null) {
     const [collection] = await repository.upsertCollections([
       {

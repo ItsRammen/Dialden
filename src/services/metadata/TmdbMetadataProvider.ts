@@ -290,6 +290,7 @@ function mapMovieDetails(raw: TmdbMovieDetails): ProviderTitleDetails {
     ...candidate,
     ...optionalString('backdropPath', raw.backdrop_path),
     ...runtimeMinutes(raw.runtime),
+    alternativeTitles: (raw.alternative_titles?.titles ?? []).map(item => item.title).filter((title): title is string => typeof title === 'string'),
     genres: mapGenres(raw.genres),
     networks: [],
     studios: mapNames(raw.production_companies),
