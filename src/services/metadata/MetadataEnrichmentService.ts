@@ -196,6 +196,61 @@ export class MetadataEnrichmentService {
     return run
   }
 
+  /** Bounded maintenance after scans; explicit retry actions bypass cooldowns. */
+  runAutomaticRetry(now = Date.now()): Promise<number> {
+    return this.withExclusiveOperation(async () => {
+      if (!this.provider.configured) return 0
+      const day = 86_400_000
+      const lastRun = Number(await this.repository.getSetting('metadata_auto_retry_run_v1'))
+      if (lastRun > 0 && now - lastRun < day) return 0
+      const due: MediaCollection[] = []
+      for (let offset = 0; due.length < 25; offset += 250) {
+        const page = await this.repository.getCollections({ presentOnly: true, limit: 250, offset })
+        for (const collection of page) {
+          if (collection.libraryKind === 'other' || (collection.metadataLocked && !collection.metadataExternalId)) continue
+          const unresolved = ['ambiguous', 'unmatched'].includes(collection.metadataStatus) ||
+            (['matched', 'manual'].includes(collection.metadataStatus) && collection.policyReason !== 'rating_consensus' &&
+              (collection.ratingStatus !== 'resolved' || ['rating_missing', 'rating_unrecognized'].includes(collection.policyReason)))
+          if (!unresolved) continue
+          const lastAttempt = Number(await this.repository.getSetting(`metadata_auto_retry_v1:${collection.id}`))
+          if (lastAttempt > 0 && now - lastAttempt < 7 * day) continue
+          due.push(collection)
+          if (due.length === 25) break
+        }
+        if (page.length < 250) break
+      }
+      // Reserve the daily allowance before network work, including failed runs.
+      await this.repository.setSetting('metadata_auto_retry_run_v1', String(now))
+      if (!due.length) return 0
+      this.state = { ...this.state, status: 'running', total: due.length, processed: 0, matched: 0,
+        needsReview: 0, failed: 0, currentCollectionId: null, startedAt: new Date(now).toISOString(), completedAt: null, error: null }
+      await this.emit('library.metadata.started')
+      let attempted = 0
+      for (const collection of due) {
+        this.state = { ...this.state, currentCollectionId: collection.id }
+        attempted++
+        await this.repository.setSetting(`metadata_auto_retry_v1:${collection.id}`, String(now))
+        try {
+          const outcome = await this.processCollection(collection)
+          this.markProviderSuccess()
+          this.advance(outcome)
+          await this.emit('library.metadata.progress')
+        } catch (error) {
+          this.markProviderFailure(error)
+          await this.recordErrorSafely(collection, error)
+          this.advance('failed')
+          this.state = { ...this.state, error: this.safeErrorMessage(error) }
+          // An outage must not spend the whole batch against the same failure.
+          break
+        }
+      }
+      this.state = { ...this.state, status: this.state.failed ? 'failed' : 'completed',
+        currentCollectionId: null, completedAt: new Date().toISOString() }
+      await this.emit(this.state.failed ? 'library.metadata.failed' : 'library.metadata.completed')
+      return attempted
+    })
+  }
+
   /**
    * Queue every present show/movie for a fresh metadata and policy pass.
    * Automatically selected identities are searched again; manually confirmed

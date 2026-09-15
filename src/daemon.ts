@@ -376,6 +376,8 @@ export class ToastTVDaemon {
       // Online enrichment is deliberately detached from filesystem scan
       // completion. The sequential worker consumes only cached pending rows.
       void this.metadataService?.runPending()
+        .then(() => this.metadataService?.runAutomaticRetry())
+        .catch((error) => console.error('Background metadata maintenance failed:', error))
     })
 
     console.log('Components initialized.')

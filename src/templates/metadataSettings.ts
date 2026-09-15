@@ -259,7 +259,7 @@ export function renderMetadataSettings(
             <h2>Refresh library metadata</h2>
           </div>
         </div>
-        <p>Added rating regions or changed matching settings? Use Refresh all metadata & ratings. For a few unresolved titles, retry the review queue. Manual approvals and blocks stay in place.</p>
+        <p>Added rating regions or changed matching settings? Use Refresh all metadata & ratings. After scans, Dialden retries up to 25 unresolved titles per day, waiting seven days before retrying the same title. Use Retry unresolved titles to run sooner. Manual approvals and blocks stay in place.</p>
         <div class="metadata-maintenance-actions">
           <form method="post" action="/settings/metadata/reapply-policy">
             <h3>Recheck saved ratings</h3>

@@ -319,6 +319,30 @@ describe('metadata enrichment and policy integration', () => {
     expect((await repository.getCollectionById(item.id))?.effectiveDecision).toBe('block')
   })
 
+  test('automatic retry is bounded by daily and per-title cooldowns and preserves overrides', async () => {
+    const item = await addCollection('Retry Show', 2024)
+    const provider = providerFor({ candidates: [] })
+    const service = new MetadataEnrichmentService(repository, provider, runtimeConfig)
+    await service.runPending()
+    await repository.updateCollectionOverride(item.id, 'block')
+    const now = Date.UTC(2026, 8, 15)
+    expect(await service.runAutomaticRetry(now)).toBe(1)
+    expect(await service.runAutomaticRetry(now + 1000)).toBe(0)
+    expect(await service.runAutomaticRetry(now + 86400000)).toBe(0)
+    expect(await service.runAutomaticRetry(now + 7 * 86400000)).toBe(1)
+    expect((await repository.getCollectionById(item.id))?.parentOverride).toBe('block')
+  })
+
+  test('automatic maintenance caps batches at 25 and continues with remaining titles the next day', async () => {
+    for (let i = 0; i < 26; i++) await addCollection('Unmatched ' + i)
+    const service = new MetadataEnrichmentService(repository, providerFor({ candidates: [] }), runtimeConfig)
+    await service.runPending()
+    const now = Date.UTC(2026, 8, 15)
+    expect(await service.runAutomaticRetry(now)).toBe(25)
+    expect(service.getState()).toMatchObject({ status: 'completed', total: 25, processed: 25 })
+    expect(await service.runAutomaticRetry(now + 86400000)).toBe(1)
+  })
+
   async function addCollection(title: string, year: number | null = null) {
     const [collection] = await repository.upsertCollections([
       {

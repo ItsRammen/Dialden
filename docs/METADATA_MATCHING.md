@@ -11,3 +11,9 @@ Dialden first compares titles and release years. Ambiguous or near-spelled title
 Provider work is bounded to five candidates and two TV seasons during episode comparison. Missing data is not evidence against a candidate. Matching does not override parent decisions.
 
 After updating the server, use Settings → Metadata → Refresh library → Retry unresolved titles. No media-file rescan or TV-app update is necessary.
+
+## Background maintenance
+
+Completed scans trigger a bounded metadata retry: at most 25 unresolved titles per day, with a persisted seven-day per-title cooldown. Missing matches and ratings are eligible regardless of parental override; resolved parental choices and rating consensus decisions are skipped. A provider failure stops the batch. Progress appears in the metadata job status. Manual retry actions bypass the cooldown.
+
+This maintenance runs after scans; it is not a separate timer when scanning is disabled.
