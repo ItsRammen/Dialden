@@ -8,6 +8,7 @@ export type CollectionMetadataStatus =
   | 'ambiguous'
   | 'unmatched'
   | 'manual'
+  | 'rating_conflict'
   | 'no_rating'
   | 'error'
   | 'not_configured'
@@ -180,6 +181,7 @@ const METADATA_LABEL: Record<CollectionMetadataStatus, string> = {
   unmatched: 'Unmatched',
   manual: 'Manually matched',
   no_rating: 'Matched — no rating',
+  rating_conflict: 'Matched — conflicting ratings',
   error: 'Metadata error',
   not_configured: 'Provider not configured',
 }
@@ -282,7 +284,7 @@ function renderMetadata(metadata: CollectionMetadataViewModel): string {
   }
   const certification = metadata.certification
     ? `${escapeHtml(metadata.certification)}${metadata.certificationRegion ? ` (${escapeHtml(metadata.certificationRegion)})` : ''}`
-    : 'No rating available'
+    : metadata.status === 'rating_conflict' ? 'Multiple source ratings — see details below' : 'No rating available'
 
   return `
     <div class="collection-state-group collection-metadata-${metadata.status}">
@@ -415,7 +417,7 @@ function renderCollectionCardStatus(collection: CollectionCardViewModel): string
     collection.technical.status !== 'available'
       ? collection.technical.reason
       : undefined,
-    ['ambiguous', 'unmatched', 'no_rating', 'error', 'not_configured'].includes(
+    ['ambiguous', 'unmatched', 'no_rating', 'rating_conflict', 'error', 'not_configured'].includes(
       collection.metadata.status
     )
       ? collection.metadata.reason

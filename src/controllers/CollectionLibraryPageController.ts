@@ -515,7 +515,7 @@ function metadataModel(collection: MediaCollection) {
     (status === 'matched' || status === 'manual') &&
     collection.ratingStatus !== 'resolved'
   ) {
-    status = 'no_rating'
+    status = collection.ratingStatus === 'ambiguous' ? 'rating_conflict' : 'no_rating'
   }
   return {
     status,
