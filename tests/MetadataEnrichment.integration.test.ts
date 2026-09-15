@@ -274,6 +274,20 @@ describe('metadata enrichment and policy integration', () => {
     })
   })
 
+  for (const override of ['allow', 'block'] as const) test('metadata retry can identify a title while retaining parent ' + override, async () => {
+    const item = await addCollection('Family Show', 2024)
+    await new MetadataEnrichmentService(repository, providerFor({ candidates: [] }), runtimeConfig).runPending()
+    await repository.updateCollectionOverride(item.id, override)
+    const service = new MetadataEnrichmentService(repository, providerFor({
+      candidates: [{ provider: 'tmdb', externalId: '321', mediaType: 'tv', title: 'Family Show', year: 2024 }],
+      certification: override === 'allow' ? 'TV-MA' : 'TV-Y',
+    }), runtimeConfig)
+    expect((await service.retryReviewLibrary()).processed).toBe(1)
+    expect(await repository.getCollectionById(item.id)).toMatchObject({
+      metadataStatus: 'matched', metadataExternalId: '321', parentOverride: override, effectiveDecision: override,
+    })
+  })
+
   async function addCollection(title: string, year: number | null = null) {
     const [collection] = await repository.upsertCollections([
       {
@@ -460,7 +474,7 @@ describe('metadata enrichment and policy integration', () => {
     })
   })
 
-  test('retries only unresolved titles without touching parent-decided collections', async () => {
+  test('retries unresolved metadata while preserving parent decisions', async () => {
     const retryable = await addCollection('A Close Shave', 1995)
     const parentDecided = await addCollection('Mystery Cartoon', 2001)
     const initiallyUnmatched = new MetadataEnrichmentService(
@@ -492,7 +506,7 @@ describe('metadata enrichment and policy integration', () => {
 
     expect(await retry.retryReviewLibrary()).toMatchObject({
       status: 'completed',
-      processed: 1,
+      processed: 2,
       matched: 1,
     })
     expect(await repository.getCollectionById(retryable.id)).toMatchObject({

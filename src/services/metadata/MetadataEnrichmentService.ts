@@ -217,9 +217,9 @@ export class MetadataEnrichmentService {
   }
 
   /**
-   * Retry only unresolved collections which still depend on policy review.
-   * Explicit parent decisions are skipped, while locked manual identities may
-   * be refreshed in place when their certification is what needs review.
+   * Retry unresolved metadata independently of playback decisions. Parent
+   * overrides are preserved; a locked identity is refreshed, never rematched.
+   * Resolved ratings awaiting a deliberate parent choice need no fetch.
    */
   retryReviewLibrary(): Promise<MetadataJobState> {
     if (this.activeRun) return this.activeRun
@@ -251,12 +251,13 @@ export class MetadataEnrichmentService {
       if (collections.length === 0) break
       for (const collection of collections) {
         if (collection.libraryKind === 'other') continue
-        if (
-          reviewOnly &&
-          (collection.parentOverride !== null ||
-            collection.effectiveDecision !== 'review' ||
-            (collection.ratingStatus === 'resolved' && collection.policyReason === 'rating_requires_review'))
-        ) continue
+        const identityResolved = ['matched', 'manual'].includes(collection.metadataStatus)
+        const ratingUnresolved = collection.ratingStatus !== 'resolved' ||
+          ['rating_missing', 'rating_unrecognized'].includes(collection.policyReason)
+        if (reviewOnly && identityResolved && !ratingUnresolved) continue
+        // A deliberately locked record without a provider ID cannot be
+        // searched without replacing the user's identity choice.
+        if (reviewOnly && collection.metadataLocked && !collection.metadataExternalId) continue
         const keepManualIdentity =
           collection.metadataLocked && Boolean(collection.metadataExternalId)
         const keepKnownIdentity = keepManualIdentity || (reviewOnly && collection.metadataStatus === 'matched' && Boolean(collection.metadataExternalId))

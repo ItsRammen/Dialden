@@ -268,7 +268,7 @@ export function renderMetadataSettings(
           </form>
           <form method="post" action="/settings/metadata/retry-review" onsubmit="return confirm('Retry automatic matching and ratings only for unresolved collections?');">
             <h3>Retry unresolved titles</h3>
-            <p>Fetch matches and ratings for titles still awaiting review. Skips manually decided and already-blocked titles.</p>
+            <p>Fetch missing matches and ratings, including approved or blocked titles. Parent decisions and locked matches are preserved. Resolved ratings awaiting your choice are skipped.</p>
             <button class="btn btn-primary" type="submit" ${config.configured ? '' : 'disabled'}>Retry unresolved titles</button>
           </form>
           <form method="post" action="/settings/metadata/reevaluate" onsubmit="return confirm('Rebuild automatic metadata for the whole library? This may make many TMDB requests.');">
