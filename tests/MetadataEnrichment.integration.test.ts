@@ -302,6 +302,70 @@ describe('metadata enrichment and policy integration', () => {
     })
   }
 
+
+  for (const range of ['valid', 'wide', 'wrong_start'] as const) test('explicit paired episode range: ' + range, async () => {
+    const item = await addCollection('The Powerpuff Girls')
+    const stories = ['Monkey See', 'Mommy Fearest', 'Insect Inside', 'Powerpuff Bluff', 'Octi Evil', 'Geshundfight']
+    for (let i = 0; i < 3; i++) {
+      const start = i * 2 + 1
+      await repository.upsertMedia({ ...mediaInput(item.id, 'The Powerpuff Girls', `The Powerpuff Girls - S01E${start}-E${start + (range === 'wide' ? 2 : 1)}.mkv`),
+        episodeNumber: range === 'wrong_start' ? start + 10 : start, episodeTitle: stories[i*2] + ' + ' + stories[i*2+1],
+      })
+    }
+    const provider = providerFor({ candidates: [
+      { provider: 'tmdb', externalId: '607', mediaType: 'tv', title: 'The Powerpuff Girls', year: 1998 },
+      { provider: 'tmdb', externalId: '66149', mediaType: 'tv', title: 'The Powerpuff Girls', year: 2016 },
+    ] })
+    provider.getTVSeason = async (id, season) => stories.map((title, i) => ({ seasonNumber: season, episodeNumber: i+1, title: id === '607' ? title : 'Unrelated ' + i }))
+    await new MetadataEnrichmentService(repository, provider, runtimeConfig).runPending()
+    expect((await repository.getCollectionById(item.id))?.metadataExternalId).toBe(range === 'valid' ? '607' : null)
+  })
+
+  for (const variant of ['consistent', 'conflicting', 'undated', 'repeated_position'] as const) test('TV filename title and year consensus: ' + variant, async () => {
+    const item = await addCollection('That Mitchell and Web Look')
+    // Replace the initial unnamed placeholder with a dated episodic filename below.
+    for (let i = 1; i <= 3; i++) await repository.upsertMedia({
+      ...mediaInput(item.id, 'That Mitchell and Web Look', `That Mitchell and Webb Look${variant === 'undated' ? '' : ` (${variant === 'conflicting' && i === 3 ? 2007 : 2006})`} - S01E0${variant === 'repeated_position' ? 1 : i} copy${i}.mkv`),
+      episodeNumber: i,
+    })
+    const provider = providerFor({ candidatesForSearch: input => input.title === 'That Mitchell and Webb Look' ? [
+      { provider: 'tmdb', externalId: 'correct', mediaType: 'tv', title: input.title, year: 2006 },
+    ] : [], candidates: [{ provider: 'tmdb', externalId: 'correct', mediaType: 'tv', title: 'That Mitchell and Webb Look', year: 2006 }] })
+    // The helper adds an undated episode, so give that record the same identity too.
+    const initial = mediaInput(item.id, 'That Mitchell and Web Look')
+    await repository.upsertMedia({ ...initial, filename: 'extra.txt' })
+    await new MetadataEnrichmentService(repository, provider, runtimeConfig).runPending()
+    expect((await repository.getCollectionById(item.id))?.metadataExternalId).toBe(variant === 'consistent' ? 'correct' : null)
+  })
+
+  for (const mode of ['unique', 'rival', 'wrong_date', 'same_guest'] as const) test('dated episode evidence requires dates and distinct guest names: ' + mode, async () => {
+    const item = await addCollection('The Daily Show')
+    const guests = mode === 'same_guest' ? ['Kevin Bacon', 'Kevin Bacon', 'Kevin Bacon'] : ['Kevin Bacon', 'Jeremy O Harris', 'Maya Hawke']
+    for (let i = 0; i < 3; i++) await repository.upsertMedia({
+      ...mediaInput(item.id, 'The Daily Show', `The Daily Show - 2024-06-${11+i} - ${guests[i]} WEBDL-1080p.mkv`),
+      seasonNumber: 29, episodeNumber: null, episodeTitle: null,
+    })
+    const provider = providerFor({ candidates: [
+      { provider: 'tmdb', externalId: 'main', mediaType: 'tv', title: 'The Daily Show', year: 1996 },
+      { provider: 'tmdb', externalId: 'rival', mediaType: 'tv', title: 'The Daily Show', year: 2011 },
+    ] })
+    provider.getTVSeason = async (id, season) => guests.map((title, i) => ({ seasonNumber: season, episodeNumber: i+100, airDate: `2024-06-${(mode === 'wrong_date' ? 21 : 11)+i}`, title: `June ${(mode === 'wrong_date' ? 21 : 11)+i}, 2024 - ${id === 'main' || mode === 'rival' ? title : 'Other guest ' + i}` }))
+    await new MetadataEnrichmentService(repository, provider, runtimeConfig).runPending()
+    expect((await repository.getCollectionById(item.id))?.metadataExternalId).toBe(mode === 'unique' ? 'main' : null)
+  })
+
+  for (const count of [15, 21]) test('bounded TV comparison examines every plausible rival: ' + count, async () => {
+    const item = await addCollection('What If')
+    const titles = ['Captain Carter', 'Star Lord', 'Lost Heroes']
+    for (let i = 0; i < 3; i++) await repository.upsertMedia({ ...mediaInput(item.id, 'What If', `What If - S01E0${i+1}.mkv`), episodeNumber: i+1, episodeTitle: titles[i] })
+    const provider = providerFor({ candidates: Array.from({length: count}, (_, i) => ({ provider: 'tmdb', externalId: String(i), mediaType: 'tv' as const, title: 'What If', year: 2000+i })) })
+    const examined = new Set<string>()
+    provider.getTVSeason = async (id, season) => { examined.add(id); return titles.map((title, i) => ({ seasonNumber: season, episodeNumber: i+1, title: id === '0' ? title : 'Different ' + i })) }
+    await new MetadataEnrichmentService(repository, provider, runtimeConfig).runPending()
+    expect((await repository.getCollectionById(item.id))?.metadataExternalId).toBe(count === 15 ? '0' : null)
+    expect(examined.size).toBe(count === 15 ? 15 : 0)
+  })
+
   test('paired story files match split provider episodes after release tags are removed', async () => {
     const item = await addCollection('Arthur')
     const stories = ['Arthurs Eyes', 'Bad Hair Day', 'The Real Teacher', 'Spelling Trouble', 'All Wet', 'Dino Dilemma']

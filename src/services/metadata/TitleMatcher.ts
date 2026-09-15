@@ -315,6 +315,16 @@ function clampScore(value: number): number {
 /** Remove release suffixes before comparing episode story names; keep part numbers. */
 export function cleanEpisodeMatchTitle(value: string): string {
   return value.replace(/[._]/g, ' ')
-    .replace(/\s+(?:blu-?ray|b[dr]rip|web-?dl|webrip|hdtv|dvdrip|\d{3,4}p|x26[45]|h[ .]?26[45]|hevc)\b.*$/i, '')
+    .replace(/(?:^|\s|\[)(?:blu-?ray|b[dr]rip|web-?dl|webrip|hdtv|dvdrip|\d{3,4}p|x26[45]|h[ .]?26[45]|hevc|av1|aac(?:\d+(?:[ .]\d+)*)?|e?ac3|dts(?:-hd)?|flac)\b.*$/i, '')
     .replace(/\s+/g, ' ').trim()
+}
+
+
+/** Some daily shows prepend the air date to the provider's guest title. */
+export function episodeTitleWithoutAirDate(title: string, airDate?: string): string {
+  const match = title.match(/^(January|February|March|April|May|June|July|August|September|October|November|December) (\d{1,2}), (\d{4})\s+-\s+(.+)$/i)
+  if (!match || !airDate) return title
+  const months = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december']
+  const date = `${match[3]}-${String(months.indexOf(match[1]!.toLowerCase()) + 1).padStart(2, '0')}-${match[2]!.padStart(2, '0')}`
+  return date === airDate ? match[4]! : title
 }

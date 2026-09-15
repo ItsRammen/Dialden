@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { MetadataCandidate } from '../src/metadata/types'
 import {
   cleanEpisodeMatchTitle,
+  episodeTitleWithoutAirDate,
   matchMetadata,
   normalizeTitle,
   parseCollectionTitle,
@@ -235,4 +236,19 @@ describe('episode release suffix cleanup', () => {
     expect(cleanEpisodeMatchTitle('The Hand of God Part II')).toBe('The Hand of God Part II')
     expect(cleanEpisodeMatchTitle('First Battle - A New Friend Bluray-1080p')).toBe('First Battle - A New Friend')
   })
+})
+
+
+test('cleans audio and bracketed episode furniture without eating ordinary words', () => {
+  expect(cleanEpisodeMatchTitle('Daisy.Bo-Peep.AAC2.0.1080p.WEBRip')).toBe('Daisy Bo-Peep')
+  expect(cleanEpisodeMatchTitle('Nana And Shoji[1080p][AV1] [Dual Audio]')).toBe('Nana And Shoji')
+  expect(cleanEpisodeMatchTitle('720p.WEB-DL.HEVC')).toBe('')
+  expect(cleanEpisodeMatchTitle('The Flaccid Hero')).toBe('The Flaccid Hero')
+})
+
+
+test('strips a provider date prefix only when it agrees with the episode air date', () => {
+  expect(episodeTitleWithoutAirDate('June 11, 2024 - Kevin Bacon', '2024-06-11')).toBe('Kevin Bacon')
+  expect(episodeTitleWithoutAirDate('June 11, 2024 - Kevin Bacon', '2024-06-12')).toBe('June 11, 2024 - Kevin Bacon')
+  expect(episodeTitleWithoutAirDate('Special - Kevin Bacon', '2024-06-11')).toBe('Special - Kevin Bacon')
 })

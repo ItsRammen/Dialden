@@ -38,6 +38,7 @@ import {
 import {
   cleanCollectionTitle,
   cleanEpisodeMatchTitle,
+  episodeTitleWithoutAirDate,
   parseCollectionTitle,
   matchMetadata,
   normalizeTitle,
@@ -843,13 +844,14 @@ export class MetadataEnrichmentService {
       }
     }
     if (result.status !== 'matched' && await this.matchOnMovieFilename(collection)) return 'matched'
+    if (result.status !== 'matched' && await this.matchOnTVFilenames(collection)) return 'matched'
 
     const candidateRecords =
       result.status === 'matched'
         ? this.toCandidateRecords(result.candidates)
         : await this.withRuntimes(
             collection,
-            this.toCandidateRecords(result.candidates)
+            this.toCandidateRecords(result.candidates, collection.libraryKind === 'tv' ? Infinity : 8)
           )
 
     if (result.status !== 'matched' || !result.candidate) {
@@ -1058,13 +1060,13 @@ export class MetadataEnrichmentService {
     const threshold = collection.libraryKind === 'tv' ? (hasExactTVContender ? 0.85 : 0.45)
       : candidates.some(c => c.confidence >= 0.45) ? 0.45 : 0.3
     const contenders = candidates.filter(c => c.confidence >= threshold)
-    if (!contenders.length || contenders.length > 5) return false
+    if (!contenders.length || contenders.length > (collection.libraryKind === 'tv' ? 20 : 5)) return false
     try {
       const media = await this.repository.getCollectionMedia(collection.id)
       const evidence: { candidate: MetadataCandidateRecord; count: number; detail: string }[] = []
       if (collection.libraryKind === 'tv' && this.provider.getTVSeason) {
-        const local = media.filter(m => m.seasonNumber && m.episodeNumber && m.episodeTitle &&
-          !/^(?:episode|pilot|part)\s*\d*$/i.test(m.episodeTitle))
+        const local = media.filter(m => m.seasonNumber && ((m.episodeNumber && m.episodeTitle &&
+          !/^(?:episode|pilot|part)\s*\d*$/i.test(m.episodeTitle)) || /\b\d{4}-\d{2}-\d{2}\b/.test(m.filename)))
         const seasons = [...new Set(local.map(m => m.seasonNumber!))].sort((a,b) => a-b).slice(0, 2)
         for (const candidate of contenders) {
           const matches = new Set<string>()
@@ -1083,19 +1085,27 @@ export class MetadataEnrichmentService {
             for (const episode of episodes) {
               for (const file of local) {
                 if (file.seasonNumber !== episode.seasonNumber) continue
-                const cleaned = cleanEpisodeMatchTitle(file.episodeTitle!)
-                const stories = cleaned.split(/\s+-\s+|\s+\/\s+/).map(normalizeTitle)
+                const dated = file.filename.match(/\b(\d{4}-\d{2}-\d{2})\s+-\s+(.+)$/)
+                const datedTitle = dated ? cleanEpisodeMatchTitle(dated[2]!.replace(/\.[^.]+$/, '')) : ''
+                const dateMatch = !!dated && dated[1] === episode.airDate && !!datedTitle &&
+                  normalizeTitle(datedTitle) === normalizeTitle(episodeTitleWithoutAirDate(episode.title, episode.airDate))
+                const cleaned = cleanEpisodeMatchTitle(file.episodeTitle ?? '')
+                const stories = cleaned.split(/\s+-\s+|\s+\/\s+|\s+\+\s+/).map(normalizeTitle)
                 const ordinary = file.episodeNumber === episode.episodeNumber && normalizeTitle(cleaned) === normalizeTitle(episode.title)
-                const paired = stories.length === 2 && stories.some((story, index) =>
-                  story === normalizeTitle(episode.title) && episode.episodeNumber === file.episodeNumber! * 2 - 1 + index)
-                if (ordinary || paired) {
-                  matches.add(`${file.seasonNumber}:${file.episodeNumber}`)
-                  matchedTitles.add(normalizeTitle(episode.title))
+                const range = file.filename.match(/\bS(\d+)E(\d+)-E?(\d+)\b/i)
+                const explicitPair = range && Number(range[1]) === file.seasonNumber &&
+                  Number(range[2]) === file.episodeNumber && Number(range[3]) === Number(range[2]) + 1
+                const paired = stories.length === 2 && (!range || explicitPair) && stories.some((story, index) =>
+                  story === normalizeTitle(episode.title) && episode.episodeNumber ===
+                    (explicitPair ? file.episodeNumber! : file.episodeNumber! * 2 - 1) + index)
+                if (ordinary || paired || dateMatch) {
+                  matches.add(dateMatch ? `date:${dated![1]}` : `${file.seasonNumber}:${file.episodeNumber}`)
+                  matchedTitles.add(normalizeTitle(dateMatch ? datedTitle : episode.title))
                 }
               }
             }
           }
-          evidence.push({ candidate, count: Math.min(matches.size, matchedTitles.size), detail: `Matched ${matches.size} episode files by story title and season/episode position.` })
+          evidence.push({ candidate, count: Math.min(matches.size, matchedTitles.size), detail: `Matched ${matches.size} episode files by story title and episode position or air date.` })
         }
       } else if (collection.libraryKind === 'movie' && collection.year !== null && contenders.length === 1 &&
         (normalizeTitle(contenders[0]!.title) !== normalizeTitle(collection.parsedTitle) || contenders[0]!.year !== collection.year)) {
@@ -1128,6 +1138,35 @@ export class MetadataEnrichmentService {
       // Unverified missing data and provider failures do not count against a rival.
       return false
     }
+  }
+
+  /** Repeated, dated episode filenames can correct a stale or misspelled folder. */
+  private async matchOnTVFilenames(collection: MediaCollection): Promise<boolean> {
+    if (collection.libraryKind !== 'tv') return false
+    const media = await this.repository.getCollectionMedia(collection.id)
+    const episodic = media.filter(file => /\bS\d+E\d+/i.test(file.filename))
+    if (episodic.length < 3) return false
+    const parsed = episodic.map(file => parseCollectionTitle(file.filename.split(/\bS\d+E\d+/i)[0]!.replace(/[ ._-]+$/, '')))
+    const first = parsed[0]!
+    if (!first.year || !first.normalizedTitle || parsed.some(p => p.year !== first.year || p.normalizedTitle !== first.normalizedTitle)) return false
+    if (new Set(episodic.map(file => file.filename.match(/\bS\d+E\d+/i)?.[0].toUpperCase())).size < 3) return false
+    try {
+      const found = await this.provider.searchTV({ title: first.title, year: first.year, language: this.config.language })
+      const result = matchMetadata(first, found)
+      const candidate = result.candidate
+      if (!candidate || candidate.mediaType !== 'tv' || candidate.year !== first.year) return false
+      const details = await this.provider.getTV(candidate.externalId, { language: this.config.language })
+      if (details.year !== first.year || ![details.title, details.originalTitle ?? ''].some(title => normalizeTitle(title) === first.normalizedTitle)) return false
+      await this.hydrateMatch(collection, candidate.externalId, 'matched', 0.98, this.toCandidateRecords(result.candidates), false)
+      await this.audit?.recordReviewDecision({
+        runId: `filename-${new Date().toISOString().slice(0, 10)}`, collectionId: collection.id,
+        action: 'match', source: 'policy', reason: 'metadata_ambiguous',
+        detail: `${episodic.length} episode filenames consistently identify "${first.title}" (${first.year}). Provider title and year agree.`,
+        model: null, promptVersion: null, confidence: 0.98, previousOverride: collection.parentOverride,
+        previousExternalId: collection.metadataExternalId, previousMetadataStatus: collection.metadataStatus,
+      }).catch(() => {})
+      return true
+    } catch { return false }
   }
 
   /** A stale folder name may hide the current title carried by the actual film. */
@@ -1264,9 +1303,10 @@ export class MetadataEnrichmentService {
   }
 
   private toCandidateRecords(
-    candidates: readonly RankedMetadataCandidate[]
+    candidates: readonly RankedMetadataCandidate[],
+    limit = 8
   ): MetadataCandidateRecord[] {
-    return candidates.slice(0, 8).map(({ candidate, score }) => ({
+    return candidates.slice(0, limit).map(({ candidate, score }) => ({
       provider: candidate.provider,
       externalId: candidate.externalId,
       mediaType: candidate.mediaType,
@@ -1276,7 +1316,7 @@ export class MetadataEnrichmentService {
       ...(candidate.posterPath ? { posterPath: candidate.posterPath } : {}),
       /* Overviews are the only thing that separates a remake from its
          original, so they are stored rather than re-fetched at review time.
-         Trimmed because eight of them per collection is otherwise a lot of
+         Trimmed because multiple candidates per collection otherwise store a lot of
          database for text nobody reads in full. */
       ...(candidate.overview
         ? { overview: candidate.overview.slice(0, 600) }
