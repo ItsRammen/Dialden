@@ -37,6 +37,7 @@ import {
 } from '../../policy/PolicyEngine'
 import {
   cleanCollectionTitle,
+  cleanEpisodeMatchTitle,
   parseCollectionTitle,
   matchMetadata,
   normalizeTitle,
@@ -1069,12 +1070,20 @@ export class MetadataEnrichmentService {
           const matches = new Set<string>()
           const matchedTitles = new Set<string>()
           for (const season of seasons) {
-            const episodes = await this.provider.getTVSeason(candidate.externalId, season, { language: this.config.language })
+            let episodes: readonly ProviderEpisodeDetails[]
+            try {
+              episodes = await this.provider.getTVSeason(candidate.externalId, season, { language: this.config.language })
+            } catch (error) {
+              // A real series can lack this season. Confirm the series still exists
+              // before treating a season-specific 404 as no episode evidence.
+              if (!(error instanceof MetadataProviderError) || error.code !== 'not_found') throw error
+              await this.provider.getTV(candidate.externalId, { language: this.config.language })
+              continue
+            }
             for (const episode of episodes) {
               for (const file of local) {
                 if (file.seasonNumber !== episode.seasonNumber) continue
-                const cleaned = file.episodeTitle!.replace(/[._]/g, ' ')
-                  .replace(/\s+\d{3,4}p\b.*$/i, '').replace(/\s+/g, ' ').trim()
+                const cleaned = cleanEpisodeMatchTitle(file.episodeTitle!)
                 const stories = cleaned.split(/\s+-\s+|\s+\/\s+/).map(normalizeTitle)
                 const ordinary = file.episodeNumber === episode.episodeNumber && normalizeTitle(cleaned) === normalizeTitle(episode.title)
                 const paired = stories.length === 2 && stories.some((story, index) =>
@@ -1116,7 +1125,7 @@ export class MetadataEnrichmentService {
       })
       return true
     } catch {
-      // Missing season data or provider failures do not count against a rival.
+      // Unverified missing data and provider failures do not count against a rival.
       return false
     }
   }

@@ -267,6 +267,41 @@ describe('metadata enrichment and policy integration', () => {
     expect(await repository.getCollectionById(item.id)).toMatchObject({ metadataExternalId: '456', metadataStatus: 'matched' })
   })
 
+
+  for (const failure of ['not_found', 'network', 'timeout', 'rate_limited', 'invalid_response', 'missing_series', 'partial_rival'] as const) {
+    test('TV evidence handles missing rival seasons conservatively: ' + failure, async () => {
+      const item = await addCollection('Fallout')
+      const titles = ['The End', 'The Target', 'The Head']
+      for (let i = 0; i < titles.length; i++) await repository.upsertMedia({
+        ...mediaInput(item.id, 'Fallout', 'Fallout - S01E0' + (i + 1) + '.mkv'),
+        episodeNumber: i + 1, episodeTitle: titles[i]! + ' Bluray-1080p v2',
+      })
+      await repository.upsertMedia({ ...mediaInput(item.id, 'Fallout', 'Fallout - S02E01.mkv'), seasonNumber: 2, episodeTitle: 'A New Season' })
+      const provider = providerFor({ candidates: [
+        { provider: 'tmdb', externalId: '106379', mediaType: 'tv', title: 'Fallout', year: 2024 },
+        { provider: 'tmdb', externalId: '32366', mediaType: 'tv', title: 'Fallout', year: 2006 },
+      ], certification: 'TV-MA' })
+      const getTV = provider.getTV.bind(provider)
+      provider.getTV = async (id, input) => {
+        if (id === '32366' && failure === 'missing_series') throw new MetadataProviderError('Missing series', { code: 'not_found', provider: 'tmdb' })
+        return getTV(id, input)
+      }
+      provider.getTVSeason = async (id, season) => {
+        if (id === '32366' && season === 2) throw new MetadataProviderError('Season lookup failed', {
+          code: failure === 'missing_series' || failure === 'partial_rival' ? 'not_found' : failure, provider: 'tmdb',
+        })
+        return titles.map((title, i) => ({ seasonNumber: season, episodeNumber: i + 1,
+          title: id === '106379' || (failure === 'partial_rival' && i === 0) ? title : 'Unrelated story ' + i,
+        }))
+      }
+      await new MetadataEnrichmentService(repository, provider, runtimeConfig).runPending()
+      expect(await repository.getCollectionById(item.id)).toMatchObject({
+        metadataStatus: failure === 'not_found' ? 'matched' : 'ambiguous',
+        metadataExternalId: failure === 'not_found' ? '106379' : null,
+      })
+    })
+  }
+
   test('paired story files match split provider episodes after release tags are removed', async () => {
     const item = await addCollection('Arthur')
     const stories = ['Arthurs Eyes', 'Bad Hair Day', 'The Real Teacher', 'Spelling Trouble', 'All Wet', 'Dino Dilemma']

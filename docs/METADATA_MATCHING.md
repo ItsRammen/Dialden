@@ -43,3 +43,10 @@ Library → Review queue separates media type (Movies & TV, Movies, TV shows) fr
 Search applies to titles and episode/file names. Category counts follow the media-type and search filters. Category/type changes reset pagination; pagination and bulk-action return links retain the filters. The library summary's Needs review count reflects all outstanding issues, not just unanswered parental decisions. Browsing or filtering does not change a rating or override.
 
 The previous `/library/review/metadata` link remains supported as a combined match-and-rating view.
+
+
+## TV episode evidence
+
+Ambiguous TV titles can resolve automatically when at least three distinct episode files agree with one candidate's story titles and season/episode positions. Any supporting episode evidence for a rival keeps the collection in review. Release suffixes such as `Bluray-1080p v2` are removed before comparison; story part numbers and paired-story titles are preserved.
+
+A season-specific TMDB 404 counts as absent episode evidence only after the series itself can still be fetched. Network failures, rate limits, invalid responses and unavailable series stop automatic disambiguation. This lets a multi-season show match even when a similarly named series has fewer seasons, without treating provider outages as evidence. Existing saved identities and parent decisions remain unchanged.

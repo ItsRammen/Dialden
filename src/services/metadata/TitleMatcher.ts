@@ -310,3 +310,11 @@ function bigramCounts(value: string): Map<string, number> {
 function clampScore(value: number): number {
   return Math.max(0, Math.min(1, Math.round(value * 10_000) / 10_000))
 }
+
+
+/** Remove release suffixes before comparing episode story names; keep part numbers. */
+export function cleanEpisodeMatchTitle(value: string): string {
+  return value.replace(/[._]/g, ' ')
+    .replace(/\s+(?:blu-?ray|b[dr]rip|web-?dl|webrip|hdtv|dvdrip|\d{3,4}p|x26[45]|h[ .]?26[45]|hevc)\b.*$/i, '')
+    .replace(/\s+/g, ' ').trim()
+}

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { MetadataCandidate } from '../src/metadata/types'
 import {
+  cleanEpisodeMatchTitle,
   matchMetadata,
   normalizeTitle,
   parseCollectionTitle,
@@ -220,5 +221,18 @@ describe('explicit Roman part numbers', () => {
     expect(normalizeTitle('I, Robot')).toBe('i robot')
     expect(normalizeTitle('X')).toBe('x')
     expect(normalizeTitle('Part Inside')).toBe('part inside')
+  })
+})
+
+
+describe('episode release suffix cleanup', () => {
+  for (const suffix of [' Bluray-1080p v2', '.480p.AMZN.WEBRip.x264', ' WEB-DL.2160p', ' HDTV-720p']) {
+    test('removes release suffix ' + suffix, () => {
+      expect(cleanEpisodeMatchTitle('The Black Swordsman' + suffix)).toBe('The Black Swordsman')
+    })
+  }
+  test('preserves story parts and paired stories', () => {
+    expect(cleanEpisodeMatchTitle('The Hand of God Part II')).toBe('The Hand of God Part II')
+    expect(cleanEpisodeMatchTitle('First Battle - A New Friend Bluray-1080p')).toBe('First Battle - A New Friend')
   })
 })
