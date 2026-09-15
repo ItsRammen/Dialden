@@ -18,6 +18,7 @@ import {
 import { audienceBandLabel } from '../policy/audienceBands'
 import type {
   LibrarySummary,
+  CollectionReviewStage,
   MediaCollection,
   MetadataCandidateRecord,
   MediaItem,
@@ -247,45 +248,31 @@ async function renderReview(
   metadataOnly: boolean
 ) {
   const page = parsePage(c.req.query('page'))
-  const offset = (page - 1) * COLLECTION_PAGE_SIZE
-  const [librarySummary, pageResult] = await Promise.all([
-    deps.library.getSummary(),
-    metadataOnly
-      ? deps.library.getMetadataReviewQueue({
-          presentOnly: true,
-          limit: COLLECTION_PAGE_SIZE + 1,
-          offset,
-        })
-      : deps.library.getReviewQueue({
-          presentOnly: true,
-          limit: COLLECTION_PAGE_SIZE + 1,
-          offset,
-        }),
+  const requestedStage = c.req.query('stage')
+  const stage: CollectionReviewStage = ['all', 'match', 'rating', 'approval', 'metadata'].includes(requestedStage ?? '')
+    ? requestedStage as CollectionReviewStage : metadataOnly ? 'metadata' : 'all'
+  const requestedKind = c.req.query('kind')
+  const kind: 'tv' | 'movie' | 'all' = requestedKind === 'tv' || requestedKind === 'movie' ? requestedKind : 'all'
+  const search = (c.req.query('search') ?? '').trim().slice(0, 200)
+  const filters = { ...(kind === 'all' ? {} : { kind }), search, presentOnly: true }
+  const [librarySummary, counts, pageResult] = await Promise.all([
+    deps.library.getSummary(), deps.library.getReviewCounts(filters),
+    deps.library.list({ ...filters, reviewStage: stage, limit: COLLECTION_PAGE_SIZE + 1, offset: (page - 1) * COLLECTION_PAGE_SIZE }),
   ])
   const hasNext = pageResult.length > COLLECTION_PAGE_SIZE
-  const selected = pageResult.slice(0, COLLECTION_PAGE_SIZE)
-  const currentPath = metadataOnly
-    ? '/library/review/metadata'
-    : '/library/review'
-  return c.html(
-    renderCollectionLibrary({
-      activeView: 'review',
-      summary: summaryModel(librarySummary),
-      heading: metadataOnly ? 'Metadata review' : 'Needs review',
-      review: {
-        totalCollections: metadataOnly
-          ? librarySummary.metadataReviewCollections
-          : librarySummary.reviewCollections,
-        metadataCollections: librarySummary.metadataReviewCollections,
-        approvalCollections: librarySummary.reviewCollections,
-        collections: selected.map(collectionCard),
-      },
-      updateAvailable: deps.updateAvailable?.(),
-      bulkAction: '/library/collections/bulk-override',
-      bulkReturnPath: pageHref(currentPath, page),
-      pagination: paginationModel(currentPath, page, hasNext),
-    })
-  )
+  const currentPath = '/library/review'
+  const query = { stage, kind, search }
+  return c.html(renderCollectionLibrary({
+    activeView: 'review', summary: summaryModel(librarySummary), heading: 'Library review',
+    review: {
+      totalCollections: stage === 'metadata' ? counts.match + counts.rating : counts[stage],
+      counts, stage, kind, search,
+      collections: pageResult.slice(0, COLLECTION_PAGE_SIZE).map(collectionCard),
+    },
+    updateAvailable: deps.updateAvailable?.(), bulkAction: '/library/collections/bulk-override',
+    bulkReturnPath: pageHref(currentPath, page, query),
+    pagination: paginationModel(currentPath, page, hasNext, query),
+  }))
 }
 
 async function postOverride(
@@ -316,7 +303,7 @@ function summaryModel(
     tvEpisodes: summary.tvEpisodes,
     movieCollections: summary.movieCollections,
     interludes: summary.interludeFiles,
-    reviewCollections: summary.reviewCollections,
+    reviewCollections: summary.attentionCollections ?? summary.reviewCollections,
     totalFiles: summary.totalFiles,
   }
 }
@@ -660,12 +647,14 @@ function parsePage(value: string | undefined): number {
 function pageHref(
   path: string,
   page: number,
-  filters: { readonly status?: string; readonly search?: string } = {}
+  filters: { readonly status?: string; readonly search?: string; readonly stage?: string; readonly kind?: string } = {}
 ): string {
   const params = new URLSearchParams()
   if (filters.status && filters.status !== 'all') {
     params.set('status', filters.status)
   }
+  if (filters.stage && filters.stage !== 'all') params.set('stage', filters.stage)
+  if (filters.kind && filters.kind !== 'all') params.set('kind', filters.kind)
   if (filters.search) params.set('search', filters.search)
   if (page > 1) params.set('page', String(page))
   const query = params.toString()
@@ -676,7 +665,7 @@ function paginationModel(
   path: string,
   page: number,
   hasNext: boolean,
-  filters: { readonly status?: string; readonly search?: string } = {}
+  filters: { readonly status?: string; readonly search?: string; readonly stage?: string; readonly kind?: string } = {}
 ) {
   return {
     page,

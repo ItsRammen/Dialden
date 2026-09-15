@@ -17,6 +17,7 @@ import type {
   Compatibility,
   LibraryKind,
   CollectionListOptions,
+  CollectionReviewCounts,
   CollectionMetadataUpdate,
   EpisodeMetadataUpdate,
   CollectionUpsertInput,
@@ -952,55 +953,7 @@ export class MediaRepository implements IMediaRepository {
   ): Promise<MediaCollection[]> {
     if (!this.db) throw new Error('Repository not initialized')
 
-    const clauses: string[] = []
-    const values: Array<string | number> = []
-    if (options.presentOnly !== false) clauses.push('collection.present = 1')
-    if (options.kind) {
-      clauses.push('collection.library_kind = ?')
-      values.push(options.kind)
-    }
-    if (options.effectiveDecision) {
-      clauses.push(`${COLLECTION_EFFECTIVE_DECISION_SQL} = ?`)
-      values.push(options.effectiveDecision)
-    }
-    if (options.excludeParentalGuidance) clauses.push(`NOT (${PG_OPT_IN_SQL})`)
-    if (options.overrideDisagreesWithPolicy) clauses.push(`collection.parent_override IN ('allow', 'block')
-      AND collection.policy_decision IN ('allow', 'block')
-      AND collection.parent_override <> collection.policy_decision`)
-    if (options.parentalGuidanceOnly) clauses.push(`UPPER(TRIM(collection.certification)) IN ('PG', 'TV-PG') AND collection.rating_status = 'resolved'`)
-    if (options.metadataStatus) {
-      clauses.push('collection.metadata_status = ?')
-      values.push(options.metadataStatus)
-    }
-    if (options.metadataReview) {
-      clauses.push(`(
-        collection.metadata_status IN (
-          'ambiguous', 'unmatched', 'error', 'not_configured'
-        ) OR (
-          collection.metadata_status IN ('matched', 'manual')
-          AND collection.rating_status <> 'resolved'
-        )
-      )`)
-    }
-    const search = options.search?.trim()
-    if (search) {
-      clauses.push(`(
-        collection.source_title LIKE ? COLLATE NOCASE OR
-        collection.parsed_title LIKE ? COLLATE NOCASE OR
-        collection.metadata_title LIKE ? COLLATE NOCASE OR
-        EXISTS (
-          SELECT 1 FROM media AS searchable_media
-          WHERE searchable_media.collection_id = collection.id
-            AND (
-              searchable_media.filename LIKE ? COLLATE NOCASE OR
-              searchable_media.episode_title LIKE ? COLLATE NOCASE
-            )
-        )
-      )`)
-      const pattern = `%${search}%`
-      values.push(pattern, pattern, pattern, pattern, pattern)
-    }
-
+    const { clauses, values } = collectionFilters(options)
     const limit = Math.max(1, Math.min(250, Math.trunc(options.limit ?? 100)))
     const offset = Math.max(0, Math.trunc(options.offset ?? 0))
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
@@ -1019,6 +972,18 @@ export class MediaRepository implements IMediaRepository {
       `)
       .all(...values, limit, offset) as Array<Record<string, unknown>>
     return rows.map((row) => this.rowToMediaCollection(row))
+  }
+
+  async getCollectionReviewCounts(options: Pick<CollectionListOptions, 'kind' | 'search' | 'presentOnly'> = {}): Promise<CollectionReviewCounts> {
+    if (!this.db) throw new Error('Repository not initialized')
+    const { clauses, values } = collectionFilters(options)
+    const row = this.db.prepare(`SELECT
+      COALESCE(SUM(CASE WHEN ${REVIEW_STAGE_SQL.match} THEN 1 ELSE 0 END), 0) AS matches,
+      COALESCE(SUM(CASE WHEN ${REVIEW_STAGE_SQL.rating} THEN 1 ELSE 0 END), 0) AS ratings,
+      COALESCE(SUM(CASE WHEN ${REVIEW_STAGE_SQL.approval} THEN 1 ELSE 0 END), 0) AS approvals
+      FROM media_collections AS collection ${clauses.length ? 'WHERE ' + clauses.join(' AND ') : ''}
+    `).get(...values) as { matches: number; ratings: number; approvals: number }
+    return { all: row.matches + row.ratings + row.approvals, match: row.matches, rating: row.ratings, approval: row.approvals }
   }
 
   async getCollectionById(id: number): Promise<MediaCollection | null> {
@@ -2251,4 +2216,70 @@ function toReviewDecisionRecord(
     createdAt: String(row['created_at']),
     revertedAt: row['reverted_at'] === null ? null : String(row['reverted_at']),
   }
+}
+
+const REVIEW_MATCH_SQL = "collection.metadata_status NOT IN ('matched', 'manual')"
+const REVIEW_RATING_SQL = "collection.metadata_status IN ('matched', 'manual') AND collection.rating_status <> 'resolved'"
+const REVIEW_APPROVAL_SQL = `collection.metadata_status IN ('matched', 'manual') AND collection.rating_status = 'resolved'
+  AND ${COLLECTION_EFFECTIVE_DECISION_SQL} = 'review' AND NOT (${PG_OPT_IN_SQL})`
+const REVIEW_STAGE_SQL = {
+  match: REVIEW_MATCH_SQL,
+  rating: REVIEW_RATING_SQL,
+  approval: REVIEW_APPROVAL_SQL,
+  metadata: `(${REVIEW_MATCH_SQL}) OR (${REVIEW_RATING_SQL})`,
+  all: `(${REVIEW_MATCH_SQL}) OR (${REVIEW_RATING_SQL}) OR (${REVIEW_APPROVAL_SQL})`,
+}
+
+function collectionFilters(options: CollectionListOptions) {
+    const clauses: string[] = []
+    const values: Array<string | number> = []
+    if (options.presentOnly !== false) clauses.push('collection.present = 1')
+    if (options.kind) {
+      clauses.push('collection.library_kind = ?')
+      values.push(options.kind)
+    }
+    if (options.effectiveDecision) {
+      clauses.push(`${COLLECTION_EFFECTIVE_DECISION_SQL} = ?`)
+      values.push(options.effectiveDecision)
+    }
+    if (options.excludeParentalGuidance) clauses.push(`NOT (${PG_OPT_IN_SQL})`)
+    if (options.overrideDisagreesWithPolicy) clauses.push(`collection.parent_override IN ('allow', 'block')
+      AND collection.policy_decision IN ('allow', 'block')
+      AND collection.parent_override <> collection.policy_decision`)
+    if (options.parentalGuidanceOnly) clauses.push(`UPPER(TRIM(collection.certification)) IN ('PG', 'TV-PG') AND collection.rating_status = 'resolved'`)
+    if (options.metadataStatus) {
+      clauses.push('collection.metadata_status = ?')
+      values.push(options.metadataStatus)
+    }
+    if (options.metadataReview) {
+      clauses.push(`(
+        collection.metadata_status IN (
+          'ambiguous', 'unmatched', 'error', 'not_configured'
+        ) OR (
+          collection.metadata_status IN ('matched', 'manual')
+          AND collection.rating_status <> 'resolved'
+        )
+      )`)
+    }
+    if (options.reviewStage) clauses.push(`(${REVIEW_STAGE_SQL[options.reviewStage]})`)
+    const search = options.search?.trim()
+    if (search) {
+      clauses.push(`(
+        collection.source_title LIKE ? COLLATE NOCASE OR
+        collection.parsed_title LIKE ? COLLATE NOCASE OR
+        collection.metadata_title LIKE ? COLLATE NOCASE OR
+        EXISTS (
+          SELECT 1 FROM media AS searchable_media
+          WHERE searchable_media.collection_id = collection.id
+            AND (
+              searchable_media.filename LIKE ? COLLATE NOCASE OR
+              searchable_media.episode_title LIKE ? COLLATE NOCASE
+            )
+        )
+      )`)
+      const pattern = `%${search}%`
+      values.push(pattern, pattern, pattern, pattern, pattern)
+    }
+
+  return { clauses, values }
 }

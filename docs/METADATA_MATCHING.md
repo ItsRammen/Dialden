@@ -29,3 +29,17 @@ This maintenance runs after scans; it is not a separate timer when scanning is d
 Folders such as `Show (2024) {tmdb-12345}` can identify a title directly without a search. TV and movie IDs are interpreted in their respective library kinds. Existing saved identities take precedence; conflicting or invalid tags require review. An identity hint does not bypass rating policy or parent overrides.
 
 This supports TMDB hints; IMDb and TVDB tags are not resolved by this implementation.
+
+
+## Review queue
+
+Library → Review queue separates media type (Movies & TV, Movies, TV shows) from the next action required:
+
+- **Missing match:** pending, ambiguous, unmatched, failed or unconfigured lookups.
+- **Needs rating:** a matched/manual identity with a missing or conflicting certification, including titles that already have a saved parent decision.
+- **Needs approval:** a matched/manual identity and resolved rating whose effective policy decision still requires review. Ordinary PG/TV-PG channel opt-ins remain in the separate PG browsing flow.
+- **All issues:** the union of these three groups, counting each collection once.
+
+Search applies to titles and episode/file names. Category counts follow the media-type and search filters. Category/type changes reset pagination; pagination and bulk-action return links retain the filters. The library summary's Needs review count reflects all outstanding issues, not just unanswered parental decisions. Browsing or filtering does not change a rating or override.
+
+The previous `/library/review/metadata` link remains supported as a combined match-and-rating view.

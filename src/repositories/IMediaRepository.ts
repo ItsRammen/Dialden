@@ -10,6 +10,7 @@ import type {
   MediaType,
   Compatibility,
   CollectionListOptions,
+  CollectionReviewCounts,
   CollectionMetadataUpdate,
   EpisodeMetadataUpdate,
   CollectionUpsertInput,
@@ -86,6 +87,8 @@ export interface IMediaRepository {
   ): Promise<number>
 
   getCollections(options?: CollectionListOptions): Promise<MediaCollection[]>
+
+  getCollectionReviewCounts(options?: Pick<CollectionListOptions, 'kind' | 'search' | 'presentOnly'>): Promise<CollectionReviewCounts>
 
   getCollectionById(id: number): Promise<MediaCollection | null>
 

@@ -143,13 +143,13 @@ describe('collection library template', () => {
 
     const review = renderCollectionReview({
       totalCollections: 1,
-      metadataCollections: 1,
-      approvalCollections: 1,
+      counts: { all: 1, match: 1, rating: 0, approval: 0 },
+      kind: 'all', stage: 'all', search: '',
       collections: [uncertain],
     })
-    expect(review).toContain('Needs review (1)')
-    expect(review).toContain('Approval 1')
-    expect(review).toContain('Metadata 1')
+    expect(review).toContain('All issues (1)')
+    expect(review).toContain('Needs approval')
+    expect(review).toContain('Missing match')
     expect(review).toContain('Multiple likely matches require confirmation.')
   })
 

@@ -1,3 +1,4 @@
+import type { CollectionReviewCounts, CollectionReviewStage } from '../types'
 import { renderLayout, renderLibraryNavigation } from './layout'
 import { escapeHtml } from './utils'
 
@@ -79,6 +80,7 @@ export interface CollectionCardViewModel {
   readonly decision: CollectionDecisionViewModel
   readonly technical: CollectionTechnicalViewModel
   readonly actions?: CollectionActionsViewModel
+  readonly reviewIssue?: string
   readonly bulkFormId?: string
 }
 
@@ -131,8 +133,10 @@ export interface CollectionDetailViewModel extends CollectionCardViewModel {
 
 export interface CollectionReviewQueueViewModel {
   readonly totalCollections: number
-  readonly metadataCollections: number
-  readonly approvalCollections: number
+  readonly counts: CollectionReviewCounts
+  readonly stage: CollectionReviewStage
+  readonly kind: 'all' | 'movie' | 'tv'
+  readonly search: string
   readonly collections: readonly CollectionCardViewModel[]
 }
 
@@ -452,12 +456,15 @@ export function renderCollectionCard(
       </a>
       <div class="collection-card-body">
         <header>
+          ${collection.reviewIssue ? `<span class="collection-review-issue">${escapeHtml(collection.reviewIssue)}</span>` : ''}
           <p>${renderCollectionFacts(collection)}</p>
           <h3><a href="${href}">${escapeHtml(collection.title)}</a></h3>
         </header>
         ${renderCollectionCardStatus(collection)}
-        <a class="collection-card-details" href="${href}">View details</a>
-        ${renderActions(collection.title, collection.actions)}
+        <a class="collection-card-details" href="${href}">${collection.reviewIssue === 'Missing match' ? 'Resolve match' : collection.reviewIssue === 'Needs rating' ? 'Review rating' : collection.reviewIssue ? 'Review approval' : 'View details'}</a>
+        ${collection.reviewIssue && collection.reviewIssue !== 'Needs approval'
+          ? `<details class="collection-review-options"><summary>Parent decision options</summary>${renderActions(collection.title, collection.actions)}</details>`
+          : renderActions(collection.title, collection.actions)}
       </div>
     </article>
   `
@@ -651,21 +658,58 @@ export function renderCollectionDetail(
 }
 
 export function renderCollectionReview(
-  review: CollectionReviewQueueViewModel
+  review: CollectionReviewQueueViewModel,
+  bulkActions = ''
 ): string {
+  const labels = { all: 'All issues', match: 'Missing match', rating: 'Needs rating', approval: 'Needs approval', metadata: 'All metadata issues' }
+  const descriptions = {
+    all: 'Each collection appears once, under the next step it needs: match, rating, then approval.',
+    match: 'Find or confirm the correct title. Includes pending matches, ambiguous results and lookup errors.',
+    rating: 'The title is matched, but its age rating is missing or conflicting. Saved parent decisions stay in place.',
+    approval: 'The title and rating are known, but the current policy still needs a parent decision.',
+    metadata: 'Titles with an unresolved match or age rating. Saved parent decisions stay in place.',
+  }
+  const href = (stage: CollectionReviewStage, kind = review.kind, search = review.search) => {
+    const params = new URLSearchParams()
+    if (stage !== 'all') params.set('stage', stage)
+    if (kind !== 'all') params.set('kind', kind)
+    if (search) params.set('search', search)
+    return '/library/review' + (params.size ? '?' + params.toString() : '')
+  }
+  const stages: CollectionReviewStage[] = ['all', 'match', 'rating', 'approval']
+  if (review.stage === 'metadata') stages.push('metadata')
+  const cards = review.collections.map(collection => ({ ...collection,
+    reviewIssue: ['no_rating', 'rating_conflict'].includes(collection.metadata.status) ? 'Needs rating'
+      : ['matched', 'manual'].includes(collection.metadata.status) ? 'Needs approval' : 'Missing match',
+  }))
   return `
     <section class="collection-review" aria-labelledby="collection-review-title">
-      <div class="collection-section-heading">
-        <div>
-          <p class="collection-eyebrow">Review queue</p>
-          <h2 id="collection-review-title">Needs review (${count(review.totalCollections)})</h2><p>PG and TV-PG titles are excluded from automatic lineups by default. Manage deliberate exceptions in channel settings. <a href="/library/tv?status=guidance">Browse PG shows</a> · <a href="/library/movies?status=guidance">Browse PG movies</a></p><p>Check saved choices against current ratings: <a href="/library/tv?status=earlier-decisions">Earlier show decisions</a> · <a href="/library/movies?status=earlier-decisions">Earlier movie decisions</a>. Nothing changes until you choose Use policy.</p>
-        </div>
-        <nav aria-label="Review queues">
-          <a href="/library/review">Approval ${count(review.approvalCollections)}</a>
-          <a href="/library/review/metadata">Metadata ${count(review.metadataCollections)}</a>
+      <div class="collection-review-toolbar">
+        <nav class="collection-review-kinds" aria-label="Review media type">
+          ${(['all', 'movie', 'tv'] as const).map(kind => `<a href="${escapeHtml(href(review.stage, kind))}"${kind === review.kind ? ' aria-current="page"' : ''}>${kind === 'all' ? 'Movies & TV' : kind === 'movie' ? 'Movies' : 'TV shows'}</a>`).join('')}
         </nav>
+        <form method="get" action="/library/review" class="collection-review-search" role="search">
+          <input type="hidden" name="stage" value="${review.stage}">
+          <input type="hidden" name="kind" value="${review.kind}">
+          <label for="review-search">Search review queue</label>
+          <input id="review-search" type="search" name="search" value="${escapeHtml(review.search)}" placeholder="Title or episode name" maxlength="200">
+          <button type="submit">Search</button>
+          ${review.search ? `<a href="${escapeHtml(href(review.stage, review.kind, ''))}">Clear search</a>` : ''}
+        </form>
       </div>
-      ${renderCollectionGrid(review.collections, 'No collections need review.')}
+      <nav class="collection-review-stages" aria-label="Review issue">
+        ${stages.map(stage => `<a href="${escapeHtml(href(stage))}"${review.stage === stage ? ' aria-current="page"' : ''}><span>${labels[stage]}</span> <strong>${count(stage === 'metadata' ? review.counts.match + review.counts.rating : review.counts[stage])}</strong></a>`).join('')}
+      </nav>
+      <div class="collection-section-heading">
+        <div><h2 id="collection-review-title">${labels[review.stage]} (${count(review.totalCollections)})</h2><p>${descriptions[review.stage]}</p></div>
+      </div>
+      <details class="collection-review-help"><summary>PG titles and saved parent decisions</summary>
+        <p>PG and TV-PG titles are excluded from automatic lineups by default. Manage deliberate exceptions in channel settings. <a href="/library/tv?status=guidance">Browse PG shows</a> · <a href="/library/movies?status=guidance">Browse PG movies</a>.</p>
+        <p>Compare saved choices with current ratings: <a href="/library/tv?status=earlier-decisions">Earlier show decisions</a> · <a href="/library/movies?status=earlier-decisions">Earlier movie decisions</a>. Nothing changes until you choose Use policy.</p>
+      </details>
+      ${bulkActions}
+      ${renderCollectionGrid(cards, 'No collections match these review filters.')}
+      ${!cards.length && (review.search || review.kind !== 'all' || review.stage !== 'all') ? '<p class="collection-empty-action"><a href="/library/review">Show all review issues</a></p>' : ''}
     </section>
   `
 }
@@ -684,7 +728,7 @@ export function renderCollectionLibraryContent(
   if (view.detail) {
     primaryContent = renderCollectionDetail(view.detail)
   } else if (view.review) {
-    primaryContent = renderCollectionReview(view.review)
+    primaryContent = renderCollectionReview(view.review, renderBulkActions(view))
   } else if (view.activeView !== 'summary' || collections.length > 0) {
     primaryContent = `
       <section class="collection-results" aria-labelledby="collection-results-title">
@@ -734,7 +778,7 @@ export function renderCollectionLibraryContent(
       }
       ${view.activeView === 'summary' && view.summary.tvCollections === 0 && view.summary.movieCollections === 0 && view.summary.interludes === 0 ? `<section class="admin-get-started"><h2>Build your library</h2><p>Connect your media folders, then scan to find your shows and movies. Review their matches and playback approvals before creating a station.</p><a href="/settings#library-services">Check media folder settings</a></section>` : ''}
       ${renderSummary(view.summary)}
-      ${renderBulkActions(view)}
+      ${view.review ? '' : renderBulkActions(view)}
       ${primaryContent}
       ${renderPagination(view.pagination)}
     </div>

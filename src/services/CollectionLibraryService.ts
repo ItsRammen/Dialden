@@ -21,8 +21,13 @@ export interface CollectionDetail {
 export class CollectionLibraryService {
   constructor(private readonly repository: IMediaRepository) {}
 
-  getSummary(): Promise<LibrarySummary> {
-    return this.repository.getLibrarySummary()
+  async getSummary(): Promise<LibrarySummary> {
+    const [summary, counts] = await Promise.all([this.repository.getLibrarySummary(), this.getReviewCounts()])
+    return { ...summary, attentionCollections: counts.all }
+  }
+
+  getReviewCounts(options: Pick<CollectionListOptions, 'kind' | 'search' | 'presentOnly'> = {}) {
+    return this.repository.getCollectionReviewCounts(options)
   }
 
   list(options: CollectionListOptions = {}): Promise<MediaCollection[]> {

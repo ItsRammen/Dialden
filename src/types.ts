@@ -113,7 +113,11 @@ export interface CollectionUpsertInput {
   readonly year: number | null
 }
 
+export type CollectionReviewStage = 'all' | 'match' | 'rating' | 'approval' | 'metadata'
+export interface CollectionReviewCounts { readonly all: number; readonly match: number; readonly rating: number; readonly approval: number }
+
 export interface CollectionListOptions {
+  readonly reviewStage?: CollectionReviewStage
   readonly overrideDisagreesWithPolicy?: boolean
   readonly parentalGuidanceOnly?: boolean
   readonly excludeParentalGuidance?: boolean
@@ -163,6 +167,7 @@ export interface EpisodeMetadataUpdate {
 }
 
 export interface LibrarySummary {
+  readonly attentionCollections?: number
   readonly tvCollections: number
   readonly tvEpisodes: number
   readonly movieCollections: number

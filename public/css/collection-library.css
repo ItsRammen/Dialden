@@ -758,3 +758,26 @@
   color: inherit;
   text-decoration: underline;
 }
+
+
+/* Review navigation keeps media type separate from the next action required. */
+.collection-review-toolbar { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+.collection-review-search { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.collection-review-search label { flex-basis: 100%; font-size: .85rem; color: var(--text-secondary); }
+.collection-review-search input[type="search"] { flex: 1; min-width: 10rem; max-width: 24rem; padding: .6rem .75rem; border: 1px solid var(--border-color, #334155); border-radius: 8px; color: inherit; background: var(--bg-primary, #0b1320); }
+.collection-review-search button { padding: .6rem .9rem; border: 1px solid var(--border-color, #334155); border-radius: 8px; background: var(--bg-secondary, #17243a); color: inherit; cursor: pointer; }
+.collection-review nav.collection-review-stages { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 1.25rem; }
+.collection-review-stages a { display: flex; align-items: center; justify-content: space-between; gap: .5rem; min-height: 3rem; border: 1px solid transparent; }
+.collection-review-stages strong { font-size: 1.2rem; }
+.collection-review nav a[aria-current="page"] { border: 1px solid #8eafff; background: rgba(90, 130, 230, .18); color: #c2d5ff; }
+.collection-review a:focus-visible, .collection-review button:focus-visible, .collection-review input:focus-visible, .collection-review summary:focus-visible { outline: 2px solid #8eafff; outline-offset: 3px; }
+.collection-review-help { margin: 0 0 1.2rem; color: var(--text-secondary); }
+.collection-review-help summary, .collection-review-options summary { cursor: pointer; }
+.collection-review-issue { display: inline-block; margin-bottom: .5rem; padding: .25rem .5rem; border-radius: 5px; background: rgba(90, 130, 230, .15); color: #b7cdff; font-size: .78rem; font-weight: 600; }
+.collection-review-options { margin-top: .75rem; font-size: .85rem; color: var(--text-secondary); }
+.collection-review-options .collection-actions { margin-top: .75rem; }
+@media (max-width: 640px) {
+  .collection-review nav.collection-review-stages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .collection-review-search { width: 100%; }
+  .collection-review-search input[type="search"] { max-width: none; min-width: 0; }
+}
