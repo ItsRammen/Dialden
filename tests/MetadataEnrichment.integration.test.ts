@@ -265,12 +265,20 @@ describe('metadata enrichment and policy integration', () => {
     }], certification: null })
     const service = new MetadataEnrichmentService(repository, provider, runtimeConfig)
     await service.runPending()
+    const originalDetails = provider.getTV.bind(provider)
     provider.getTV = async () => { throw new MetadataProviderError('Temporarily unavailable', { code: 'upstream', provider: 'tmdb', retryable: true }) }
+    await service.retryReviewLibrary()
+    provider.searchTV = async () => { throw new Error('Retry must retain the known identity') }
     await service.retryReviewLibrary()
     expect(await repository.getCollectionById(item.id)).toMatchObject({
       metadataExternalId: '789', metadataTitle: 'Known Show', posterPath: '/known.jpg',
       networks: ['ABC Kids'], genres: ['Animation', 'Family'], metadataStatus: 'error',
       parentOverride: null,
+    })
+    provider.getTV = originalDetails
+    await service.retryReviewLibrary()
+    expect(await repository.getCollectionById(item.id)).toMatchObject({
+      metadataStatus: 'matched', metadataExternalId: '789', posterPath: '/known.jpg',
     })
   })
 

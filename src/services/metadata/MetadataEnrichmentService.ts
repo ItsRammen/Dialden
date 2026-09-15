@@ -260,7 +260,7 @@ export class MetadataEnrichmentService {
         if (reviewOnly && collection.metadataLocked && !collection.metadataExternalId) continue
         const keepManualIdentity =
           collection.metadataLocked && Boolean(collection.metadataExternalId)
-        const keepKnownIdentity = keepManualIdentity || (reviewOnly && collection.metadataStatus === 'matched' && Boolean(collection.metadataExternalId))
+        const keepKnownIdentity = keepManualIdentity || (reviewOnly && Boolean(collection.metadataExternalId))
         const policyUpdated = await this.repository.updateCollectionPolicy(
           collection.id,
           'review',
