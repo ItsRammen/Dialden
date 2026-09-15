@@ -1,8 +1,10 @@
 import type { PolicyDecision } from './PolicyEngine'
 /** Approved Dialden Kids 7 decisions, not equivalence between legal systems.
  * Unknown labels remain review-only. See docs/REGIONAL_RATINGS.md. */
-export const AUTOMATIC_RATING_REGIONS = ['US', 'CA', 'AU', 'GB', 'IE', 'JP', 'KR', 'HK', 'TW', 'DE', 'FR'] as const
+export const AUTOMATIC_RATING_REGIONS = ['US', 'CA', 'AU', 'GB', 'IE', 'JP', 'KR', 'HK', 'TW', 'DE', 'FR', 'BR', 'SG'] as const
 const bands: Readonly<Record<string, Readonly<Record<string, PolicyDecision>>>> = {
+  BR: { L: 'allow', LIVRE: 'allow', '10': 'block', '12': 'block', '14': 'block', '16': 'block', '18': 'block' },
+  SG: { G: 'allow', PG: 'review', PG13: 'block', NC16: 'block', M18: 'block', R21: 'block' },
   CA: { C: 'allow', G: 'allow', PG: 'review', C8: 'block', 'C8+': 'block',
     '14+': 'block', '18+': 'block', '14A': 'block', '18A': 'block', R: 'block', A: 'block',
     '8+': 'block', '13+': 'block', '16+': 'block' },

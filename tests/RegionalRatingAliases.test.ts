@@ -12,3 +12,8 @@ test('a custom policy remains explicit',()=>{
  expect(evaluatePolicy(profile,{matchStatus:'matched',certification:'C8',certificationRegion:'CA'}).decision).toBe('allow')
  expect(evaluatePolicy(profile,{matchStatus:'matched',certification:'TP',certificationRegion:'FR'}).decision).toBe('review')
 })
+
+test('Brazil and Singapore retain age limits and PG review',()=>{
+ for(const [region,certification,decision] of [['BR','L','allow'],['BR','10','block'],['BR','16','block'],['SG','G','allow'],['SG','PG','review'],['SG','PG13','block'],['SG','NC16','block']] as const)
+  expect(evaluatePolicy(DEFAULT_KIDS_7_POLICY,{matchStatus:'matched',certification,certificationRegion:region}).decision).toBe(decision)
+})

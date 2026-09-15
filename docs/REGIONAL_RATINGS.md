@@ -49,3 +49,11 @@ French TP is the Tous publics category; TP+A is not silently treated as TP. Cana
 Sources:
 - CNC classification report, including TP and TP+A: https://www.vie-publique.fr/files/rapport/pdf/084000150.pdf
 - Canadian Broadcast Standards Council classifications: https://www.cbsc.ca/tools/for-english-ca-and-third-language-broadcasters/
+
+## Additional supported fallbacks
+
+Brazil and Singapore are appended after the existing automatic regions. The default Kids 7 profile allows Brazil L/Livre, blocks numeric age bands 10–18, allows Singapore G, retains PG for review, and blocks PG13/NC16/M18/R21. Existing preferred-region conflicts still stop fallback selection. Custom profiles are not expanded automatically.
+
+Sources:
+- Brazil Ministry of Justice classification guide: https://www.gov.br/mj/pt-br/assuntos/seus-direitos/classificacao-1/classind-audio-visual-4-edicao-2021.pdf
+- Singapore IMDA film classifications: https://www.imda.gov.sg/regulations-and-licensing-listing/content-standards-and-classification/standards-and-classification/films
