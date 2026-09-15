@@ -276,22 +276,27 @@ export class MetadataEnrichmentService {
               : null,
             status: 'pending',
             locked: keepManualIdentity,
-            title: null,
-            originalTitle: null,
-            year: null,
-            overview: null,
-            posterPath: null,
-            backdropPath: null,
-            genres: [],
-            networks: [],
-            studios: [],
-            certification: null,
-            certificationRegion: null,
-            ratingStatus: 'missing',
-            matchConfidence: null,
-            candidates: [],
+            // Refresh known identities in place. Clearing these fields makes
+            // normal rating maintenance erase posters and scheduling facets
+            // until TMDB responds, or indefinitely when a request fails.
+            ...(keepKnownIdentity ? {} : {
+              title: null,
+              originalTitle: null,
+              year: null,
+              overview: null,
+              posterPath: null,
+              backdropPath: null,
+              genres: [],
+              networks: [],
+              studios: [],
+              certification: null,
+              certificationRegion: null,
+              ratingStatus: 'missing' as const,
+              matchConfidence: null,
+              candidates: [],
+              matchedAt: null,
+            }),
             error: null,
-            matchedAt: null,
           }
         )
         if (!metadataUpdated) {

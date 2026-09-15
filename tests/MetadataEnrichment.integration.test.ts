@@ -257,6 +257,23 @@ describe('metadata enrichment and policy integration', () => {
     expect(await repository.getCollectionById(item!.id)).toMatchObject({ metadataStatus: hasAlias ? 'matched' : 'unmatched' })
   })
 
+  test('failed rating refresh retains known title and scheduling facets', async () => {
+    const item = await addCollection('Known Show', 2024)
+    const provider = providerFor({ candidates: [{
+      provider: 'tmdb', externalId: '789', mediaType: 'tv', title: 'Known Show', year: 2024,
+      posterPath: '/known.jpg',
+    }], certification: null })
+    const service = new MetadataEnrichmentService(repository, provider, runtimeConfig)
+    await service.runPending()
+    provider.getTV = async () => { throw new MetadataProviderError('Temporarily unavailable', { code: 'upstream', provider: 'tmdb', retryable: true }) }
+    await service.retryReviewLibrary()
+    expect(await repository.getCollectionById(item.id)).toMatchObject({
+      metadataExternalId: '789', metadataTitle: 'Known Show', posterPath: '/known.jpg',
+      networks: ['ABC Kids'], genres: ['Animation', 'Family'], metadataStatus: 'error',
+      parentOverride: null,
+    })
+  })
+
   async function addCollection(title: string, year: number | null = null) {
     const [collection] = await repository.upsertCollections([
       {
