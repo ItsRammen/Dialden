@@ -343,6 +343,17 @@ describe('metadata enrichment and policy integration', () => {
     expect(await service.runAutomaticRetry(now + 86400000)).toBe(1)
   })
 
+  test('explicit TMDB folder identity bypasses search without bypassing ratings', async () => {
+    const item = await addCollection('Different Folder Name {tmdb-123}')
+    const provider = providerFor({ candidates: [{provider:'tmdb',externalId:'123',mediaType:'tv',title:'Provider Title',year:2020}], certification:'TV-MA' })
+    provider.searchTV = async () => { throw new Error('Explicit ID should not need search') }
+    await new MetadataEnrichmentService(repository,provider,runtimeConfig).runPending()
+    expect(await repository.getCollectionById(item.id)).toMatchObject({
+      metadataExternalId:'123', metadataTitle:'Provider Title', metadataStatus:'matched',
+      policyDecision:'block', parentOverride:null,
+    })
+  })
+
   async function addCollection(title: string, year: number | null = null) {
     const [collection] = await repository.upsertCollections([
       {

@@ -1,3 +1,4 @@
+import { tmdbIdentityHint } from './ProviderIdentityHint'
 import { evaluateRatingConsensus } from '../../policy/RatingConsensus'
 import {
   persistMetadataConfig,
@@ -733,6 +734,21 @@ export class MetadataEnrichmentService {
       return 'matched'
     }
 
+    // Existing/manual identities above take priority over filesystem hints.
+    // IDs are scoped to the library kind through hydrateMatch's provider call.
+    const hint = tmdbIdentityHint(collection.sourceTitle)
+    if (hint.invalid) {
+      await this.repository.updateCollectionMetadata(collection.id, {
+        provider: this.provider.id, status: 'ambiguous', externalId: null,
+        error: 'Conflicting or invalid TMDB IDs in the collection name. Correct the ID tag or choose a metadata match.',
+      })
+      await this.repository.updateCollectionPolicy(collection.id, 'review', 'metadata_ambiguous', this.profileId())
+      return 'review'
+    }
+    if (hint.id && this.provider.id === 'tmdb') {
+      await this.hydrateMatch(collection, hint.id, 'matched', 1, [], false)
+      return 'matched'
+    }
     // Reparse cached titles too: older scans kept edition tags after the year.
     const reparsed = parseCollectionTitle(collection.parsedTitle)
     collection = { ...collection, parsedTitle: reparsed.title, year: collection.year ?? reparsed.year ?? null }

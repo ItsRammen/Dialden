@@ -17,3 +17,9 @@ After updating the server, use Settings → Metadata → Refresh library → Ret
 Completed scans trigger a bounded metadata retry: at most 25 unresolved titles per day, with a persisted seven-day per-title cooldown. Missing matches and ratings are eligible regardless of parental override; resolved parental choices and rating consensus decisions are skipped. A provider failure stops the batch. Progress appears in the metadata job status. Manual retry actions bypass the cooldown.
 
 This maintenance runs after scans; it is not a separate timer when scanning is disabled.
+
+## Explicit provider identity hints
+
+Folders such as `Show (2024) {tmdb-12345}` can identify a title directly without a search. TV and movie IDs are interpreted in their respective library kinds. Existing saved identities take precedence; conflicting or invalid tags require review. An identity hint does not bypass rating policy or parent overrides.
+
+This supports TMDB hints; IMDb and TVDB tags are not resolved by this implementation.
