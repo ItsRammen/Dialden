@@ -41,3 +41,11 @@ The certification remains ambiguous: this does not invent one official rating. C
 Saved evidence is tied to the provider identity and rating-region settings. Rechecking saved policies recomputes the decision under the current profile. Explicit parent overrides still take precedence. Older cached conflicts need a fresh metadata lookup before they can use this evidence.
 
 A local audit of 29 conflicts found 16 unanimous Kids 7 decisions (2 Allow, 14 Block). This is not a count of newly approved library items; some already have parent overrides.
+
+## Provider label variants
+
+French TP is the Tous publics category; TP+A is not silently treated as TP. Canadian C is children-oriented; C8/C8+ targets ages eight and over and is excluded by the default Kids 7 policy. These mappings are region-scoped and custom profiles retain their explicit rules.
+
+Sources:
+- CNC classification report, including TP and TP+A: https://www.vie-publique.fr/files/rapport/pdf/084000150.pdf
+- Canadian Broadcast Standards Council classifications: https://www.cbsc.ca/tools/for-english-ca-and-third-language-broadcasters/
