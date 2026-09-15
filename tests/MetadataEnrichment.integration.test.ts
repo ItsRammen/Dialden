@@ -296,6 +296,29 @@ describe('metadata enrichment and policy integration', () => {
     })
   })
 
+  test('rating consensus survives cached reapplication and changes with the active profile', async () => {
+    const item = await addCollection('Consensus Show', 2024)
+    const provider = providerFor({ candidates: [{ provider: 'tmdb', externalId: '999', mediaType: 'tv', title: 'Consensus Show', year: 2024 }] })
+    provider.getTVContentRating = async () => ({status: 'ambiguous', selected: null, all: [
+      {region: 'US', certification: 'TV-G'}, {region: 'US', certification: 'TV-Y7'},
+    ]})
+    const service = new MetadataEnrichmentService(repository, provider, runtimeConfig)
+    await service.runPending()
+    expect(await repository.getCollectionById(item.id)).toMatchObject({
+      ratingStatus: 'ambiguous', certification: null, policyDecision: 'allow', policyReason: 'rating_consensus',
+    })
+    await service.reapplyCachedPolicies()
+    expect((await repository.getCollectionById(item.id))?.policyDecision).toBe('allow')
+    const custom = new MetadataEnrichmentService(repository, provider, runtimeConfig, {
+      id: 'custom', name: 'Custom', age: 7, rules: { allow: ['TV-G'], review: ['TV-Y7'], block: ['R'] },
+    })
+    await custom.reapplyCachedPolicies()
+    expect((await repository.getCollectionById(item.id))?.policyDecision).toBe('review')
+    await repository.updateCollectionOverride(item.id, 'block')
+    await service.reapplyCachedPolicies()
+    expect((await repository.getCollectionById(item.id))?.effectiveDecision).toBe('block')
+  })
+
   async function addCollection(title: string, year: number | null = null) {
     const [collection] = await repository.upsertCollections([
       {

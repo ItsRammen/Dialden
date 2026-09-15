@@ -527,14 +527,14 @@ function metadataModel(collection: MediaCollection) {
       ? { audienceLabel: audienceBandLabel(collection.audienceBand) }
       : {}),
     certificationRegion: collection.certificationRegion ?? undefined,
-    reason: collection.metadataError ?? metadataReason(collection),
+    reason: [collection.metadataError ?? metadataReason(collection), collection.certificationEvidence?.length ? 'Source ratings: ' + collection.certificationEvidence.join('; ') : null].filter(Boolean).join(' ') || undefined,
   }
 }
 
 function decisionModel(collection: MediaCollection) {
   return {
     policyDecision: collection.policyDecision,
-    policyReason: isGeneralParentalGuidance(collection.certification) ? 'Excluded from automatic lineups unless explicitly selected for that channel. Library approval and channel inclusion are separate.' : humanizeReason(collection.policyReason),
+    policyReason: collection.policyReason === 'rating_consensus' ? 'Source ratings differ, but all ratings in the selected region give the same decision under this parental profile.' : isGeneralParentalGuidance(collection.certification) ? 'Excluded from automatic lineups unless explicitly selected for that channel. Library approval and channel inclusion are separate.' : humanizeReason(collection.policyReason),
     parentOverride: collection.parentOverride,
     effectiveDecision: collection.effectiveDecision,
     effectiveReason:

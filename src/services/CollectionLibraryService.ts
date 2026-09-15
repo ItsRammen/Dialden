@@ -47,11 +47,20 @@ export class CollectionLibraryService {
   }
 
   async getDetail(id: number): Promise<CollectionDetail | null> {
-    const [collection, files] = await Promise.all([
+    let [collection, files] = await Promise.all([
       this.repository.getCollectionById(id),
       this.repository.getCollectionMedia(id),
     ])
     if (!collection) return null
+    const evidenceRaw = await this.repository.getSetting(`metadata_rating_evidence_v1:${id}`)
+    try {
+      const evidence = evidenceRaw ? JSON.parse(evidenceRaw) : null
+      if (evidence?.externalId === collection.metadataExternalId && Array.isArray(evidence.ratings)) {
+        const labels = evidence.ratings.filter((r: any) => typeof r?.region === 'string' && typeof r?.certification === 'string')
+          .map((r: any) => `${r.region}: ${r.certification}`) as string[]
+        collection = { ...collection, certificationEvidence: [...new Set(labels)] }
+      }
+    } catch { /* Invalid evidence does not replace the stored metadata. */ }
 
     const bySeason = new Map<number | null, MediaItem[]>()
     for (const file of files) {

@@ -1,3 +1,4 @@
+import { evaluateRatingConsensus } from '../../policy/RatingConsensus'
 import {
   persistMetadataConfig,
   resolveMetadataConfigUpdate,
@@ -864,7 +865,10 @@ export class MetadataEnrichmentService {
     // Startup policy reapplication must not reinterpret old cached ratings.
     await this.repository.setSetting(`metadata_regional_rating_v1:${collection.id}`,
       JSON.stringify([externalId, rating.selected?.region ?? null, certification]))
-    const evaluation = evaluatePolicy(this.profile, {
+    await this.repository.setSetting(`metadata_rating_evidence_v1:${collection.id}`,
+      JSON.stringify({ externalId, regions, ratings: rating.all }))
+    const evaluation = (rating.status === 'ambiguous'
+      ? evaluateRatingConsensus(this.profile, rating.all, regions) : null) ?? evaluatePolicy(this.profile, {
       matchStatus: status,
       certification,
       certificationRegion: rating.selected?.region ?? null,
@@ -1233,6 +1237,18 @@ export class MetadataEnrichmentService {
       return evaluatePolicy(this.profile, null)
     }
     const matchStatus = collection.metadataStatus
+    if (['matched', 'manual'].includes(matchStatus) && collection.ratingStatus === 'ambiguous') {
+      const raw = await this.repository.getSetting(`metadata_rating_evidence_v1:${collection.id}`)
+      try {
+        const evidence = raw ? JSON.parse(raw) : null
+        const regions = [this.config.preferredRatingRegion, ...this.config.fallbackRatingRegions]
+        if (evidence?.externalId === collection.metadataExternalId && JSON.stringify(evidence.regions) === JSON.stringify(regions) &&
+            Array.isArray(evidence.ratings) && evidence.ratings.every((r: any) => typeof r?.region === 'string' && typeof r?.certification === 'string')) {
+          const consensus = evaluateRatingConsensus(this.profile, evidence.ratings, regions)
+          if (consensus) return consensus
+        }
+      } catch { /* Missing or obsolete evidence requires review. */ }
+    }
     const certification =
       collection.ratingStatus === 'resolved' ? collection.certification : null
     const refreshed = await this.repository.getSetting(`metadata_regional_rating_v1:${collection.id}`)

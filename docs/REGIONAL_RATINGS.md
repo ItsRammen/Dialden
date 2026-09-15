@@ -31,3 +31,13 @@ After a fresh lookup, a per-collection setting records its provider ID, country 
 - France CNC: https://www.cnc.fr/professionnels/visas-et-classification--activite-des-comites-et-de-la-commission-de-classification_586154
 
 Provider metadata is not a guarantee that every release, edit or episode carries the same classification. Conflicts and unrecognized labels are not treated as automatic permission.
+
+## Conflicting labels that agree under the profile
+
+Fresh lookups preserve every provider rating. When labels conflict in the first relevant region, Dialden evaluates each label under the active parental profile. If every label produces Allow or every label produces Block, that shared decision can be applied automatically. Mixed decisions, unknown labels, and review results remain unresolved.
+
+The certification remains ambiguous: this does not invent one official rating. Collection details list the source ratings and explain the shared policy result. Metadata review may still show the conflict even when parental review is resolved.
+
+Saved evidence is tied to the provider identity and rating-region settings. Rechecking saved policies recomputes the decision under the current profile. Explicit parent overrides still take precedence. Older cached conflicts need a fresh metadata lookup before they can use this evidence.
+
+A local audit of 29 conflicts found 16 unanimous Kids 7 decisions (2 Allow, 14 Block). This is not a count of newly approved library items; some already have parent overrides.

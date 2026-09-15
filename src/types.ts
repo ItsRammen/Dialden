@@ -74,6 +74,7 @@ export interface MediaCollection {
   /** Production companies/studios supplied by the metadata provider. */
   readonly studios?: readonly string[]
   readonly certification: string | null
+  readonly certificationEvidence?: readonly string[]
   readonly certificationRegion: string | null
   /**
    * The youngest audience the certification suits, derived rather than

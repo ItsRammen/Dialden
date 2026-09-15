@@ -32,6 +32,7 @@ export interface PolicyMetadata {
 }
 
 export type PolicyReason =
+  | 'rating_consensus'
   | 'rating_allowed'
   | 'rating_requires_review'
   | 'rating_blocked'
