@@ -140,6 +140,10 @@ export function normalizeTitle(value: string): string {
     .normalize('NFKD')
     .replace(/\p{M}+/gu, '')
     .toLocaleLowerCase('en-US')
+    // Part numbers are equivalent in Roman and Arabic notation. Do not fold
+    // standalone I/V/X words or remove the number: they can identify a sequel.
+    .replace(/\b(part|pt|vol|volume|chapter)\.?\s+(viii|vii|iii|vi|iv|ii|ix|v|i|x)\b/g,
+      (_match, marker: string, numeral: string) => `${marker} ${{ i: 1, ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10 }[numeral]}`)
     .replace(/&/g, ' and ')
     .replace(/[\u2018\u2019']/g, '')
     .replace(/[^\p{L}\p{N}]+/gu, ' ')

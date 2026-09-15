@@ -824,6 +824,8 @@ export class MetadataEnrichmentService {
         }
       }
     }
+    if (result.status !== 'matched' && await this.matchOnMovieFilename(collection)) return 'matched'
+
     const candidateRecords =
       result.status === 'matched'
         ? this.toCandidateRecords(result.candidates)
@@ -1101,6 +1103,47 @@ export class MetadataEnrichmentService {
     }
   }
 
+  /** A stale folder name may hide the current title carried by the actual film. */
+  private async matchOnMovieFilename(collection: MediaCollection): Promise<boolean> {
+    if (collection.libraryKind !== 'movie') return false
+    const media = await this.repository.getCollectionMedia(collection.id)
+    // Multipart films, extras and compilations need a different evidence model.
+    if (media.length !== 1) return false
+    const file = media[0]!
+    if (/(?:fan[ ._-]*edit|book[ ._-]*edit)/i.test(`${collection.sourceTitle} ${file.filename}`)) return false
+    const parsed = parseCollectionTitle(file.filename, { stripMediaExtension: true })
+    if (!parsed.year || !parsed.normalizedTitle ||
+      (parsed.normalizedTitle === normalizeTitle(collection.parsedTitle) && parsed.year === collection.year)) return false
+    const runtime = collectionRuntimeMinutes([file.durationSeconds])
+    if (!runtime) return false
+    try {
+      const found = await this.provider.searchMovie({ title: parsed.title, year: parsed.year, language: this.config.language })
+      const result = matchMetadata(parsed, found)
+      if (!result.candidate && result.candidates.filter(c => c.exactTitle).length > RUNTIME_LOOKUP_LIMIT) return false
+      const records = result.candidate ? this.toCandidateRecords(result.candidates)
+        : await this.withRuntimes(collection, this.toCandidateRecords(result.candidates))
+      const candidate = result.candidate ?? resolveByRuntime(records, runtime, parsed.year)?.candidate
+      // Unlike the ordinary folder matcher, this fallback requires the exact year.
+      if (!candidate || candidate.mediaType !== 'movie' || candidate.year !== parsed.year) return false
+      const details = await this.provider.getMovie(candidate.externalId, { language: this.config.language })
+      if (details.year !== parsed.year || !Number.isFinite(details.runtimeMinutes) ||
+        !details.runtimeMinutes || Math.abs(runtime - details.runtimeMinutes) > 3 ||
+        ![details.title, details.originalTitle ?? ''].some(title => normalizeTitle(title) === parsed.normalizedTitle)) return false
+      await this.hydrateMatch(collection, candidate.externalId, 'matched', 0.98, records, false)
+      await this.audit?.recordReviewDecision({
+        runId: `filename-${new Date().toISOString().slice(0, 10)}`, collectionId: collection.id,
+        action: 'match', source: 'policy', reason: 'metadata_ambiguous',
+        detail: `Movie filename "${file.filename}" agrees with the provider title and year; measured runtime ${runtime} min agrees with ${details.runtimeMinutes} min. Folder name was unresolved.`,
+        model: null, promptVersion: null, confidence: 0.98, previousOverride: collection.parentOverride,
+        previousExternalId: collection.metadataExternalId, previousMetadataStatus: collection.metadataStatus,
+      }).catch(() => {})
+      return true
+    } catch {
+      // Unavailable supporting evidence leaves the original review decision intact.
+      return false
+    }
+  }
+
   private async matchOnRuntime(
     collection: MediaCollection,
     candidates: readonly MetadataCandidateRecord[]
@@ -1156,7 +1199,8 @@ export class MetadataEnrichmentService {
     collection: MediaCollection,
     candidates: MetadataCandidateRecord[]
   ): Promise<MetadataCandidateRecord[]> {
-    if (candidates.length < 2) return candidates
+    // Lone near-title movies also need runtime evidence; keep the TV path unchanged.
+    if (collection.libraryKind !== 'movie' && candidates.length < 2) return candidates
     const enriched: MetadataCandidateRecord[] = []
     for (const [index, candidate] of candidates.entries()) {
       if (index >= RUNTIME_LOOKUP_LIMIT || candidate.runtimeMinutes !== undefined) {

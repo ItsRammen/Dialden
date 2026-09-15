@@ -207,3 +207,18 @@ describe('number words and digits', () => {
     expect(result.candidate?.externalId).toBe('111')
   })
 })
+
+
+describe('explicit Roman part numbers', () => {
+  test('equates Part I and Part 1 without conflating different parts', () => {
+    expect(normalizeTitle('Ivan the Terrible, Part I')).toBe(normalizeTitle('Ivan the Terrible, Part 1'))
+    expect(normalizeTitle('Ivan the Terrible, Part II')).not.toBe(normalizeTitle('Ivan the Terrible, Part 1'))
+    expect(normalizeTitle('Chapter IV')).toBe(normalizeTitle('Chapter 4'))
+    expect(normalizeTitle('Volume IX')).toBe(normalizeTitle('Volume 9'))
+  })
+  test('preserves standalone Roman-looking titles and words', () => {
+    expect(normalizeTitle('I, Robot')).toBe('i robot')
+    expect(normalizeTitle('X')).toBe('x')
+    expect(normalizeTitle('Part Inside')).toBe('part inside')
+  })
+})

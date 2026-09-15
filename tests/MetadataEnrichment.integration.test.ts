@@ -161,6 +161,57 @@ describe('metadata enrichment and policy integration', () => {
     await repository.close()
   })
 
+  for (const scenario of [
+    { folder: 'From the World of John Wick Ballerina', year: 2025, file: 'Ballerina (2025).mkv', title: 'Ballerina', match: true },
+    { folder: 'Untitled Jurassic World Movie', year: 2025, file: 'Jurassic World Rebirth (2025).mkv', title: 'Jurassic World Rebirth', match: true },
+    { folder: 'Cunks Quest for Meaning', year: null, file: 'Cunk on Life (2024).mkv', title: 'Cunk on Life', filmYear: 2024, match: true },
+    { folder: 'V+H+S+94', year: 2023, file: 'V+H+S+94 (2021).mkv', title: 'V/H/S/94', filmYear: 2021, match: true },
+    { folder: 'Old Working Title', year: 2025, file: 'Actual Film (2025).mkv', title: 'Actual Film', rival: true, shortRival: true, match: true },
+    { folder: 'Old Working Title', year: 2025, file: 'Actual Film.mkv', title: 'Actual Film', match: false },
+    { folder: 'Old Working Title', year: 2025, file: 'Actual Film (2025).mkv', title: 'Actual Film', runtime: 20, match: false },
+    { folder: 'Old Working Title', year: 2025, file: 'Actual Film (2025).mkv', title: 'Actual Film', runtime: 0, match: false },
+    { folder: 'Old Working Title', year: 2025, file: 'Actual Film (2025).mkv', title: 'Actual Film', rival: true, match: false },
+    { folder: 'Old Working Title', year: 2025, file: 'Actual Film (2025).mkv', title: 'Actual Film', extra: true, match: false },
+    { folder: 'Old Working Title {edition-Book Edit}', year: 2025, file: 'Actual Film (2025).mkv', title: 'Actual Film', match: false },
+    { folder: 'Old Working Title', year: 2025, file: 'Actual Film (2025).mkv', title: 'Actual Film', providerYear: 2024, match: false },
+  ]) test('movie filename evidence: ' + JSON.stringify(scenario), async () => {
+    const [item] = await repository.upsertCollections([{
+      rootId: 'movies', libraryKind: 'movie', identityKey: 'filename-test', sourceTitle: scenario.folder,
+      parsedTitle: scenario.folder, year: scenario.year,
+    }])
+    const file = { ...mediaInput(item!.id, scenario.folder, scenario.file), rootId: 'movies', libraryKind: 'movie' as const, durationSeconds: (scenario.runtime ?? 100) * 60 }
+    await repository.upsertMedia(file)
+    if (scenario.extra) await repository.upsertMedia({ ...file, path: file.path + '.extra', filename: 'Extra (2025).mkv' })
+    await repository.updateCollectionOverride(item!.id, 'block')
+    const candidates: MetadataCandidate[] = [{ provider: 'tmdb', externalId: '1234', mediaType: 'movie', title: scenario.title, year: scenario.providerYear ?? scenario.filmYear ?? 2025 }]
+    if (scenario.rival) candidates.push({ ...candidates[0]!, externalId: '5678' })
+    const searches: string[] = []
+    const provider = providerFor({ candidates, certification: 'G',
+      candidatesForSearch(input) { searches.push(input.title); return input.title === scenario.folder && input.year === (scenario.year ?? undefined) ? [] : candidates },
+      detailsForLanguage(_language, candidate) { return { ...candidate, runtimeMinutes: scenario.shortRival && candidate.externalId === '5678' ? 10 : 100, genres: [] } },
+    })
+    await new MetadataEnrichmentService(repository, provider, runtimeConfig).runPending()
+    const after = await repository.getCollectionById(item!.id)
+    expect(after?.metadataStatus === 'matched').toBe(scenario.match)
+    expect(after?.metadataExternalId).toBe(scenario.match ? '1234' : null)
+    expect(after?.parentOverride).toBe('block')
+    expect(after?.effectiveDecision).toBe('block')
+    if (scenario.match) expect(searches).toContain(scenario.file.replace(/ \(\d{4}\)\.mkv$/, ''))
+  })
+
+  for (const runtime of [99, 160]) test('a lone near-title candidate gets runtime evidence: ' + runtime, async () => {
+    const [item] = await repository.upsertCollections([{
+      rootId: 'movies', libraryKind: 'movie', identityKey: 'ivan', sourceTitle: 'Yowamushi Pedal ReRIDE (2014)',
+      parsedTitle: 'Yowamushi Pedal ReRIDE', year: 2014,
+    }])
+    await repository.upsertMedia({ ...mediaInput(item!.id, 'Ivan', 'Yowamushi Pedal ReRIDE (2014).mkv'), rootId: 'movies', libraryKind: 'movie', durationSeconds: runtime * 60 })
+    const provider = providerFor({ candidates: [{ provider: 'tmdb', externalId: '9797', mediaType: 'movie', title: 'Yowamushi Pedal Re:RIDE', year: 2014 }],
+      detailsForLanguage(_language, candidate) { return { ...candidate, runtimeMinutes: 99, genres: [] } }, certification: 'PG',
+    })
+    await new MetadataEnrichmentService(repository, provider, runtimeConfig).runPending()
+    expect((await repository.getCollectionById(item!.id))?.metadataStatus).toBe(runtime === 99 ? 'matched' : 'ambiguous')
+  })
+
   test('PG opt-in browsing preserves review decisions without crowding the review queue', async () => {
     const item = await addCollection('Family Show', 2024)
     const service = new MetadataEnrichmentService(repository, providerFor({

@@ -6,7 +6,10 @@ Dialden first compares titles and release years. Ambiguous or near-spelled title
 - Region suffixes, alternate subtitles and near spellings can reach that episode check even when their title score is lower. Spelling alone does not settle a match.
 - A rival with supporting episode evidence, missing provider data, or too many plausible candidates leaves the title for review.
 - Movies: a lone candidate can be confirmed using a provider alternative title (or a sufficiently specific prefix of its official title), the same release year and a measured runtime within three minutes.
-- Existing runtime rules remain responsible for exact-title movie ties.
+- Movies with an unresolved folder name can use the actual filename when the collection contains exactly one file with an explicit year. The provider title and year must agree with the filename, and its runtime must be within three minutes of the measured file. Same-title rivals use the existing runtime tie rules; more than five exact-title candidates prevent this fallback. Multipart collections and filenames/folders marked as fan or book edits are excluded.
+- Explicit Roman part numbers normalize to digits (`Part I` = `Part 1`), preserving distinct parts and standalone words such as `I, Robot`.
+- Lone near-title movie candidates now receive runtime lookups too; punctuation variants can use the existing same-year, strong-title and runtime checks.
+- Existing runtime rules remain responsible for exact-title movie ties. A candidate is not preferred merely because it is more popular.
 
 Provider work is bounded to five candidates and two TV seasons during episode comparison. Missing data is not evidence against a candidate. Matching does not override parent decisions.
 
