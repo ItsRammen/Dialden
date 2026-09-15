@@ -114,6 +114,7 @@ export interface CollectionUpsertInput {
 }
 
 export interface CollectionListOptions {
+  readonly overrideDisagreesWithPolicy?: boolean
   readonly parentalGuidanceOnly?: boolean
   readonly excludeParentalGuidance?: boolean
   readonly kind?: LibraryKind

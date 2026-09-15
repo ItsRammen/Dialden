@@ -964,6 +964,9 @@ export class MediaRepository implements IMediaRepository {
       values.push(options.effectiveDecision)
     }
     if (options.excludeParentalGuidance) clauses.push(`NOT (${PG_OPT_IN_SQL})`)
+    if (options.overrideDisagreesWithPolicy) clauses.push(`collection.parent_override IN ('allow', 'block')
+      AND collection.policy_decision IN ('allow', 'block')
+      AND collection.parent_override <> collection.policy_decision`)
     if (options.parentalGuidanceOnly) clauses.push(`UPPER(TRIM(collection.certification)) IN ('PG', 'TV-PG') AND collection.rating_status = 'resolved'`)
     if (options.metadataStatus) {
       clauses.push('collection.metadata_status = ?')

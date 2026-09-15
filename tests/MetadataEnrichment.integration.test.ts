@@ -354,6 +354,18 @@ describe('metadata enrichment and policy integration', () => {
     })
   })
 
+  test('earlier decisions view finds resolved disagreements without changing overrides', async () => {
+    const item = await addCollection('Earlier Decision')
+    await repository.updateCollectionPolicy(item.id, 'allow', 'rating_allowed')
+    await repository.updateCollectionOverride(item.id, 'block')
+    expect((await repository.getCollections({ overrideDisagreesWithPolicy: true })).map(c => c.id)).toEqual([item.id])
+    expect((await repository.getCollectionById(item.id))?.effectiveDecision).toBe('block')
+    await repository.updateCollectionPolicy(item.id, 'review', 'rating_missing')
+    expect(await repository.getCollections({ overrideDisagreesWithPolicy: true })).toHaveLength(0)
+    await repository.updateCollectionPolicy(item.id, 'block', 'rating_blocked')
+    expect(await repository.getCollections({ overrideDisagreesWithPolicy: true })).toHaveLength(0)
+  })
+
   async function addCollection(title: string, year: number | null = null) {
     const [collection] = await repository.upsertCollections([
       {

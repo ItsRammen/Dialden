@@ -200,6 +200,7 @@ async function renderCollectionList(
   const unmatched = rawStatus === 'unmatched'
   const pageResult = await deps.library.list({
     kind,
+    ...(rawStatus === 'earlier-decisions' ? { overrideDisagreesWithPolicy: true } : {}),
     ...(rawStatus === 'guidance' ? { parentalGuidanceOnly: true } : {}),
     ...(filter === 'review' ? { excludeParentalGuidance: true } : {}),
     ...(filter ? { effectiveDecision: filter } : {}),
@@ -218,7 +219,7 @@ async function renderCollectionList(
     summary,
     heading,
     description:
-      kind === 'tv'
+      rawStatus === 'earlier-decisions' ? 'These saved approvals or blocks differ from the current resolved rating policy. They may be intentional. Open a title to inspect the evidence; choose Use policy only if you want the current policy to take over.' : kind === 'tv'
         ? 'Approval applies to the show, so new episodes inherit the collection decision.'
         : 'Browse movie metadata, ratings, parent decisions, and technical availability.',
     collections: collections.map(collectionCard),
@@ -226,7 +227,7 @@ async function renderCollectionList(
     currentPath,
     search,
     filter:
-      rawStatus === 'guidance' ? 'guidance' : rawStatus === 'unmatched'
+      rawStatus === 'earlier-decisions' ? 'earlier-decisions' : rawStatus === 'guidance' ? 'guidance' : rawStatus === 'unmatched'
         ? 'unmatched'
         : filter ?? 'all',
     updateAvailable: deps.updateAvailable?.(),
