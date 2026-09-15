@@ -310,14 +310,16 @@ export async function createServer(
     }
     dashboardEventService.broadcast(event)
   })
-  metadataService.onEvent((event) => {
+  metadataService.onEvent(async (event) => {
+    dashboardEventService.broadcast(event)
     if (
       event.type === 'library.metadata.completed' ||
       event.type === 'library.metadata.failed'
     ) {
-      channelService.invalidateScheduleCatalog()
+      // Enrichment finishes after scanning. Newly eligible collections must
+      // reach generated lineups now, including partial successful batches.
+      await reconcileGeneratedStations()
     }
-    dashboardEventService.broadcast(event)
   })
 
   // Packaged webOS apps run from a different origin. This versioned client API
