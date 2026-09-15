@@ -260,3 +260,20 @@ describe('TMDB metadata provider adapter', () => {
     })
   })
 })
+
+
+test('movie details include only valid festival/theatrical release years', async () => {
+  const provider = new TmdbMetadataProvider({ client: stubClient({ getMovie: async () => ({
+    id: 41943, title: 'The Plot Against Harry', release_date: '1971-01-27', runtime: 81,
+    release_dates: { results: [{ iso_3166_1: 'US', release_dates: [
+      { type: 1, release_date: '1989-09-23T00:00:00.000Z' },
+      { type: 3, release_date: '1990-01-12T00:00:00.000Z' },
+      { type: 2, release_date: '1989-09-23T00:00:00.000Z' },
+      { type: 4, release_date: '2020-01-01T00:00:00.000Z' },
+      { type: 1, release_date: 'invalid' }, null,
+    ] }, null, { release_dates: 'invalid' }] },
+  }) }) })
+  const details = await provider.getMovie('41943', { language: 'en-US' })
+  expect(details.year).toBe(1971)
+  expect(details.releaseYears).toEqual([1989, 1990])
+})

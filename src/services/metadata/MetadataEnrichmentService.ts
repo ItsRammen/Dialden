@@ -17,6 +17,7 @@ import type { IMediaRepository } from '../../repositories/IMediaRepository'
 import {
   collectionRuntimeMinutes,
   resolveByRuntime,
+  resolveFeatureAmongShorts,
 } from './runtimeMatch'
 import type { ReviewDecisionStore } from '../review/auditTypes'
 
@@ -749,6 +750,22 @@ export class MetadataEnrichmentService {
       await this.hydrateMatch(collection, hint.id, 'matched', 1, [], false)
       return 'matched'
     }
+    if (collection.libraryKind === 'movie') {
+      const files = await this.repository.getCollectionMedia(collection.id)
+      const looksLikeTV = files.length > 1 && files.every(file => /\bS\d{1,2}E\d{1,3}\b/i.test(file.filename))
+      const customEdit = /(?:fan[ ._-]*edit|book[ ._-]*edit)/i.test([collection.sourceTitle, ...files.map(file => file.filename)].join(' '))
+      if (looksLikeTV || customEdit) {
+        await this.repository.updateCollectionMetadata(collection.id, {
+          provider: this.provider.id, externalId: null, status: 'ambiguous', candidates: [],
+          ratingStatus: 'missing', certification: null, certificationRegion: null,
+          error: looksLikeTV
+            ? 'These files look like TV episodes inside the Movies library. Move the collection to your TV Shows folder and rescan, or choose a movie match explicitly if this layout is intentional.'
+            : 'This collection is marked as a custom fan/book edit. A standard movie match may describe a different cut; choose the intended metadata match explicitly and review its suitability.',
+        })
+        await this.repository.updateCollectionPolicy(collection.id, 'review', 'metadata_ambiguous', this.profileId())
+        return 'review'
+      }
+    }
     // Reparse cached titles too: older scans kept edition tags after the year.
     const reparsed = parseCollectionTitle(collection.parsedTitle)
     collection = { ...collection, parsedTitle: reparsed.title, year: collection.year ?? reparsed.year ?? null }
@@ -1072,7 +1089,7 @@ export class MetadataEnrichmentService {
           evidence.push({ candidate, count: Math.min(matches.size, matchedTitles.size), detail: `Matched ${matches.size} episode files by story title and season/episode position.` })
         }
       } else if (collection.libraryKind === 'movie' && collection.year !== null && contenders.length === 1 &&
-        normalizeTitle(contenders[0]!.title) !== normalizeTitle(collection.parsedTitle)) {
+        (normalizeTitle(contenders[0]!.title) !== normalizeTitle(collection.parsedTitle) || contenders[0]!.year !== collection.year)) {
         const runtime = collectionRuntimeMinutes(media.map(m => m.durationSeconds))
         if (!runtime) return false
         for (const candidate of contenders) {
@@ -1081,9 +1098,10 @@ export class MetadataEnrichmentService {
           const aliases = [...(details.alternativeTitles ?? []), details.title, details.originalTitle ?? '']
           // Long official subtitles often follow the familiar release title.
           if (title.split(' ').length >= 3) aliases.push(details.title.split(':')[0]!)
-          const agrees = details.year === collection.year && details.runtimeMinutes !== undefined &&
+          const releaseYearAgrees = details.year === collection.year || details.releaseYears?.includes(collection.year) === true
+          const agrees = releaseYearAgrees && details.runtimeMinutes !== undefined &&
             Math.abs(runtime - details.runtimeMinutes) <= 3 && aliases.some(alias => normalizeTitle(alias) === title)
-          evidence.push({ candidate, count: agrees ? 3 : 0, detail: 'Alternative or shortened official title, release year and measured runtime agree.' })
+          evidence.push({ candidate, count: agrees ? 3 : 0, detail: `Official title or alias, documented release year ${collection.year} and measured runtime agree.` })
         }
       }
       const winners = evidence.filter(e => e.count >= 3)
@@ -1149,8 +1167,10 @@ export class MetadataEnrichmentService {
     candidates: readonly MetadataCandidateRecord[]
   ): Promise<boolean> {
     let fileRuntime: number | undefined
+    let singleMovieFile = false
     try {
       const media = await this.repository.getCollectionMedia(collection.id)
+      singleMovieFile = collection.libraryKind === 'movie' && media.length === 1
       fileRuntime = collectionRuntimeMinutes(
         media.map((item) => item.durationSeconds)
       )
@@ -1158,7 +1178,9 @@ export class MetadataEnrichmentService {
       return false
     }
 
-    const resolved = resolveByRuntime(candidates, fileRuntime, collection.year)
+    const ordinary = resolveByRuntime(candidates, fileRuntime, collection.year)
+    const feature = singleMovieFile ? resolveFeatureAmongShorts(candidates, fileRuntime, collection.parsedTitle, collection.year) : null
+    const resolved = ordinary ?? feature
     if (!resolved) return false
 
     try {
@@ -1182,7 +1204,7 @@ export class MetadataEnrichmentService {
         action: 'match',
         source: 'policy',
         reason: 'metadata_ambiguous',
-        detail: `File runs ${fileRuntime} min; ${resolved.candidate.title} is listed at ${resolved.candidate.runtimeMinutes} min (${resolved.deltaMinutes} min apart). Every other tied candidate was further off.`,
+        detail: `${!ordinary && feature ? "Only one exact-title/year candidate is feature length; every rival has a known runtime of at most 40 minutes. " : ""}File runs ${fileRuntime} min; ${resolved.candidate.title} is listed at ${resolved.candidate.runtimeMinutes} min (${resolved.deltaMinutes} min apart). Every other tied candidate was further off.`,
         model: null,
         promptVersion: null,
         confidence: resolved.candidate.confidence,

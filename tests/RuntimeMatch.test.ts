@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   collectionRuntimeMinutes,
   resolveByRuntime,
+  resolveFeatureAmongShorts,
 } from '../src/services/metadata/runtimeMatch'
 import type { MetadataCandidateRecord } from '../src/types'
 
@@ -297,5 +298,29 @@ describe('only genuine ties are weighed', () => {
     )
 
     expect(resolved?.candidate.externalId).toBe('10239')
+  })
+})
+
+
+describe('feature-length film versus same-title shorts', () => {
+  test('allows a bounded cut/intermission difference when all rivals are shorts', () => {
+    const result = resolveFeatureAmongShorts([candidate('feature', 215), candidate('short', 6)], 201, 'Alice in Wonderland', 2010)
+    expect(result?.candidate.externalId).toBe('feature')
+    expect(result?.deltaMinutes).toBe(14)
+  })
+  for (const rivals of [[candidate('other-feature', 190)], [candidate('unknown')], [candidate('medium', 50)]]) {
+    test('does not rule out feature, unknown or medium-length rivals: ' + rivals[0]!.externalId, () => {
+      expect(resolveFeatureAmongShorts([candidate('feature', 215), ...rivals], 201, 'Alice in Wonderland', 2010)).toBeNull()
+    })
+  }
+  test('requires exact title/year, multiple candidates and a plausible feature runtime', () => {
+    const candidates = [candidate('feature', 215), candidate('short', 6)]
+    for (const minutes of [undefined, 0, NaN, 50, 190, 240]) {
+      expect(resolveFeatureAmongShorts(candidates, minutes, 'Alice in Wonderland', 2010)).toBeNull()
+    }
+    expect(resolveFeatureAmongShorts(candidates, 201, 'Other Movie', 2010)).toBeNull()
+    expect(resolveFeatureAmongShorts(candidates, 201, 'Alice in Wonderland', 2011)).toBeNull()
+    expect(resolveFeatureAmongShorts(candidates.slice(0, 1), 201, 'Alice in Wonderland', 2010)).toBeNull()
+    expect(resolveFeatureAmongShorts([candidate('feature', 100), candidate('short', 6)], 85, 'Alice in Wonderland', 2010)).toBeNull()
   })
 })

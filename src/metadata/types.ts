@@ -34,6 +34,8 @@ export interface MetadataCandidate {
 
 export interface ProviderTitleDetails extends MetadataCandidate {
   readonly alternativeTitles?: readonly string[]
+  /** Documented festival/theatrical release years, including regional releases. */
+  readonly releaseYears?: readonly number[]
   readonly backdropPath?: string
   /**
    * Minutes. For a film this is the whole feature; for a series it is one

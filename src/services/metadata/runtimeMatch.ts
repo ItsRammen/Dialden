@@ -23,6 +23,7 @@
  * testable without a database or a provider.
  */
 import type { MetadataCandidateRecord } from '../../types'
+import { normalizeTitle } from './TitleMatcher'
 
 /**
  * A film runs a minute or two either side of its catalogue figure once
@@ -206,4 +207,29 @@ export function collectionRuntimeMinutes(
   if (usable.length === 0) return undefined
   const middle = usable[Math.floor(usable.length / 2)]
   return middle === undefined ? undefined : Math.round(middle / 60)
+}
+
+
+/** A feature can have an intermission or cut difference, while its same-name
+ * rivals are demonstrably short films. Never use this between two features. */
+export function resolveFeatureAmongShorts(
+  candidates: readonly MetadataCandidateRecord[],
+  fileRuntimeMinutes: number | undefined,
+  title: string,
+  year: number | null
+): RuntimeResolution | null {
+  if (!fileRuntimeMinutes || !Number.isFinite(fileRuntimeMinutes) || fileRuntimeMinutes < 60 || year === null) return null
+  const normalized = normalizeTitle(title)
+  const exact = candidates.filter(c => c.mediaType === 'movie' && c.year === year &&
+    [c.title, c.originalTitle ?? ''].some(t => normalizeTitle(t) === normalized))
+  if (exact.length < 2 || exact.length > 5 || exact.some(c => !isUsableRuntime(c.runtimeMinutes))) return null
+  const features = exact.filter(c => c.runtimeMinutes! >= 60)
+  if (features.length !== 1) return null
+  const candidate = features[0]!
+  if (exact.some(c => c !== candidate && c.runtimeMinutes! > 40)) return null
+  const deltaMinutes = Math.abs(candidate.runtimeMinutes! - fileRuntimeMinutes)
+  // Both an absolute cap and proportional cap are required. A badly truncated
+  // file must not be accepted simply because every rival is shorter still.
+  if (deltaMinutes > 15 || deltaMinutes > candidate.runtimeMinutes! * 0.1) return null
+  return { candidate, deltaMinutes }
 }

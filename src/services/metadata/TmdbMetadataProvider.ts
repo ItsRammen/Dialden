@@ -7,6 +7,7 @@ import {
   type TmdbMovieDetails,
   type TmdbMovieReleaseDate,
   type TmdbMovieReleaseDateRegion,
+  type TmdbMovieReleaseDatesResponse,
   type TmdbMovieSearchResult,
   type TmdbNamedEntity,
   type TmdbTVContentRating,
@@ -290,11 +291,29 @@ function mapMovieDetails(raw: TmdbMovieDetails): ProviderTitleDetails {
     ...candidate,
     ...optionalString('backdropPath', raw.backdrop_path),
     ...runtimeMinutes(raw.runtime),
+    ...movieReleaseYears(raw.release_dates),
     alternativeTitles: (raw.alternative_titles?.titles ?? []).map(item => item.title).filter((title): title is string => typeof title === 'string'),
     genres: mapGenres(raw.genres),
     networks: [],
     studios: mapNames(raw.production_companies),
   }
+}
+
+/** Only dated festival and theatrical releases corroborate a collection year. */
+function movieReleaseYears(raw: TmdbMovieReleaseDatesResponse | undefined): { releaseYears?: number[] } {
+  if (!Array.isArray(raw?.results)) return {}
+  const years = new Set<number>()
+  for (const region of raw.results) {
+    if (!Array.isArray(region?.release_dates)) continue
+    for (const release of region.release_dates) {
+      if (![1, 2, 3].includes(release?.type) || typeof release?.release_date !== 'string') continue
+      const date = release.release_date
+      if (!/^\d{4}-\d{2}-\d{2}T/.test(date) || !Number.isFinite(Date.parse(date))) continue
+      const year = Number(date.slice(0, 4))
+      if (year >= 1800 && year <= 2199) years.add(year)
+    }
+  }
+  return years.size ? { releaseYears: [...years].sort((a, b) => a - b) } : {}
 }
 
 /** TMDB reports 0 for unknown, which is not a runtime. */

@@ -46,6 +46,7 @@ export interface TmdbNamedEntity {
 }
 
 export interface TmdbMovieDetails extends TmdbMovieSearchResult {
+  readonly release_dates?: TmdbMovieReleaseDatesResponse
   readonly alternative_titles?: { readonly titles?: readonly { readonly title?: string }[] }
   readonly backdrop_path?: unknown
   readonly genres?: unknown
@@ -262,7 +263,7 @@ export class TmdbClient implements ITmdbClient {
     language: string,
     signal?: AbortSignal
   ): Promise<TmdbMovieDetails> {
-    return this.request(`/movie/${id}`, { language, append_to_response: 'alternative_titles' }, signal)
+    return this.request(`/movie/${id}`, { language, append_to_response: 'alternative_titles,release_dates' }, signal)
   }
 
   getTV(

@@ -212,6 +212,32 @@ describe('metadata enrichment and policy integration', () => {
     expect((await repository.getCollectionById(item!.id))?.metadataStatus).toBe(runtime === 99 ? 'matched' : 'ambiguous')
   })
 
+  for (const corroborated of [true, false]) test('festival year can corroborate a different primary movie year: ' + corroborated, async () => {
+    const [item] = await repository.upsertCollections([{
+      rootId: 'movies', libraryKind: 'movie', identityKey: 'harry', sourceTitle: 'The Plot Against Harry (1989)',
+      parsedTitle: 'The Plot Against Harry', year: 1989,
+    }])
+    await repository.upsertMedia({ ...mediaInput(item!.id, 'Harry', 'The Plot Against Harry (1989).mkv'), rootId: 'movies', libraryKind: 'movie', durationSeconds: 4816 })
+    await repository.updateCollectionOverride(item!.id, 'block')
+    const provider = providerFor({ candidates: [{ provider: 'tmdb', externalId: '41943', mediaType: 'movie', title: 'The Plot Against Harry', year: 1971 }],
+      detailsForLanguage(_language, candidate) { return { ...candidate, runtimeMinutes: 81, releaseYears: corroborated ? [1971, 1989, 1990] : [1971, 1990], genres: [] } }, certification: 'G',
+    })
+    await new MetadataEnrichmentService(repository, provider, runtimeConfig).runPending()
+    expect(await repository.getCollectionById(item!.id)).toMatchObject({ metadataStatus: corroborated ? 'matched' : 'ambiguous', parentOverride: 'block', effectiveDecision: 'block' })
+  })
+
+  for (const customEdit of [false, true]) test('explains movie library layout issues before searching: ' + customEdit, async () => {
+    const title = customEdit ? 'The Hobbit {edition-Book Edit}' : 'Riget (The Kingdom)'
+    const [item] = await repository.upsertCollections([{ rootId: 'movies', libraryKind: 'movie', identityKey: 'layout', sourceTitle: title, parsedTitle: title, year: null }])
+    for (const episode of [1, 2]) await repository.upsertMedia({ ...mediaInput(item!.id, title, customEdit ? `Film ${episode}.mkv` : `Riget S01E0${episode}.mkv`), rootId: 'movies', libraryKind: 'movie' })
+    const provider = providerFor({})
+    provider.searchMovie = async () => { throw new Error('Layout issue should be explained before searching') }
+    await new MetadataEnrichmentService(repository, provider, runtimeConfig).runPending()
+    const after = await repository.getCollectionById(item!.id)
+    expect(after?.metadataStatus).toBe('ambiguous')
+    expect(after?.metadataError).toContain(customEdit ? 'custom fan/book edit' : 'TV episodes')
+  })
+
   test('PG opt-in browsing preserves review decisions without crowding the review queue', async () => {
     const item = await addCollection('Family Show', 2024)
     const service = new MetadataEnrichmentService(repository, providerFor({

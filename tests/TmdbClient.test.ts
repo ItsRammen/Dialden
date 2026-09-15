@@ -45,7 +45,9 @@ describe('TMDB v3 HTTP client', () => {
 
   test('uses the v3 detail and certification endpoints', async () => {
     const paths: string[] = []
+    const urls: URL[] = []
     const fetchImpl: TmdbFetch = async (input) => {
+      urls.push(new URL(String(input)))
       paths.push(new URL(String(input)).pathname)
       return jsonResponse({ id: 42, results: [] })
     }
@@ -57,6 +59,7 @@ describe('TMDB v3 HTTP client', () => {
     await client.getMovieReleaseDates(42)
     await client.getTVContentRatings(43)
 
+    expect(urls[0]?.searchParams.get('append_to_response')).toBe('alternative_titles,release_dates')
     expect(paths).toEqual([
       '/3/movie/42',
       '/3/tv/43',
