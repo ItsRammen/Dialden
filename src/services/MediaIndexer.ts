@@ -5,6 +5,7 @@
  * Supports convention-based intro/outro detection via filename patterns.
  */
 
+import { setImmediate as yieldToPlayback } from 'node:timers/promises'
 import type { IMediaRepository } from '../repositories/IMediaRepository'
 import type { MediaItemInput } from '../repositories/IMediaRepository'
 import { parseNickstoryAssetFilename } from './StationAssetService'
@@ -209,7 +210,7 @@ export class MediaIndexer {
         currentRoot: root.id,
         currentFile: null,
       }
-      if (!this.isRootReady(root.directory)) {
+      if (!(await this.isRootReady(root.directory))) {
         await this.repository.setRootAvailable(root.id, false)
         console.warn(
           `Media root unavailable; preserving its index: ${root.id} (${root.directory})`
@@ -253,7 +254,7 @@ export class MediaIndexer {
       currentRoot: interludeRoot.id,
       currentFile: null,
     }
-    if (this.isRootReady(interludeRoot.directory)) {
+    if (await this.isRootReady(interludeRoot.directory)) {
       const relativePaths: string[] = []
       try {
         interludeCount = await this.scanDirectory(
@@ -469,11 +470,9 @@ export class MediaIndexer {
     outRelativePaths: string[],
     excludePaths: string[] = []
   ): Promise<number> {
-    const files = this.filesystem.listFiles(
-      root.directory,
-      isInterlude ? [...this.mediaConfig.supportedExtensions, '.m4v'] : this.mediaConfig.supportedExtensions,
-      excludePaths
-    ).filter((file) => !isInterlude || !this.getRelativePath(root, file).split('/').some(
+    const extensions = isInterlude ? [...this.mediaConfig.supportedExtensions, '.m4v'] : this.mediaConfig.supportedExtensions
+    const discovered = await this.filesystem.listFilesAsync?.(root.directory, extensions, excludePaths)
+    const files = (discovered ?? this.filesystem.listFiles(root.directory, extensions, excludePaths)).filter((file) => !isInterlude || !this.getRelativePath(root, file).split('/').some(
       (part) => part.startsWith('.') || part.toLowerCase() === 'rejected_downloads'
     ))
     this.scanState = {
@@ -517,6 +516,14 @@ export class MediaIndexer {
     const collectionsByKey = new Map(
       collectionRows.map((collection) => [collection.identityKey, collection])
     )
+    const mtimes = new Map<string, number | null>()
+    for (let offset = 0; offset < files.length; offset += 32) {
+      await Promise.all(files.slice(offset, offset + 32).map(async file => {
+        const asyncValue = this.filesystem.getMtimeAsync ? await this.filesystem.getMtimeAsync(file) : undefined
+        mtimes.set(file, asyncValue === undefined ? this.filesystem.getMtime(file) : asyncValue)
+      }))
+      await yieldToPlayback()
+    }
     const descriptors = rawDescriptors.map(({ filePath, relativePath }) => {
       const identity = this.deriveIdentity(root, relativePath)
       const collection = identity
@@ -527,7 +534,7 @@ export class MediaIndexer {
         (isInterlude && parseNickstoryAssetFilename(getFilename(filePath)) !== null)
       const existing =
         existingLocatorMap.get(relativePath) ?? existingPathMap.get(filePath)
-      const mtime = this.filesystem.getMtime(filePath)
+      const mtime = mtimes.get(filePath) ?? null
       // Technical indexing is independent from parental approval. Probe every
       // new or changed file so unknown collections can be reviewed without
       // ever making them eligible for playback.
@@ -658,7 +665,7 @@ export class MediaIndexer {
         collectionTitle: descriptor.collectionTitle,
         policyEnabled,
         playbackOverride: descriptor.existing?.playbackOverride ?? null,
-        rootAvailable: false,
+        rootAvailable: descriptor.existing?.rootAvailable ?? false,
         playbackEnabled:
           descriptor.existing?.playbackOverride ?? policyEnabled,
         collectionId: descriptor.collection?.id ?? null,
@@ -669,7 +676,11 @@ export class MediaIndexer {
     })
 
     if (itemsToUpsert.length > 0) {
-      await this.repository.upsertBatch(itemsToUpsert)
+      // Commit bounded batches so HLS requests can run between writes.
+      for (let offset = 0; offset < itemsToUpsert.length; offset += 250) {
+        await this.repository.upsertBatch(itemsToUpsert.slice(offset, offset + 250))
+        await yieldToPlayback()
+      }
 
       // A rescan can discover episode coordinates that an older parser did
       // not understand (or add another episode to an already matched show).
@@ -845,7 +856,9 @@ export class MediaIndexer {
     return value === '' || (!value.startsWith('..') && !isAbsolute(value))
   }
 
-  private isRootReady(directory: string): boolean {
+  private async isRootReady(directory: string): Promise<boolean> {
+    const ready = await this.filesystem.isReadableDirectoryAsync?.(directory)
+    if (ready !== undefined) return ready
     if (!this.filesystem.exists(directory)) return false
     return this.filesystem.isReadableDirectory?.(directory) !== false
   }

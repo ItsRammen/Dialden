@@ -1,3 +1,4 @@
+import { PlaybackHealthService } from './services/PlaybackHealthService'
 import { AudioNormalizationService } from './services/AudioNormalizationService'
 import { PlaybackIncidentService } from './services/PlaybackIncidentService'
 import { ScheduleCardService } from './services/ScheduleCardService'
@@ -122,6 +123,8 @@ export async function createServer(
 ): Promise<ServerResult> {
   const app = new Hono()
   app.use('*', mutationOriginGuard)
+  const playbackHealth = new PlaybackHealthService()
+  app.use('*', playbackHealth.middleware)
 
   // --- Get Services from Daemon ---
   const configService = daemon.getConfigService()
@@ -566,9 +569,13 @@ export async function createServer(
   )
   const clientPresenceController = createClientPresenceController({
     presence: clientPresenceService,
-    incidents: new PlaybackIncidentService(getDataPath('diagnostics/playback-incidents.json'), (channelId) => {
+    incidents: new PlaybackIncidentService(getDataPath('diagnostics/playback-incidents.json'), (channelId, sessionId) => {
       const worker = channelWorkers.getState(channelId)
-      return { workerStatusAtReceipt: worker?.status ?? 'not-running',
+      return { ...playbackHealth.snapshot(channelId, sessionId),
+        scanStatusAtReceipt: indexer.getScanState().status,
+        scanStartedAtReceipt: indexer.getScanState().startedAt,
+        scanCompletedAtReceipt: indexer.getScanState().completedAt,
+        workerStatusAtReceipt: worker?.status ?? 'not-running',
         workerProgramAtReceipt: worker?.currentScheduleItemId ?? null,
         workerRevisionAtReceipt: worker?.timelineRevision ?? null,
         workerFallbackAtReceipt: worker?.usingFallback ? 'yes' : 'no' }

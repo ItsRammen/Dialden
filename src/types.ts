@@ -417,6 +417,10 @@ export interface IMediaPlayer {
 }
 
 export interface IFileSystem {
+  isReadableDirectoryAsync?(path: string): Promise<boolean>
+  listFilesAsync?(directory: string, extensions: readonly string[], excludePaths?: string[]): Promise<string[]>
+  getMtimeAsync?(path: string): Promise<number | null>
+
   listFiles(
     directory: string,
     extensions: readonly string[],

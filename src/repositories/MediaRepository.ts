@@ -1910,6 +1910,7 @@ export class MediaRepository implements IMediaRepository {
     // SQLite has a limit on number of parameters, chunk into batches of 500
     const CHUNK_SIZE = 500
     for (let i = 0; i < paths.length; i += CHUNK_SIZE) {
+      await new Promise<void>(resolve => setImmediate(resolve))
       const chunk = paths.slice(i, i + CHUNK_SIZE)
       const placeholders = chunk.map(() => '?').join(',')
       const stmt = this.db.prepare(`
@@ -1935,6 +1936,7 @@ export class MediaRepository implements IMediaRepository {
 
     const CHUNK_SIZE = 499
     for (let index = 0; index < relativePaths.length; index += CHUNK_SIZE) {
+      await new Promise<void>(resolve => setImmediate(resolve))
       const chunk = relativePaths.slice(index, index + CHUNK_SIZE)
       const placeholders = chunk.map(() => '?').join(',')
       const rows = this.db

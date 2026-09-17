@@ -12,6 +12,7 @@ import {
   statSync,
   watch as fsWatch,
 } from 'node:fs'
+import { access, readdir, stat } from 'node:fs/promises'
 import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path'
 import type {
   FileWatcher,
@@ -59,6 +60,59 @@ export class FilesystemClient implements IFileSystem {
     }
 
     return files.sort()
+  }
+
+  async listFilesAsync(
+    directory: string,
+    extensions: readonly string[],
+    excludePaths: string[] = []
+  ): Promise<string[]> {
+    const files: string[] = []
+
+    const absExcludes = excludePaths.map((path) => resolve(path))
+    const supported = new Set(extensions.map((extension) => extension.toLowerCase()))
+    const pending = [resolve(directory)]
+
+    while (pending.length > 0) {
+      const current = pending.pop()
+      if (!current) continue
+      // readdir deliberately propagates a traversal failure. The indexer
+      // will preserve this root instead of mistaking an incomplete NAS walk
+      // for deleted media.
+      for (const entry of await readdir(current, { withFileTypes: true })) {
+        const file = join(current, entry.name)
+        const excluded = absExcludes.some((excludedPath) => {
+          const child = relative(excludedPath, file)
+          return (
+            child === '' || (!child.startsWith('..') && !isAbsolute(child))
+          )
+        })
+        if (excluded) continue
+        if (entry.isDirectory()) {
+          pending.push(file)
+        } else if (
+          entry.isFile() &&
+          supported.has(extname(entry.name).toLowerCase())
+        ) {
+          files.push(file)
+        }
+      }
+    }
+
+    return files.sort()
+  }
+
+  async isReadableDirectoryAsync(path: string): Promise<boolean> {
+    try {
+      if (!(await stat(path)).isDirectory()) return false
+      await access(path, constants.R_OK)
+      await readdir(path, { withFileTypes: true })
+      return true
+    } catch { return false }
+  }
+
+  async getMtimeAsync(path: string): Promise<number | null> {
+    try { return (await stat(path)).mtimeMs } catch { return null }
   }
 
   exists(path: string): boolean {

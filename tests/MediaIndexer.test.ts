@@ -16,7 +16,7 @@ import type {
 
 describe('MediaIndexer', () => {
   let repo: MockProxy<IMediaRepository>
-  let fs: MockProxy<IFileSystem>
+  let fs: MockProxy<Required<IFileSystem>>
   let probe: MockProxy<IMediaProbe>
   let indexer: MediaIndexer
 
@@ -34,7 +34,7 @@ describe('MediaIndexer', () => {
 
   beforeEach(() => {
     repo = mock<IMediaRepository>()
-    fs = mock<IFileSystem>()
+    fs = mock<Required<IFileSystem>>()
     probe = mock<IMediaProbe>()
 
     // Default mocks
@@ -61,6 +61,34 @@ describe('MediaIndexer', () => {
     })
 
     indexer = new MediaIndexer(mediaConfig, interludeConfig, repo, fs, probe)
+  })
+
+  test('async scans yield between writes and keep verified files available', async () => {
+    const paths = Array.from({ length: 501 }, (_, i) => `/media/videos/file${i}.mp4`)
+    fs.listFilesAsync.mockResolvedValueOnce(paths).mockResolvedValueOnce([])
+    fs.getMtimeAsync.mockResolvedValue(10)
+    repo.getByPaths.mockResolvedValue(new Map(paths.map(path => [path, {
+      path, durationSeconds: 60, mtime: 10, rootAvailable: true, compatibility: 'compatible',
+    } as any])))
+    let yielded = false
+    let batches = 0
+    repo.upsertBatch.mockImplementation(async rows => {
+      if (batches++ === 0) setImmediate(() => { yielded = true })
+      else expect(yielded).toBe(true)
+      expect(rows.length).toBeLessThanOrEqual(250)
+      expect(rows.every(row => row.rootAvailable === true)).toBe(true)
+    })
+    await indexer.scanAll()
+    expect(batches).toBe(3)
+    expect(fs.listFiles).not.toHaveBeenCalled()
+    expect(fs.getMtime).not.toHaveBeenCalled()
+  })
+
+  test('failed async traversal preserves the existing root index', async () => {
+    fs.listFilesAsync.mockRejectedValueOnce(new Error('NAS unavailable')).mockResolvedValueOnce([])
+    await indexer.scanAll()
+    expect(repo.removeNotInRootPaths.mock.calls.some(([id]) => id === 'media')).toBe(false)
+    expect(repo.setRootAvailable).toHaveBeenCalledWith('media', false)
   })
 
   test('automatically imports completed Nickstory exports but excludes staging and rejected files', async () => {

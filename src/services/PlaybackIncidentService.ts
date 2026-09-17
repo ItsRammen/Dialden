@@ -8,7 +8,7 @@ const events = new Set(['stall', 'media-error', 'recovery-started', 'recovered',
 export class PlaybackIncidentService {
   private rows: PlaybackIncident[] = []
   private queue: Promise<void> = Promise.resolve()
-  constructor(private readonly path: string, private readonly context?: (channelId: string) => Record<string, string | number | null>) {
+  constructor(private readonly path: string, private readonly context?: (channelId: string, sessionId?: string) => Record<string, string | number | null>) {
     try { if (existsSync(path)) { const rows = JSON.parse(readFileSync(path, 'utf8')); if (Array.isArray(rows)) this.rows = rows.slice(-500) } } catch { /* Start a fresh ring if the old diagnostic file is unreadable. */ }
   }
   snapshot(): PlaybackIncident[] { return this.rows.filter((row) => Date.parse(row.receivedAt) >= Date.now() - 7 * 86400000).reverse() }
@@ -20,7 +20,8 @@ export class PlaybackIncidentService {
       const row: PlaybackIncident = { clientId, id: raw.id, event: raw.event, receivedAt: new Date().toISOString() }
       for (const key of ['channelId', 'programId', 'timelineRevision', 'sessionId', 'version', 'trigger']) if (typeof raw[key] === 'string') row[key] = raw[key].slice(0, 100)
       for (const key of ['clientTimeMs', 'estimatedServerTimeMs', 'mediaTime', 'bufferAhead', 'readyState', 'networkState', 'frames', 'droppedFrames', 'errorCode', 'recoveryMs']) if (typeof raw[key] === 'number' && Number.isFinite(raw[key])) row[key] = raw[key]
-      if (typeof row.channelId === 'string' && this.context) Object.assign(row, this.context(row.channelId))
+      if (typeof row.estimatedServerTimeMs === 'number') row.reportDeliveryDelayMs = Math.max(0, Date.now() - row.estimatedServerTimeMs)
+      if (typeof row.channelId === 'string' && this.context) Object.assign(row, this.context(row.channelId, typeof row.sessionId === 'string' ? row.sessionId : undefined))
       batch.push(row)
     }
     const task = this.queue.catch(() => {}).then(async () => {
