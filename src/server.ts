@@ -270,7 +270,7 @@ export async function createServer(
       retainedSegmentCount: 30,
     }
   )
-  const reconcileGeneratedStations = async (): Promise<void> => {
+  const reconcileGeneratedStations = async (propagateFailure = false): Promise<void> => {
     channelService.invalidateScheduleCatalog()
     try {
       const changedChannelIds =
@@ -283,9 +283,18 @@ export async function createServer(
       // A failed catalog read must never make an otherwise healthy scan or
       // server startup fail. The next scan will retry the same reconciliation.
       console.error('Automated channel reconciliation failed', error)
+      if (propagateFailure) throw error
     }
   }
-  indexer.onScanComplete(reconcileGeneratedStations)
+  indexer.onScanComplete(async (_count, changed) => {
+    if (changed) {
+      const started = Date.now()
+      try {
+        await reconcileGeneratedStations(true)
+        await channelService.prepareScheduleRefresh()
+      } finally { console.info('Library refresh timing', JSON.stringify({ stage: 'channel-lineup', durationMs: Date.now() - started })) }
+    }
+  })
   // The initial background scan starts before the web server is constructed.
   // Reconcile immediately when it completed before this listener was attached.
   if (indexer.getScanState().status === 'completed') {
@@ -302,11 +311,9 @@ export async function createServer(
   )
 
   indexer.onScanEvent((event) => {
-    // A large multi-root scan can spend minutes on later roots. Publish each
-    // root availability transition to scheduling immediately so /now and
-    // worker resolution share the same catalog throughout the pass.
+    // Unavailable media must be withdrawn immediately. Successful roots are
+    // reconciled once after change detection, preserving unchanged caches.
     if (
-      event.type === 'library.scan.root.completed' ||
       event.type === 'library.scan.root.unavailable'
     ) {
       channelService.invalidateScheduleCatalog()
@@ -569,9 +576,11 @@ export async function createServer(
   )
   const clientPresenceController = createClientPresenceController({
     presence: clientPresenceService,
-    incidents: new PlaybackIncidentService(getDataPath('diagnostics/playback-incidents.json'), (channelId, sessionId) => {
+    incidents: new PlaybackIncidentService(getDataPath('diagnostics/playback-incidents.json'), async (channelId, sessionId) => {
       const worker = channelWorkers.getState(channelId)
       return { ...playbackHealth.snapshot(channelId, sessionId),
+        ...indexer.getMaintenanceDiagnostics(),
+        ...await channelWorkers.getPlaybackDiagnostics(channelId),
         scanStatusAtReceipt: indexer.getScanState().status,
         scanStartedAtReceipt: indexer.getScanState().startedAt,
         scanCompletedAtReceipt: indexer.getScanState().completedAt,

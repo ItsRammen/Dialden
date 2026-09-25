@@ -103,6 +103,25 @@ function fixture(options: {
 }
 
 describe('ContinuousChannelWorkerManager', () => {
+  test('diagnostic history distinguishes startup, readiness and failed exits without paths', async () => {
+    const ready = deferred<void>()
+    const f = fixture({ readiness: ready.promise })
+    const acquiring = f.manager.acquire('kids')
+    await settle()
+    f.clock.advance(4000)
+    ready.resolve()
+    await acquiring
+    f.exits[0]!.resolve({ code: 1, error: 'private /media/secret.mkv' })
+    await settle()
+    const diagnostics = await f.manager.getPlaybackDiagnostics('kids')
+    const history = JSON.parse(String(diagnostics.workerTransitionsAtReceipt))
+    expect(history.map((row: any) => row.event)).toEqual(['starting', 'ready', 'pipeline-exit', 'restart-scheduled'])
+    expect(history[1].durationMs).toBe(4000)
+    expect(history[2].code).toBe(1)
+    expect(JSON.stringify(diagnostics)).not.toContain('secret')
+    expect(diagnostics.workerNewestSegmentAgeMsAtReceipt).toBe(-1)
+  })
+
   test('shares one stable HLS worker between viewers and starts at the live offset', async () => {
     const f = fixture()
     const first = await f.manager.acquire('kids')

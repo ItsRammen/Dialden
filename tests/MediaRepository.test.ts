@@ -40,6 +40,25 @@ describe('MediaRepository', () => {
     await repo.close()
   })
 
+  test('library fingerprints ignore repeat writes but track content, availability and removal', async () => {
+    const empty = await repo.getLibraryContentFingerprint()
+    const item = createInput({ rootId: 'tv', rootAvailable: true })
+    await repo.upsertMedia(item)
+    const first = await repo.getLibraryContentFingerprint()
+    expect(first).not.toBe(empty)
+    await repo.upsertMedia(item)
+    expect(await repo.getLibraryContentFingerprint()).toBe(first)
+    await repo.setRootAvailable('tv', false)
+    const unavailable = await repo.getLibraryContentFingerprint()
+    expect(unavailable).not.toBe(first)
+    await repo.setRootAvailable('tv', true)
+    expect(await repo.getLibraryContentFingerprint()).toBe(first)
+    await repo.upsertMedia({ ...item, durationSeconds: 120 })
+    expect(await repo.getLibraryContentFingerprint()).not.toBe(first)
+    await repo.removeByPaths([item.path])
+    expect(await repo.getLibraryContentFingerprint()).toBe(empty)
+  })
+
   test('a probed row stops being offered for backfill once both halves are stored', async () => {
     /* listMissingAudioProbe has always selected rows missing the pixel format
        as well as the audio flag, but only the audio half was written back, so

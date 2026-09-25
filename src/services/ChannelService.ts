@@ -845,6 +845,10 @@ export class ChannelService {
     }
   }
 
+  async prepareScheduleRefresh(): Promise<void> {
+    await this.getPreparedLineup(true)
+  }
+
   private async getPreparedLineup(forceRefresh = false): Promise<PreparedLineup> {
     const epoch = this.scheduleEpoch
     const now = Date.now()

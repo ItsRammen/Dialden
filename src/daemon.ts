@@ -366,13 +366,14 @@ export class ToastTVDaemon {
       new SessionManager(new SystemDateTimeProvider()),
       new SystemDateTimeProvider()
     )
-    this.indexer.onScanStart(async () => {
-      await this.engine?.refreshCache()
-      await this.playbackService?.reconcilePrequeue()
-    })
-    this.indexer.onScanComplete(async () => {
-      await this.engine?.refreshCache(true)
-      await this.playbackService?.reconcilePrequeue()
+    this.indexer.onScanComplete(async (_count, changed) => {
+      if (changed) {
+        const started = Date.now()
+        try {
+          await this.engine?.refreshCache(true)
+          await this.playbackService?.reconcilePrequeue()
+        } finally { console.info('Library refresh timing', JSON.stringify({ stage: 'playback-cache', durationMs: Date.now() - started })) }
+      }
       // Online enrichment is deliberately detached from filesystem scan
       // completion. The sequential worker consumes only cached pending rows.
       void this.metadataService?.runPending()

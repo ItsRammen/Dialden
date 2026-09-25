@@ -17,6 +17,18 @@ import {
 export class BunChannelWorkerFiles implements ChannelWorkerFiles {
   constructor(private readonly orphanMaximumAgeMs = 10 * 60_000) {}
 
+  async outputFreshness(directory: string): Promise<{ playlistAgeMs: number; newestSegmentAgeMs: number }> {
+    const path = join(directory, 'index.m3u8')
+    const info = await stat(path)
+    const playlist = parseHlsMediaPlaylist(await readFile(path, 'utf8'))
+    const newest = playlist.wellFormed ? localChannelSegmentName(playlist.segmentUris.at(-1) ?? '') : null
+    let newestSegmentAgeMs = -1
+    if (newest) {
+      try { newestSegmentAgeMs = Math.max(0, Date.now() - (await stat(join(directory, newest))).mtimeMs) } catch { /* Missing output is diagnostic evidence. */ }
+    }
+    return { playlistAgeMs: Math.max(0, Date.now() - info.mtimeMs), newestSegmentAgeMs }
+  }
+
   async prepareOutput(directory: string): Promise<void> {
     await mkdir(directory, { recursive: true })
   }

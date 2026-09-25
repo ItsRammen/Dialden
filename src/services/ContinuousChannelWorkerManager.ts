@@ -73,6 +73,8 @@ export interface ChannelWorkerClock {
 }
 
 export interface ChannelWorkerFiles {
+  outputFreshness?(directory: string): Promise<{ playlistAgeMs: number; newestSegmentAgeMs: number }>
+
   prepareOutput(directory: string): Promise<void> | void
   sourceExists(path: string): Promise<boolean> | boolean
   /** Remove orphaned/expired output while preserving the active rolling window. */
@@ -556,6 +558,7 @@ export class ContinuousChannelWorkerManager {
   async restart(channelId: string, reason = 'Pipeline restart requested'): Promise<ContinuousChannelWorkerState | null> {
     const record = this.records.get(channelId)
     if (!record) return null
+    this.recordPlaybackTransition(record, 'restart-requested', { reason: /config|schedule|lineup/i.test(reason) ? 'configuration-or-schedule' : 'explicit-recovery' })
     record.state = { ...record.state, status: 'transitioning', lastError: reason }
     record.appendNextStart = false
     await this.stopPipeline(record)
@@ -644,6 +647,23 @@ export class ContinuousChannelWorkerManager {
     return created
   }
 
+  private playbackTransitions: { at: number; channelId: string; generation: number; event: string; code?: number | null; durationMs?: number; reason?: string }[] = []
+  private recordPlaybackTransition(record: WorkerRecord, event: string, detail: { code?: number | null; durationMs?: number; reason?: string } = {}): void {
+    const row = { at: this.clock.now().getTime(), channelId: record.state.channelId, generation: record.generation, event, ...detail }
+    this.playbackTransitions = [...this.playbackTransitions.filter(x => x.at >= row.at - 600000), row].slice(-200)
+    console.info('Channel worker transition', JSON.stringify(row))
+  }
+
+  async getPlaybackDiagnostics(channelId: string): Promise<Record<string, string | number>> {
+    const now = this.clock.now().getTime()
+    const history = this.playbackTransitions.filter(x => x.channelId === channelId && x.at >= now - 120000).slice(-12)
+    let freshness = { playlistAgeMs: -1, newestSegmentAgeMs: -1 }
+    if (this.records.has(channelId)) {
+      try { freshness = await this.files.outputFreshness?.(this.outputDirectory(channelId)) ?? freshness } catch { /* Unknown, not fresh. */ }
+    }
+    return { workerTransitionsAtReceipt: JSON.stringify(history), workerPlaylistAgeMsAtReceipt: freshness.playlistAgeMs, workerNewestSegmentAgeMsAtReceipt: freshness.newestSegmentAgeMs }
+  }
+
   private async ensureStarted(record: WorkerRecord): Promise<void> {
     if (record.stopping) await record.stopping
     if (record.startup) return record.startup
@@ -657,6 +677,7 @@ export class ContinuousChannelWorkerManager {
   private async startRecord(record: WorkerRecord): Promise<void> {
     const generation = ++record.generation
     const startedAt = this.clock.now()
+    this.recordPlaybackTransition(record, 'starting')
     const appendToExistingPlaylist = record.appendNextStart
     record.appendNextStart = false
     record.state = {
@@ -748,6 +769,7 @@ export class ContinuousChannelWorkerManager {
       const startup = await Promise.race([readiness, earlyExit])
       waitingForFreshOutput = false
       if (startup.kind === 'exit') {
+        if (generation === record.generation) this.recordPlaybackTransition(record, 'exit-before-ready', { code: startup.exit.code })
         if (record.pipeline === pipeline) record.pipeline = undefined
         if (generation !== record.generation) return
         throw new Error(
@@ -773,6 +795,7 @@ export class ContinuousChannelWorkerManager {
         transcoding: true,
         usingFallback,
       }
+      this.recordPlaybackTransition(record, 'ready', { durationMs: this.clock.now().getTime() - startedAt.getTime() })
       void pipeline.completed.then((exit) => this.onPipelineExit(record, generation, exit))
     } catch (error) {
       const failedPipeline = record.pipeline
@@ -788,6 +811,7 @@ export class ContinuousChannelWorkerManager {
       // completion must not overwrite the replacement generation with an
       // error state.
       if (generation !== record.generation) return
+      this.recordPlaybackTransition(record, 'startup-failed', { durationMs: this.clock.now().getTime() - startedAt.getTime() })
       record.state = {
         ...record.state,
         status: 'error',
@@ -800,6 +824,7 @@ export class ContinuousChannelWorkerManager {
 
   private async onPipelineExit(record: WorkerRecord, generation: number, exit: ChannelPipelineExit): Promise<void> {
     if (generation !== record.generation) return
+    this.recordPlaybackTransition(record, 'pipeline-exit', { code: exit.code, reason: exit.code === 0 ? 'normal-exit' : 'failed-exit' })
     record.pipeline = undefined
     record.state = {
       ...record.state,
@@ -817,6 +842,7 @@ export class ContinuousChannelWorkerManager {
 
   private scheduleRestart(record: WorkerRecord): void {
     if (record.restartTimer !== undefined) return
+    this.recordPlaybackTransition(record, 'restart-scheduled', { durationMs: this.restartDelayMs })
     record.restartTimer = this.clock.setTimeout(() => {
       record.restartTimer = undefined
       if (this.hasDemand(record) && !record.pipeline) void this.ensureStarted(record)
@@ -930,6 +956,7 @@ export class ContinuousChannelWorkerManager {
 
   private async stopPipeline(record: WorkerRecord): Promise<void> {
     if (record.stopping) return record.stopping
+    if (record.pipeline || record.startup) this.recordPlaybackTransition(record, 'stop-requested')
     const stopping = this.performStopPipeline(record)
     const wrapped = stopping.finally(() => {
       if (record.stopping === wrapped) record.stopping = undefined

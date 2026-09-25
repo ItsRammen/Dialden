@@ -46,3 +46,16 @@ test('heartbeat acknowledges persisted incidents and exposes escaped admin diagn
     expect(html).not.toContain('<script>bad</script>')
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
+
+
+test('awaits asynchronous worker context before persisting the incident', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'incident-context-'))
+  try {
+    const service = new PlaybackIncidentService(join(dir, 'events.json'), async (channel, session) => {
+      await new Promise(resolve => setImmediate(resolve))
+      return { workerNewestSegmentAgeMsAtReceipt: 1200, contextChannel: channel, contextSession: session ?? '' }
+    })
+    await service.record('tv', [{ id: 'async', event: 'stall', channelId: 'nick', sessionId: 'session' }])
+    expect(service.snapshot()[0]).toMatchObject({ workerNewestSegmentAgeMsAtReceipt: 1200, contextChannel: 'nick', contextSession: 'session' })
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})

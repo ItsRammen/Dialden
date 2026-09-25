@@ -5,6 +5,22 @@ import { join } from 'node:path'
 import { BunChannelWorkerFiles } from '../src/services/BunChannelWorkerFiles'
 
 describe('BunChannelWorkerFiles', () => {
+  test('freshness distinguishes an old playlist from missing segment output', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'hls-freshness-'))
+    try {
+      const files = new BunChannelWorkerFiles()
+      const playlist = join(directory, 'index.m3u8')
+      writeFileSync(playlist, '#EXTM3U\n#EXTINF:1.0,\nsegment-0000000000001.ts\n')
+      const old = new Date(Date.now() - 10000)
+      utimesSync(playlist, old, old)
+      const missing = await files.outputFreshness(directory)
+      expect(missing.playlistAgeMs).toBeGreaterThanOrEqual(9900)
+      expect(missing.newestSegmentAgeMs).toBe(-1)
+      writeFileSync(join(directory, 'segment-0000000000001.ts'), 'data')
+      expect((await files.outputFreshness(directory)).newestSegmentAgeMs).toBeGreaterThanOrEqual(0)
+    } finally { rmSync(directory, { recursive: true, force: true }) }
+  })
+
   test('waits for two fresh HLS segments before declaring a cold worker ready', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'toasttv-hls-ready-'))
     try {

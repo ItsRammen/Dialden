@@ -5,6 +5,7 @@
  * Implements IMediaRepository for dependency injection.
  */
 
+import { createHash } from 'node:crypto'
 import { Database } from 'bun:sqlite'
 import type {
   ReviewDecisionDraft,
@@ -1901,6 +1902,26 @@ export class MediaRepository implements IMediaRepository {
   }
 
   // --- Batch Operations ---
+
+  async getLibraryContentFingerprint(): Promise<string> {
+    if (!this.db) throw new Error('Repository not initialized')
+    const hash = createHash('sha256')
+    const bookkeeping = new Set(['created_at', 'updated_at', 'last_seen_at', 'metadata_matched_at', 'metadata_refreshed_at', 'policy_evaluated_at'])
+    for (const table of ['media', 'media_collections']) {
+      hash.update(table)
+      let lastId = 0
+      while (true) {
+        const rows = this.db.prepare(`SELECT * FROM ${table} WHERE id > ? ORDER BY id LIMIT 250`).all(lastId) as Record<string, unknown>[]
+        for (const row of rows) {
+          hash.update(JSON.stringify(Object.fromEntries(Object.entries(row).filter(([key]) => !bookkeeping.has(key)))))
+          lastId = Number(row.id)
+        }
+        if (rows.length < 250) break
+        await new Promise<void>(resolve => setImmediate(resolve))
+      }
+    }
+    return hash.digest('hex')
+  }
 
   async getByPaths(paths: string[]): Promise<Map<string, MediaItem>> {
     if (!this.db) throw new Error('Repository not initialized')

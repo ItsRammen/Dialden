@@ -63,6 +63,24 @@ describe('MediaIndexer', () => {
     indexer = new MediaIndexer(mediaConfig, interludeConfig, repo, fs, probe)
   })
 
+  test('unchanged scans skip change notifications and failed refreshes are retried', async () => {
+    let fingerprint = 'initial'
+    repo.getLibraryContentFingerprint = async () => fingerprint
+    const changes: boolean[] = []
+    let fail = false
+    indexer.onScanComplete(async (_count, changed) => { changes.push(changed); if (fail) throw new Error('refresh failed') })
+    await indexer.scanAll()
+    await indexer.scanAll()
+    fingerprint = 'changed'
+    fail = true
+    await indexer.scanAll()
+    fail = false
+    await indexer.scanAll()
+    await indexer.scanAll()
+    expect(changes).toEqual([true, false, true, true, false])
+    expect(indexer.getMaintenanceDiagnostics().libraryMaintenancePhaseAtReceipt).toBe('idle')
+  })
+
   test('async scans yield between writes and keep verified files available', async () => {
     const paths = Array.from({ length: 501 }, (_, i) => `/media/videos/file${i}.mp4`)
     fs.listFilesAsync.mockResolvedValueOnce(paths).mockResolvedValueOnce([])

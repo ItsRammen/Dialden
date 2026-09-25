@@ -57,8 +57,16 @@ const MONOTONIC_SCAN_EVENT_CLOCK: ScanEventClock = {
 export class MediaIndexer {
   private scanPromise: Promise<number> | null = null
   private rescanRequested = false
+  private lastContentFingerprint: string | undefined
+  private maintenancePhase = 'idle'
+  private scanWorkMs = 0
+  private refreshWorkMs = 0
+  getMaintenanceDiagnostics(): Record<string, string | number> {
+    return { libraryMaintenancePhaseAtReceipt: this.maintenancePhase, lastScanWorkMs: this.scanWorkMs, lastPostScanRefreshMs: this.refreshWorkMs }
+  }
+
   private readonly scanCompleteListeners = new Set<
-    (count: number) => void | Promise<void>
+    (count: number, changed: boolean) => void | Promise<void>
   >()
   private readonly scanStartListeners = new Set<() => void | Promise<void>>()
   private readonly scanEventListeners = new Set<
@@ -114,7 +122,7 @@ export class MediaIndexer {
   }
 
   onScanComplete(
-    listener: (count: number) => void | Promise<void>
+    listener: (count: number, changed: boolean) => void | Promise<void>
   ): () => void {
     this.scanCompleteListeners.add(listener)
     return () => this.scanCompleteListeners.delete(listener)
@@ -141,20 +149,35 @@ export class MediaIndexer {
     try {
       while (true) {
         this.rescanRequested = false
+        this.maintenancePhase = 'scan'
+        const scanStart = Date.now()
         total = await this.scanOnce()
+        this.scanWorkMs = Date.now() - scanStart
         if (this.rescanRequested) continue
+        this.maintenancePhase = 'fingerprint'
+        const fingerprint = await this.repository.getLibraryContentFingerprint?.()
+        const changed = fingerprint === undefined || fingerprint !== this.lastContentFingerprint
+        this.maintenancePhase = 'post-scan-refresh'
+        const refreshStart = Date.now()
+        let refreshFailed = false
         for (const listener of this.scanCompleteListeners) {
           try {
-            await listener(total)
+            await listener(total, changed)
           } catch (error) {
+            refreshFailed = true
             console.error('Post-scan refresh failed', error)
           }
         }
+        this.refreshWorkMs = Date.now() - refreshStart
+        if (!refreshFailed) this.lastContentFingerprint = fingerprint
+        console.info('Library maintenance', JSON.stringify({ changed, scanMs: this.scanWorkMs, refreshMs: this.refreshWorkMs, refreshFailed }))
+        this.maintenancePhase = 'idle'
         // A watcher event can arrive while a completion listener is refreshing
         // consumers. Run it before resolving the shared promise.
         if (!this.rescanRequested) return total
       }
     } catch (error) {
+      this.maintenancePhase = 'failed'
       this.scanState = {
         ...this.scanState,
         status: 'failed',
