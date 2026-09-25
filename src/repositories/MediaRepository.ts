@@ -5,7 +5,6 @@
  * Implements IMediaRepository for dependency injection.
  */
 
-import { createHash } from 'node:crypto'
 import { Database } from 'bun:sqlite'
 import type {
   ReviewDecisionDraft,
@@ -485,6 +484,8 @@ export class MediaRepository implements IMediaRepository {
       `CREATE INDEX IF NOT EXISTS idx_media_playback_enabled ON media(policy_enabled, playback_override);`
     )
 
+    this.installLibraryRevisionTracking()
+
     console.log(`Initialized media database at ${this.dbPath}`)
   }
 
@@ -929,13 +930,18 @@ export class MediaRepository implements IMediaRepository {
     const uniqueKeys = [...new Set(presentIdentityKeys)]
     let retired = 0
     const transaction = this.db.transaction(() => {
-      retired = this.db!
-        .prepare(
-          `UPDATE media_collections
-           SET present = 0, updated_at = CURRENT_TIMESTAMP
-           WHERE root_id = ? AND present = 1`
-        )
-        .run(rootId).changes
+      const present = new Set(uniqueKeys)
+      const existing = this.db!.prepare(
+        'SELECT id, identity_key FROM media_collections WHERE root_id = ? AND present = 1'
+      ).all(rootId) as { id: number; identity_key: string }[]
+      const retire = this.db!.prepare(
+        'UPDATE media_collections SET present = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+      )
+      for (const collection of existing) {
+        if (present.has(collection.identity_key)) continue
+        retire.run(collection.id)
+        retired += this.lastDirectChanges()
+      }
 
       const restore = this.db!.prepare(`
         UPDATE media_collections
@@ -1320,7 +1326,7 @@ export class MediaRepository implements IMediaRepository {
         ) {
           continue
         }
-        changed += update.run(
+        update.run(
           episode.title.trim(),
           episode.overview?.trim() || null,
           episode.airDate?.trim() || null,
@@ -1328,7 +1334,8 @@ export class MediaRepository implements IMediaRepository {
           collectionId,
           episode.seasonNumber,
           episode.episodeNumber
-        ).changes
+        )
+        changed += this.lastDirectChanges()
       }
 
       // Sonarr/Plex may place two numbered broadcast segments in one physical
@@ -1575,14 +1582,14 @@ export class MediaRepository implements IMediaRepository {
     if (rootIds.length === 0) return 0
 
     const placeholders = rootIds.map(() => '?').join(',')
-    const result = this.db
+    this.db
       .prepare(
         `UPDATE media
          SET policy_enabled = 0, root_available = 0
          WHERE root_id NOT IN (${placeholders})`
       )
       .run(...rootIds)
-    return result.changes
+    return this.lastDirectChanges()
   }
 
   async synchronizePlaybackPolicy(
@@ -1598,28 +1605,31 @@ export class MediaRepository implements IMediaRepository {
       let changed = 0
       const rootIds = roots.map((root) => root.id)
       const rootPlaceholders = rootIds.map(() => '?').join(',')
-      changed += this.db!
+      this.db!
         .prepare(
           `UPDATE media
            SET policy_enabled = 0, root_available = 0
            WHERE root_id NOT IN (${rootPlaceholders})`
         )
-        .run(...rootIds).changes
+        .run(...rootIds)
+      changed += this.lastDirectChanges()
 
       for (const root of roots) {
         // A managed root is unavailable until the current process scans it.
         // This prevents stale absolute paths from being played after a mount
         // or container-path change.
-        changed += this.db!
+        this.db!
           .prepare('UPDATE media SET root_available = 0 WHERE root_id = ?')
-          .run(root.id).changes
+          .run(root.id)
+        changed += this.lastDirectChanges()
       }
       // The old JSON allowlist is now only a programming-group fallback. It
       // must not restore historical automatic approval. Collection policy is
       // authoritative, while collectionless rows remain review-only.
-      changed += this.db!
+      this.db!
         .prepare('UPDATE media SET policy_enabled = 0 WHERE collection_id IS NULL')
-        .run().changes
+        .run()
+      changed += this.lastDirectChanges()
       this.syncAllCollectionEligibility()
       return changed
     })
@@ -1903,24 +1913,51 @@ export class MediaRepository implements IMediaRepository {
 
   // --- Batch Operations ---
 
-  async getLibraryContentFingerprint(): Promise<string> {
+  // Bun's run().changes includes trigger writes; SQLite changes() counts the
+  // directly affected rows, preserving public mutation counts.
+  private lastDirectChanges(): number {
+    return (this.db!.prepare('SELECT changes() AS count').get() as { count: number }).count
+  }
+
+  /** Install after migrations so newly added content columns participate too. */
+  private installLibraryRevisionTracking(): void {
     if (!this.db) throw new Error('Repository not initialized')
-    const hash = createHash('sha256')
-    const bookkeeping = new Set(['created_at', 'updated_at', 'last_seen_at', 'metadata_matched_at', 'metadata_refreshed_at', 'policy_evaluated_at'])
-    for (const table of ['media', 'media_collections']) {
-      hash.update(table)
-      let lastId = 0
-      while (true) {
-        const rows = this.db.prepare(`SELECT * FROM ${table} WHERE id > ? ORDER BY id LIMIT 250`).all(lastId) as Record<string, unknown>[]
-        for (const row of rows) {
-          hash.update(JSON.stringify(Object.fromEntries(Object.entries(row).filter(([key]) => !bookkeeping.has(key)))))
-          lastId = Number(row.id)
+    const db = this.db
+    const bookkeeping = new Set([
+      'created_at', 'updated_at', 'last_seen_at', 'metadata_matched_at',
+      'metadata_refreshed_at', 'policy_evaluated_at',
+    ])
+    db.transaction(() => {
+      db.exec(`CREATE TABLE IF NOT EXISTS library_content_revision (
+        id INTEGER PRIMARY KEY CHECK (id = 1), revision INTEGER NOT NULL DEFAULT 0
+      ); INSERT OR IGNORE INTO library_content_revision (id, revision) VALUES (1, 0);`)
+      for (const table of ['media', 'media_collections']) {
+        const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
+        const changed = columns.filter(column => !bookkeeping.has(column.name)).map(column => {
+          const name = '"' + column.name.replaceAll('"', '""') + '"'
+          return `OLD.${name} IS NOT NEW.${name}`
+        }).join(' OR ')
+        for (const event of ['INSERT', 'UPDATE', 'DELETE']) {
+          const trigger = `library_revision_${table}_${event.toLowerCase()}`
+          db.exec(`DROP TRIGGER IF EXISTS ${trigger};
+            CREATE TRIGGER ${trigger} AFTER ${event} ON ${table}
+            ${event === 'UPDATE' ? `WHEN ${changed}` : ''}
+            BEGIN
+              UPDATE library_content_revision SET revision = revision + 1 WHERE id = 1;
+            END;`)
         }
-        if (rows.length < 250) break
-        await new Promise<void>(resolve => setImmediate(resolve))
       }
-    }
-    return hash.digest('hex')
+    })()
+  }
+
+  /** Constant-size read; triggers track committed changes without scanning the library. */
+  async getLibraryChangeToken(): Promise<string> {
+    if (!this.db) throw new Error('Repository not initialized')
+    const row = this.db.prepare(
+      'SELECT CAST(revision AS TEXT) AS token FROM library_content_revision WHERE id = 1'
+    ).get() as { token: string } | null
+    if (!row) throw new Error('Library revision tracking not initialized')
+    return row.token
   }
 
   async getByPaths(paths: string[]): Promise<Map<string, MediaItem>> {
@@ -2048,10 +2085,10 @@ export class MediaRepository implements IMediaRepository {
     for (let i = 0; i < paths.length; i += CHUNK_SIZE) {
       const chunk = paths.slice(i, i + CHUNK_SIZE)
       const placeholders = chunk.map(() => '?').join(',')
-      const result = this.db
+      this.db
         .prepare(`DELETE FROM media WHERE path IN (${placeholders})`)
         .run(...chunk)
-      removed += result.changes
+      removed += this.lastDirectChanges()
     }
     return removed
   }

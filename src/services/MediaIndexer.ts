@@ -57,7 +57,7 @@ const MONOTONIC_SCAN_EVENT_CLOCK: ScanEventClock = {
 export class MediaIndexer {
   private scanPromise: Promise<number> | null = null
   private rescanRequested = false
-  private lastContentFingerprint: string | undefined
+  private lastLibraryChangeToken: string | undefined
   private maintenancePhase = 'idle'
   private scanWorkMs = 0
   private refreshWorkMs = 0
@@ -154,9 +154,9 @@ export class MediaIndexer {
         total = await this.scanOnce()
         this.scanWorkMs = Date.now() - scanStart
         if (this.rescanRequested) continue
-        this.maintenancePhase = 'fingerprint'
-        const fingerprint = await this.repository.getLibraryContentFingerprint?.()
-        const changed = fingerprint === undefined || fingerprint !== this.lastContentFingerprint
+        this.maintenancePhase = 'change-check'
+        const changeToken = await this.repository.getLibraryChangeToken?.()
+        const changed = changeToken === undefined || changeToken !== this.lastLibraryChangeToken
         this.maintenancePhase = 'post-scan-refresh'
         const refreshStart = Date.now()
         let refreshFailed = false
@@ -169,7 +169,7 @@ export class MediaIndexer {
           }
         }
         this.refreshWorkMs = Date.now() - refreshStart
-        if (!refreshFailed) this.lastContentFingerprint = fingerprint
+        if (!refreshFailed) this.lastLibraryChangeToken = changeToken
         console.info('Library maintenance', JSON.stringify({ changed, scanMs: this.scanWorkMs, refreshMs: this.refreshWorkMs, refreshFailed }))
         this.maintenancePhase = 'idle'
         // A watcher event can arrive while a completion listener is refreshing

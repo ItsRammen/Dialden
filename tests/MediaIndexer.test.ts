@@ -64,14 +64,14 @@ describe('MediaIndexer', () => {
   })
 
   test('unchanged scans skip change notifications and failed refreshes are retried', async () => {
-    let fingerprint = 'initial'
-    repo.getLibraryContentFingerprint = async () => fingerprint
+    let changeToken = 'initial'
+    repo.getLibraryChangeToken = async () => changeToken
     const changes: boolean[] = []
     let fail = false
     indexer.onScanComplete(async (_count, changed) => { changes.push(changed); if (fail) throw new Error('refresh failed') })
     await indexer.scanAll()
     await indexer.scanAll()
-    fingerprint = 'changed'
+    changeToken = 'changed'
     fail = true
     await indexer.scanAll()
     fail = false

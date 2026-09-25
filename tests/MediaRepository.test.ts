@@ -8,6 +8,9 @@ import { describe, expect, test, beforeEach, afterEach } from 'bun:test'
 import { MediaRepository } from '../src/repositories/MediaRepository'
 import type { MediaItemInput } from '../src/repositories/IMediaRepository'
 import { Database } from 'bun:sqlite'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 // Builder for MediaItemInput with extended metadata defaults
 const createInput = (override?: Partial<MediaItemInput>): MediaItemInput => ({
@@ -40,23 +43,84 @@ describe('MediaRepository', () => {
     await repo.close()
   })
 
-  test('library fingerprints ignore repeat writes but track content, availability and removal', async () => {
-    const empty = await repo.getLibraryContentFingerprint()
+  test('library change tokens ignore repeat writes but track content, availability and removal', async () => {
+    const empty = await repo.getLibraryChangeToken()
     const item = createInput({ rootId: 'tv', rootAvailable: true })
     await repo.upsertMedia(item)
-    const first = await repo.getLibraryContentFingerprint()
+    const first = await repo.getLibraryChangeToken()
     expect(first).not.toBe(empty)
     await repo.upsertMedia(item)
-    expect(await repo.getLibraryContentFingerprint()).toBe(first)
+    expect(await repo.getLibraryChangeToken()).toBe(first)
     await repo.setRootAvailable('tv', false)
-    const unavailable = await repo.getLibraryContentFingerprint()
+    const unavailable = await repo.getLibraryChangeToken()
     expect(unavailable).not.toBe(first)
     await repo.setRootAvailable('tv', true)
-    expect(await repo.getLibraryContentFingerprint()).toBe(first)
+    expect(await repo.getLibraryChangeToken()).not.toBe(unavailable)
     await repo.upsertMedia({ ...item, durationSeconds: 120 })
-    expect(await repo.getLibraryContentFingerprint()).not.toBe(first)
+    expect(await repo.getLibraryChangeToken()).not.toBe(first)
     await repo.removeByPaths([item.path])
-    expect(await repo.getLibraryContentFingerprint()).toBe(empty)
+    expect(await repo.getLibraryChangeToken()).not.toBe(empty)
+  })
+
+  test('revision tracks collection changes, ignores bookkeeping, and rolls back atomically', async () => {
+    const [collection] = await repo.upsertCollections([{
+      rootId: 'tv', libraryKind: 'tv', identityKey: 'example',
+      sourceTitle: 'Example', parsedTitle: 'Example', year: null,
+    }])
+    const db = (repo as unknown as { db: Database }).db
+    const initial = await repo.getLibraryChangeToken()
+    db.exec("UPDATE media_collections SET last_seen_at = 'later', updated_at = 'later', metadata_refreshed_at = 'later'")
+    expect(await repo.getLibraryChangeToken()).toBe(initial)
+    await repo.updateCollectionOverride(collection!.id, 'allow')
+    const approved = await repo.getLibraryChangeToken()
+    expect(approved).not.toBe(initial)
+    db.exec('BEGIN')
+    db.exec("UPDATE media_collections SET metadata_title = 'Different'")
+    expect(await repo.getLibraryChangeToken()).not.toBe(approved)
+    db.exec('ROLLBACK')
+    expect(await repo.getLibraryChangeToken()).toBe(approved)
+    db.exec('DELETE FROM media_collections')
+    expect(await repo.getLibraryChangeToken()).not.toBe(approved)
+  })
+
+  test('unchanged collection reconciliation preserves the token and only retires missing titles', async () => {
+    const input = { rootId: 'tv', libraryKind: 'tv' as const, identityKey: 'example',
+      sourceTitle: 'Example', parsedTitle: 'Example', year: null }
+    await repo.upsertCollections([input])
+    const before = await repo.getLibraryChangeToken()
+    await repo.upsertCollections([input])
+    expect(await repo.reconcileCollections('tv', ['example'])).toBe(0)
+    expect(await repo.getLibraryChangeToken()).toBe(before)
+    expect(await repo.reconcileCollections('tv', [])).toBe(1)
+    expect(await repo.getLibraryChangeToken()).not.toBe(before)
+    await repo.upsertMedia(createInput())
+    expect(await repo.removeByPaths(['/videos/test.mp4'])).toBe(1)
+  })
+
+  test('revision persists across reopen and tracks other connections', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'dialden-revision-'))
+    const path = join(directory, 'media.db')
+    let persistent = new MediaRepository(path)
+    let writer: Database | undefined
+    try {
+      await persistent.initialize()
+      await persistent.upsertMedia(createInput())
+      const before = await persistent.getLibraryChangeToken()
+      await persistent.close()
+      persistent = new MediaRepository(path)
+      await persistent.initialize()
+      expect(await persistent.getLibraryChangeToken()).toBe(before)
+      writer = new Database(path)
+      writer.exec('UPDATE media SET duration_seconds = 90')
+      const changed = await persistent.getLibraryChangeToken()
+      expect(changed).not.toBe(before)
+      writer.exec('UPDATE media SET duration_seconds = 90')
+      expect(await persistent.getLibraryChangeToken()).toBe(changed)
+    } finally {
+      writer?.close()
+      await persistent.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
   })
 
   test('a probed row stops being offered for backfill once both halves are stored', async () => {

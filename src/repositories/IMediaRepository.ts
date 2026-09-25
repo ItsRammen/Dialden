@@ -29,8 +29,8 @@ import type {
 export type MediaItemInput = Omit<MediaItem, 'id'>
 
 export interface IMediaRepository {
-  /** Content fingerprint excluding bookkeeping timestamps, read in yielding batches. */
-  getLibraryContentFingerprint?(): Promise<string>
+  /** Persistent change token excluding bookkeeping timestamps; constant-size read. */
+  getLibraryChangeToken?(): Promise<string>
   /**
    * Initialize the repository (create tables, run migrations, etc.)
    */
