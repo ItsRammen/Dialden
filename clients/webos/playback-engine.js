@@ -100,6 +100,7 @@
     var hls = null;
     var lastFragment = null;
     var recoveries = 0;
+    var failed = false;
 
     function emit(name, payload) {
       var list = handlers[name] || [];
@@ -121,8 +122,23 @@
     }
 
     function onError(event, payload) {
+      if (failed || !payload) return;
       emit('error', payload);
+      var status = payload.response && payload.response.code;
+      // A lost server session cannot be repaired by loading its URL again.
+      if (status === 410) {
+        failed = true;
+        hls.stopLoad();
+        emit('lost', { details: 'tunerSessionExpired', sessionExpired: true });
+        return;
+      }
       if (!payload.fatal) return;
+      if (recoveries >= 2) {
+        failed = true;
+        hls.stopLoad();
+        emit('lost', payload);
+        return;
+      }
       /* There is no native fallback behind this engine, so recovery has to be
          exhausted here before the session is declared lost. */
       if (payload.type === Hls.ErrorTypes.NETWORK_ERROR) {
@@ -140,9 +156,12 @@
 
     function attach(url) {
       detach();
+      failed = false;
+      recoveries = 0;
       hls = new Hls(config);
       hls.on(Hls.Events.ERROR, onError);
       hls.on(Hls.Events.FRAG_CHANGED, function (event, payload) {
+        recoveries = 0;
         lastFragment = payload && payload.frag ? payload.frag.sn : null;
       });
       hls.on(Hls.Events.MANIFEST_PARSED, function () { emit('ready', stats()); });

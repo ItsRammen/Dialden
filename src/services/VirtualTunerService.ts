@@ -513,7 +513,7 @@ export class VirtualTunerService {
       return null
     }
     const record = this.sessions.get(sessionId)
-    if (!record || record.closed) return null
+    if (!record || record.closed) throw new VirtualTunerSessionNotFoundError()
     this.refreshRecord(record)
     if (
       ![...record.entries, ...record.retained].some(

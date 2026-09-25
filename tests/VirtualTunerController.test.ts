@@ -3,7 +3,7 @@ import { Hono } from 'hono'
 import { createChannelStreamController } from '../src/controllers/ChannelStreamController'
 import { createVirtualTunerStreamController } from '../src/controllers/VirtualTunerStreamController'
 import { mutationOriginGuard } from '../src/middleware/mutationOriginGuard'
-import { VirtualTunerStaleRequestError } from '../src/services/VirtualTunerService'
+import { VirtualTunerStaleRequestError, VirtualTunerSessionNotFoundError } from '../src/services/VirtualTunerService'
 
 const SESSION_ID = '11111111-1111-4111-8111-111111111111'
 const OWNER_ID = 'launch-a'
@@ -739,6 +739,19 @@ describe('virtual tuner HTTP contract', () => {
     expect(lineupOpens).toBe(1)
   })
 
+  test('expired sessions are distinct from missing segments on both GET and HEAD', async () => {
+    const controller = createVirtualTunerStreamController({
+      playlist: async () => { throw new VirtualTunerSessionNotFoundError() },
+      segmentPath: async () => { throw new VirtualTunerSessionNotFoundError() },
+    })
+    for (const method of ['GET', 'HEAD']) for (const suffix of ['index.m3u8', 'segment-1.ts']) {
+      const response = await controller.request(`/api/v1/tuner-sessions/${SESSION_ID}/live/${suffix}`, { method })
+      expect(response.status).toBe(410)
+      expect(response.headers.get('Cache-Control')).toBe('no-store')
+      if (method === 'GET') expect(await response.json()).toMatchObject({ code: 'TUNER_SESSION_NOT_FOUND' })
+    }
+  })
+
   test('serves tuner playlists and turns invalid segment paths into 404', async () => {
     const controller = createVirtualTunerStreamController({
       playlist: async () =>
@@ -754,6 +767,7 @@ describe('virtual tuner HTTP contract', () => {
       `/api/v1/tuner-sessions/${SESSION_ID}/live/not-a-segment`
     )
     expect(invalid.status).toBe(404)
+    expect(await invalid.json()).toMatchObject({ code: 'TUNER_SEGMENT_NOT_FOUND' })
     expect(invalid.headers.get('Cache-Control')).toBe('no-store')
   })
 })

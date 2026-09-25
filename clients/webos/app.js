@@ -7,7 +7,7 @@
   var STORAGE_CLIENT_NAME = 'toasttv.clientName.v1';
   var STORAGE_SESSION_OWNER = 'toasttv.sessionOwner.v1';
   var STORAGE_SESSION_OWNER_EPOCH = 'toasttv.sessionOwnerEpoch.v1';
-  var CLIENT_VERSION = '0.7.7';
+  var CLIENT_VERSION = '0.7.8';
   var DEFAULT_SERVER = 'http://TOWER:1993';
   var POLL_INTERVAL_MS = 30000;
   var CHANNEL_REFRESH_INTERVAL_MS = 15000;
@@ -945,7 +945,10 @@
           type: switchMachine().EVENTS.LOST,
           requestId: switchContext ? switchContext.requestId : -1
         });
-        handleMediaError();
+        if (payload && payload.sessionExpired && state.tuner) {
+          reportPlaybackIncident('media-error', undefined, 'tuner-session-expired');
+          recoverStableTunerPlayback(true);
+        } else handleMediaError();
       });
     }
     liveEngine.attach(url);
@@ -2402,7 +2405,7 @@
     if (!incompatible) scheduleStableTunerRetry();
   }
 
-  function recoverStableTunerPlayback() {
+  function recoverStableTunerPlayback(sessionExpired) {
     if (state.tunerRecoveryInFlight || !state.tuner || !currentChannel()) return;
     clearTuningFreezeFrame();
     reportPlaybackIncident('recovery-started');
@@ -2415,7 +2418,7 @@
     state.requestedChannelIndex = null;
     state.tuneMetrics = null;
     setPlayerStatus('Checking the live tuner…');
-    requestText(failedTuner.manifestUrl, 3500, function (manifestError) {
+    function handleManifestCheck(manifestError) {
       if (generation !== state.tuneGeneration || !state.tuner ||
           state.tuner.sessionId !== failedTuner.sessionId) {
         state.tunerRecoveryInFlight = false;
@@ -2490,7 +2493,9 @@
           syncNow(true);
         }
       );
-    });
+    }
+    if (sessionExpired === true) handleManifestCheck(new Error('Tuner session expired'));
+    else requestText(failedTuner.manifestUrl, 3500, handleManifestCheck);
   }
 
   function prepareChannel(channelId, generation, pushHistory) {

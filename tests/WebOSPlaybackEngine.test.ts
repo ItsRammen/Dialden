@@ -161,6 +161,36 @@ describe('webOS playback engine', () => {
   })
 
   describe('error recovery', () => {
+    test('expired-session responses stop loading and notify the app immediately once', () => {
+      const { Hls, calls, instances } = fakeHls()
+      const e = engine.createEngine({ video: fakeVideo(), Hls })
+      const lost: any[] = []
+      e.on('lost', (payload: any) => lost.push(payload))
+      e.attach('/session/index.m3u8')
+      instances[0].fire(Hls.Events.ERROR, { fatal: false, type: Hls.ErrorTypes.NETWORK_ERROR, response: { code: 410 } })
+      instances[0].fire(Hls.Events.ERROR, { fatal: true, type: Hls.ErrorTypes.NETWORK_ERROR, response: { code: 410 } })
+      expect(lost).toEqual([{ details: 'tunerSessionExpired', sessionExpired: true }])
+      expect(calls).toContain('stopLoad')
+      expect(calls).not.toContain('startLoad')
+    })
+
+    test('a missing segment is not treated as an expired session; persistent fatal errors are bounded', () => {
+      const { Hls, calls, instances } = fakeHls()
+      const e = engine.createEngine({ video: fakeVideo(), Hls })
+      const lost: any[] = []
+      e.on('lost', (payload: any) => lost.push(payload))
+      e.attach('/session/index.m3u8')
+      instances[0].fire(Hls.Events.ERROR, { fatal: false, type: Hls.ErrorTypes.NETWORK_ERROR, response: { code: 404 } })
+      expect(lost).toHaveLength(0)
+      for (let i = 0; i < 4; i++) instances[0].fire(Hls.Events.ERROR, { fatal: true, type: Hls.ErrorTypes.NETWORK_ERROR, response: { code: 404 } })
+      expect(calls.filter(x => x === 'startLoad')).toHaveLength(2)
+      expect(lost).toHaveLength(1)
+      expect(lost[0].sessionExpired).toBeUndefined()
+      e.attach('/new-session/index.m3u8')
+      instances[1].fire(Hls.Events.ERROR, { fatal: true, type: Hls.ErrorTypes.NETWORK_ERROR })
+      expect(calls.filter(x => x === 'startLoad')).toHaveLength(3)
+    })
+
     test('retries a fatal network error rather than surfacing it', () => {
       const { Hls, calls, instances } = fakeHls()
       const e = engine.createEngine({ video: fakeVideo(), Hls })

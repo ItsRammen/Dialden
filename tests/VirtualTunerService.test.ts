@@ -1033,6 +1033,7 @@ describe('VirtualTunerService', () => {
     expect(service.descriptorForClient('living-room')).toBeNull()
     expect(releases.some((release) => release.channelId === 'kids')).toBe(true)
     expect(await service.segmentPath(opened.sessionId, '../index.m3u8')).toBeNull()
+    await expect(service.segmentPath(opened.sessionId, 'segment-0000000000001.ts')).rejects.toBeInstanceOf(VirtualTunerSessionNotFoundError)
   })
 
   test('an obsolete expiry callback cannot close a heartbeat-refreshed tuner', async () => {

@@ -23,7 +23,7 @@ export function createVirtualTunerStreamController(
       })
     } catch (error) {
       if (error instanceof VirtualTunerSessionNotFoundError) {
-        return c.json({ error: error.message }, 404, {
+        return c.json({ error: error.message, code: 'TUNER_SESSION_NOT_FOUND' }, 410, {
           'Cache-Control': 'no-store',
         })
       }
@@ -41,18 +41,24 @@ export function createVirtualTunerStreamController(
   })
 
   controller.on(['GET', 'HEAD'], VIRTUAL_TUNER_SEGMENT_ROUTE, async (c) => {
-    const path = await tuners.segmentPath(
+    let path: string | null
+    try {
+      path = await tuners.segmentPath(
       c.req.param('sessionId'),
       c.req.param('segment')
-    )
+      )
+    } catch (error) {
+      if (error instanceof VirtualTunerSessionNotFoundError) return c.json({ error: 'Tuner session expired', code: 'TUNER_SESSION_NOT_FOUND' }, 410, { 'Cache-Control': 'no-store' })
+      return c.json({ error: 'Tuner segment temporarily unavailable', code: 'TUNER_UNAVAILABLE' }, 503, { 'Cache-Control': 'no-store', 'Retry-After': '1' })
+    }
     if (!path) {
-      return c.json({ error: 'Tuner segment not found' }, 404, {
+      return c.json({ error: 'Tuner segment not found', code: 'TUNER_SEGMENT_NOT_FOUND' }, 404, {
         'Cache-Control': 'no-store',
       })
     }
     const file = Bun.file(path)
     if (!(await file.exists())) {
-      return c.json({ error: 'Tuner segment not found' }, 404, {
+      return c.json({ error: 'Tuner segment not found', code: 'TUNER_SEGMENT_NOT_FOUND' }, 404, {
         'Cache-Control': 'no-store',
       })
     }

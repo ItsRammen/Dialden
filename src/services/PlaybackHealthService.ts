@@ -42,6 +42,7 @@ export class PlaybackHealthService {
       serverEventLoopMaxDelayMs60s: Math.max(0, ...lags.map(x => x.ms)),
       hlsRequests60s: requests.length,
       hlsErrors60s: requests.filter(x => x.status >= 400).length,
+      hlsExpiredSession60s: requests.filter(x => x.status === 410).length,
       hlsNotFound60s: requests.filter(x => x.status === 404).length,
       hlsUnavailable60s: requests.filter(x => x.status === 503).length,
       hlsMaxResponseSetupMs60s: Math.max(0, ...requests.map(x => x.ms)),
