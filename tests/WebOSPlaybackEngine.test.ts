@@ -272,11 +272,11 @@ describe('webOS playback engine', () => {
       expect(e.detach()).toBe(false)
     })
 
-    test('holds the forward buffer shallow by default', () => {
+    test('keeps a bounded forward cushion for stalls and handoffs by default', () => {
       // The buffer depth is the switch latency: a player cannot show new media
       // until what it already holds has played out.
-      expect(engine.DEFAULT_CONFIG.maxBufferLength).toBe(4)
-      expect(engine.DEFAULT_CONFIG.liveSyncDurationCount).toBe(2)
+      expect(engine.DEFAULT_CONFIG.maxBufferLength).toBe(8)
+      expect(engine.DEFAULT_CONFIG.liveSyncDurationCount).toBe(6)
     })
 
     test('isSupported defers to hls.js rather than sniffing', () => {

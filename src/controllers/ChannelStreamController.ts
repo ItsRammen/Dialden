@@ -1015,7 +1015,7 @@ export async function livePlaylistFilesReady(
   return true
 }
 
-const LIVE_START_TAG = '#EXT-X-START:TIME-OFFSET=-2.0,PRECISE=YES'
+const LIVE_START_TAG = '#EXT-X-START:TIME-OFFSET=-6.0,PRECISE=YES'
 
 /**
  * Joins native players two seconds before the published live edge. FFmpeg's

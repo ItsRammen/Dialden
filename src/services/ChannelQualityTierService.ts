@@ -30,8 +30,8 @@ const BASE_PROFILE: ContinuousHlsProfile = {
   audioChannels: 2,
   segmentSeconds: 1,
   // Keep enough live history to absorb a brief NAS/SQLite control-plane stall.
-  // EXT-X-START still directs new viewers to the two-second live edge.
-  playlistWindowSegments: 8,
+  // Six seconds of playout delay plus room for transient delivery stalls.
+  playlistWindowSegments: 16,
   maximumWidth: 1920,
   maximumHeight: 1080,
 }

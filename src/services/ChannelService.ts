@@ -276,7 +276,8 @@ export class ChannelService {
       'load' | 'save'
     >,
     private interludePolicy: ChannelInterludePolicy =
-      DISABLED_INTERLUDES
+      DISABLED_INTERLUDES,
+    private readonly operationMonitor?: { measure<T>(name: string, work: () => T | Promise<T>): Promise<T> }
   ) {
     this.channels = validateLibraryChannels(policy?.channels ?? [])
     for (const [rootId, root] of Object.entries(policy?.roots ?? {})) {
@@ -825,11 +826,11 @@ export class ChannelService {
     }
 
     const promise = (async (): Promise<ScheduleSourceSnapshot> => {
-      const media = await this.repository.getAll()
+      const media = await this.measure('schedule.database-read', () => this.repository.getAll())
       // Give manifests and segments a chance to run after the synchronous
       // SQLite hydration before compiling the in-memory schedule indexes.
       await this.yieldToEventLoop()
-      return this.compileScheduleSource(epoch, media)
+      return this.measure('schedule.catalog-compile', () => this.compileScheduleSource(epoch, media))
     })()
     const inFlight = { epoch, promise }
     this.scheduleSourceInFlight = inFlight
@@ -1594,7 +1595,7 @@ export class ChannelService {
     for (let offset = 0; offset <= 7; offset++) {
       if (offset > 0) await this.yieldToEventLoop()
       const date = this.addCalendarDays(local, offset)
-      programs.push(...this.buildDay(channel, source, date))
+      programs.push(...await this.measure('schedule.day-build', () => this.buildDay(channel, source, date)))
       if (
         programs.some(
           (program) => Date.parse(program.scheduledStart) > aroundMs
@@ -1631,7 +1632,7 @@ export class ChannelService {
     for (let offset = 0; offset <= futureDays; offset++) {
       if (offset > 0) await this.yieldToEventLoop()
       const date = this.addCalendarDays(local, offset)
-      programs.push(...this.buildDay(channel, source, date))
+      programs.push(...await this.measure('schedule.day-build', () => this.buildDay(channel, source, date)))
     }
     return programs.sort(
       (a, b) => Date.parse(a.scheduledStart) - Date.parse(b.scheduledStart)
@@ -1726,11 +1727,11 @@ export class ChannelService {
     return Boolean(policy.collections?.includes(key)) || policy.groups.some((group) => source.groupsByMediaId.get(item.id)?.has(group))
   }
 
-  private buildDay(
+  private async buildDay(
     channel: LibraryChannelPolicy,
     source: ScheduleSourceSnapshot,
     date: LocalParts
-  ): ScheduledProgram[] {
+  ): Promise<ScheduledProgram[]> {
     const programs: ScheduledProgram[] = []
     const recentBreakAssets: string[] = []
     const recentShorts: number[] = []
@@ -1741,6 +1742,7 @@ export class ChannelService {
       .sort((a, b) => this.timeToMinutes(a.start) - this.timeToMinutes(b.start))
 
     for (const slot of slots) {
+      await this.yieldToEventLoop()
       const start = this.zonedDateTime(
         date,
         this.timeToMinutes(slot.start),
@@ -1798,6 +1800,7 @@ export class ChannelService {
       let previousShow = ''
       let showRun = 0
       while (planned.length < MAX_PROGRAMS_PER_SLOT) {
+        if (planned.length > 0 && planned.length % 16 === 0) await this.yieldToEventLoop()
         let picked: MediaItem | undefined
         let pickedIndex = 0
         let bestScore = Infinity
@@ -2668,6 +2671,10 @@ export class ChannelService {
 
   private yieldToEventLoop(): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, 0))
+  }
+
+  private async measure<T>(name: string, work: () => T | Promise<T>): Promise<T> {
+    return this.operationMonitor ? this.operationMonitor.measure(name, work) : work()
   }
 
   private localParts(date: Date, timezone: string): LocalParts {

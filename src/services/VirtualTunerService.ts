@@ -20,7 +20,7 @@ const VIRTUAL_SEGMENT_NAME = /^segment-\d{13}\.ts$/
 // a revisioned tuner attach does not have to wait for the next worker reload.
 // This is only a preferred advertised window: cold workers may still become
 // ready with minimumReadySegments and are never delayed to fill it.
-const PREFERRED_JOIN_SEGMENTS = 4
+const PREFERRED_JOIN_SEGMENTS = 8
 
 const SYSTEM_CLOCK: ChannelWorkerClock = {
   now: () => new Date(),
@@ -697,7 +697,7 @@ export class VirtualTunerService {
         record,
         channelId,
         record.revision,
-        preparedLiveEdge(parsed, this.minimumReadySegments),
+        preparedLiveEdge(parsed, this.minimumReadySegments, this.playlistWindowSegments),
         false
       )
       this.assertOpeningCurrent(clientId, opening)
@@ -792,7 +792,7 @@ export class VirtualTunerService {
           record,
           channelId,
           nextRevision,
-          preparedLiveEdge(parsed, this.minimumReadySegments),
+          preparedLiveEdge(parsed, this.minimumReadySegments, this.playlistWindowSegments),
           true
         )
         let committed = false
@@ -912,7 +912,7 @@ export class VirtualTunerService {
           record,
           channelId,
           nextRevision,
-          preparedLiveEdge(parsed, this.minimumReadySegments),
+          preparedLiveEdge(parsed, this.minimumReadySegments, this.playlistWindowSegments),
           true
         )
         let committed = false
@@ -1594,7 +1594,8 @@ export function parseSourcePlaylist(text: string): ParsedSourcePlaylist {
 
 function preparedLiveEdge(
   playlist: ParsedSourcePlaylist,
-  minimumCount: number
+  minimumCount: number,
+  maximumCount: number
 ): ParsedSourcePlaylist {
   return {
     targetDurationSeconds: playlist.targetDurationSeconds,
@@ -1602,7 +1603,7 @@ function preparedLiveEdge(
     // cushion from the complete entries already present in this snapshot.
     // Subsequent stable-manifest polls append future worker segments.
     segments: playlist.segments.slice(
-      -Math.max(2, minimumCount, PREFERRED_JOIN_SEGMENTS)
+      -Math.min(maximumCount, Math.max(2, minimumCount, PREFERRED_JOIN_SEGMENTS))
     ),
   }
 }
@@ -1635,7 +1636,7 @@ export function renderVirtualPlaylist(
     // ambiguous. Keep it standards-valid and verify the relay on physical TVs.
     `#EXT-X-DISCONTINUITY-SEQUENCE:${Math.max(0, discontinuitySequence)}`,
     '#EXT-X-INDEPENDENT-SEGMENTS',
-    '#EXT-X-START:TIME-OFFSET=-2.0,PRECISE=YES',
+    '#EXT-X-START:TIME-OFFSET=-6.0,PRECISE=YES',
   ]
   for (const entry of entries) {
     if (entry.discontinuityBefore) lines.push('#EXT-X-DISCONTINUITY')

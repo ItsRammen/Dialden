@@ -64,6 +64,7 @@ import {
 } from './services/FfmpegTranscodingBackend'
 import { ChannelLogoStore } from './services/ChannelLogoStore'
 import { BunChannelWorkerFiles } from './services/BunChannelWorkerFiles'
+import { LookaheadChannelPipelineFactory } from './services/LookaheadChannelPipelineFactory'
 import { ChannelTimelineResolverService } from './services/ChannelTimelineResolverService'
 import { createChannelStreamController } from './controllers/ChannelStreamController'
 import { createVirtualTunerStreamController } from './controllers/VirtualTunerStreamController'
@@ -141,7 +142,8 @@ export async function createServer(
       getDataPath('channels.json'),
       daemon.getLibraryPolicy()?.channels ?? []
     ),
-    appConfig.interlude
+    appConfig.interlude,
+    playbackHealth
   )
   const mediaDeliveryService = new MediaDeliveryService(
     daemon.getRepository(),
@@ -195,7 +197,7 @@ export async function createServer(
   })
   const channelWorkers = new ContinuousChannelWorkerManager(
     channelTimeline,
-    fullHardwarePipeline
+    new LookaheadChannelPipelineFactory(fullHardwarePipeline
       ? new FfmpegHardwareHlsPipelineFactory(
           'ffmpeg',
           undefined,
@@ -211,7 +213,7 @@ export async function createServer(
           undefined,
           transcodingStatus,
           audioNormalization
-        ),
+        ), channelTimeline),
     new BunChannelWorkerFiles(),
     {
       outputRoot: getDataPath('streams'),
