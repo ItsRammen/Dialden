@@ -2,6 +2,25 @@ import { expect, test } from 'bun:test'
 import { Hono } from 'hono'
 import { PlaybackHealthService } from '../src/services/PlaybackHealthService'
 
+test('retains bounded slow-operation timings without request secrets', async () => {
+  let now = 1000
+  const health = new PlaybackHealthService(() => now, false)
+  const app = new Hono()
+  app.use('*', health.middleware)
+  app.get('/api/v1/channels/:id/guide', async c => {
+    await health.measure('schedule.database-read', () => { now += 900 })
+    return c.text('ok')
+  })
+  await app.request('/api/v1/channels/private-title/guide?token=secret')
+  const snapshot = health.snapshot('nick')
+  expect(snapshot.slowOperations60s).toContain('schedule.database-read')
+  expect(snapshot.slowOperations60s).toContain('request.guide')
+  expect(snapshot.slowOperations60s).not.toContain('private-title')
+  expect(snapshot.slowOperations60s).not.toContain('secret')
+  now += 61000
+  expect(health.snapshot('nick').slowOperations60s).toBe('[]')
+})
+
 test('records bounded, session-specific HLS response setup and expiry without URLs', async () => {
   let now = 1000
   const health = new PlaybackHealthService(() => now, false)

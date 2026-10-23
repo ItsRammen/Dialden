@@ -163,7 +163,7 @@ describe('ChannelStreamController', () => {
     const body = await response.text()
 
     expect(body).toContain('#EXTM3U')
-    expect(body).toContain('#EXT-X-START:TIME-OFFSET=-2.0,PRECISE=YES')
+    expect(body).toContain('#EXT-X-START:TIME-OFFSET=-6.0,PRECISE=YES')
     expect(body.indexOf('#EXT-X-START')).toBeGreaterThan(-1)
     expect(body.indexOf('#EXT-X-VERSION')).toBeGreaterThan(
       body.indexOf('#EXT-X-START')
@@ -174,10 +174,10 @@ describe('ChannelStreamController', () => {
     const wellFormed =
       '#EXTM3U\n#EXT-X-VERSION:6\n#EXTINF:1.0,\nsegment-0000000000001.ts\n'
     const once = augmentLivePlaylist(wellFormed)
-    expect(once).toContain('#EXT-X-START:TIME-OFFSET=-2.0,PRECISE=YES')
+    expect(once).toContain('#EXT-X-START:TIME-OFFSET=-6.0,PRECISE=YES')
     expect(augmentLivePlaylist(once)).toBe(once)
     expect(augmentLivePlaylist('#EXTM3U\n#EXT-X-START:TIME-OFFSET=0\n')).not.toContain(
-      'TIME-OFFSET=-2.0'
+      'TIME-OFFSET=-6.0'
     )
     // Torn text passes through untouched; the route retries the read instead.
     const torn = 'EXTM3U without header'

@@ -52,7 +52,7 @@ describe('ChannelQualityTierService', () => {
     })
 
     expect(decision.profile.segmentSeconds).toBe(1)
-    expect(decision.profile.playlistWindowSegments).toBe(8)
+    expect(decision.profile.playlistWindowSegments).toBe(16)
   })
 
   test('operator override wins and is reported as such', () => {

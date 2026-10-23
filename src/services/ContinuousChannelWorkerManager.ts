@@ -99,9 +99,13 @@ export interface ChannelPipelineHandle {
   stop(): Promise<void> | void
   /** The FFmpeg process, so its CPU time can be attributed to this channel. */
   readonly pid?: number
+  /** Pause a prepared encoder without discarding its first segments. */
+  suspend?(): void
+  resume?(): void
 }
 
 export interface ChannelPipelineRequest {
+  readonly timelineStartMs?: number
   readonly channelId: string
   readonly outputDirectory: string
   readonly playlistPath: string
@@ -203,7 +207,7 @@ const DEFAULT_PROFILE: ContinuousHlsProfile = {
   audioCodec: 'aac',
   audioChannels: 2,
   segmentSeconds: 1,
-  playlistWindowSegments: 8,
+  playlistWindowSegments: 16,
   maximumWidth: 1920,
   maximumHeight: 1080,
 }
@@ -739,6 +743,7 @@ export class ContinuousChannelWorkerManager {
       if (sequence.length === 0) sequence = [activePosition]
       const outputReadyAfter = this.clock.now().getTime()
       const pipeline = await this.pipelines.start({
+        timelineStartMs: startedAt.getTime(),
         channelId: record.state.channelId,
         outputDirectory,
         playlistPath: `${outputDirectory}/index.m3u8`,

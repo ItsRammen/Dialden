@@ -18,14 +18,14 @@
 }(this, function () {
   'use strict';
 
-  /* Hold the forward buffer shallow. This is the same lever as the server's
-     advertised window, but under our control and far more precise. */
+  /* Keep a cushion for short server stalls and encoder handoffs. Channel
+     switches still explicitly evict outgoing media rather than playing it out. */
   var DEFAULT_CONFIG = {
-    maxBufferLength: 4,
-    maxMaxBufferLength: 8,
+    maxBufferLength: 8,
+    maxMaxBufferLength: 16,
     backBufferLength: 8,
-    liveSyncDurationCount: 2,
-    liveMaxLatencyDurationCount: 5,
+    liveSyncDurationCount: 6,
+    liveMaxLatencyDurationCount: 12,
     lowLatencyMode: false,
     enableWorker: true,
     debug: false

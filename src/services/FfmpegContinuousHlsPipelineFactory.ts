@@ -275,9 +275,12 @@ export class FfmpegContinuousHlsPipelineFactory implements ChannelPipelineFactor
     const command = this.command({ ...request, sequence, position: sequence[0] ?? request.position })
     const process = this.spawner.spawn(command)
     let stopping = false
+    let suspended = false
     let stopPromise: Promise<void> | null = null
     return {
       ...(typeof process.pid === 'number' ? { pid: process.pid } : {}),
+      suspend: () => { if (!stopping && !suspended) { process.kill('SIGSTOP'); suspended = true } },
+      resume: () => { if (!stopping && suspended) { process.kill('SIGCONT'); suspended = false } },
       completed: Promise.all([
         process.exited,
         process.stderrTail ?? Promise.resolve(''),
@@ -309,6 +312,8 @@ export class FfmpegContinuousHlsPipelineFactory implements ChannelPipelineFactor
       stop: () => {
         if (!stopPromise) {
           stopping = true
+          // A staged encoder may be paused when its channel is released.
+          if (suspended) process.kill('SIGCONT')
           process.kill('SIGTERM')
           stopPromise = process.exited.then(() => undefined)
         }

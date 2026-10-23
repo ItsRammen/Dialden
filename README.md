@@ -317,6 +317,31 @@ docker compose up -d --build
 Pushes to `main` run CI and publish `linux/amd64` and `linux/arm64` images tagged
 `latest` and `sha-<commit>` to GitHub Container Registry.
 
+### Playback continuity checks
+
+The webOS client targets an eight-second forward buffer, roughly six segments
+behind live, with a sixteen-segment server window. This adds a little live delay
+to absorb short stalls; channel switches still clear outgoing buffered media.
+
+Channel workers prepare their next finite FFmpeg batch up to thirty seconds
+before the current batch ends. Three completed segments are staged privately,
+then the successor is paused until handoff. The public playlist retains its
+sequence and marks the new encoder with a discontinuity. This can temporarily
+use two encoder processes per active channel, including an additional hardware
+encoder session. Preparation failure falls back to normal worker recovery.
+
+Run the optional real-time software encoder handoff check with local FFmpeg:
+
+```bash
+DIALDEN_FFMPEG_SMOKE=1 bun test tests/LookaheadChannelPipeline.integration.test.ts
+```
+
+Validate separately on the target GPU and TV before rollout. Slow-operation
+logs and playback incident snapshots now include recent schedule/database and
+request timings alongside event-loop delay. These are elapsed timings, including
+I/O waits, not proof that an operation caused an event-loop stall. Request labels
+exclude URL query strings and identifiers.
+
 Architecture and design references:
 
 - [`docs/DOCKER-WEBOS-MIGRATION.md`](./docs/DOCKER-WEBOS-MIGRATION.md)
