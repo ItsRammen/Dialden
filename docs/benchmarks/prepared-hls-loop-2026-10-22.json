@@ -1,0 +1,9 @@
+{
+  "loopBoundaryDecoded": true,
+  "frames": 240,
+  "maxVideoGapSeconds": 0.034000000000000696,
+  "captureSeconds": 8,
+  "maxAudioGapSeconds": 0.000666666666666909,
+  "maxAudioOverlapSeconds": 0.021333333333333333,
+  "productionReady": false
+}

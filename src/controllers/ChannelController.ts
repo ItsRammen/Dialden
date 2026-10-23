@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import type { ChannelIconService } from '../services/ChannelIconService'
 import {
   validateLibraryChannels,
   type ChannelAutomationHandoffPolicy,
@@ -31,6 +32,7 @@ import { renderChannelAdministration } from '../templates/channelAdministration'
 
 interface ChannelControllerDeps {
   channels: ChannelService
+  icons?: ChannelIconService
   logos?: ChannelLogoStore
   branding?: Pick<ChannelTimelineResolverService, 'presentation'>
   onChannelChanged?: (
@@ -46,6 +48,7 @@ interface ChannelControllerDeps {
 export function createChannelController({
   channels,
   logos,
+  icons,
   branding,
   onChannelChanged,
   onBrandingUpdated,
@@ -90,7 +93,13 @@ export function createChannelController({
 
   controller.get('/api/v1/channels', (c) => {
     c.header('Cache-Control', 'no-store')
-    return c.json(channels.list())
+    const result = channels.list()
+    if (!icons) return c.json(result)
+    const policies = channels.administrationSnapshot().channels
+    return c.json({ ...result, channels: result.channels.map(channel => {
+      const policy = policies.find(p => p.id === channel.id)
+      return { ...channel, ...(policy && icons.available(policy) ? { iconUrl: `/api/v1/channels/${encodeURIComponent(channel.id)}/icon` } : {}) }
+    }) })
   })
 
   controller.get('/api/v1/channels/schedule', async (c) => {
@@ -467,6 +476,18 @@ export function createChannelController({
         400
       )
     }
+  })
+
+  controller.get('/api/v1/channels/:id/icon', async (c) => {
+    const channel = channels.administrationSnapshot().channels.find(p => p.id === c.req.param('id') && p.enabled)
+    if (!channel || !icons) return c.text('Channel icon not found', 404)
+    const path = await icons.resolve(channel)
+    if (!path) { c.header('Cache-Control', 'no-store'); return c.text('Channel icon unavailable', 404) }
+    const file = Bun.file(path)
+    const etag = `W/"${file.size}-${file.lastModified}"`
+    const headers = { 'Content-Type': 'image/png', 'Cache-Control': 'private, max-age=300', 'X-Content-Type-Options': 'nosniff', ETag: etag }
+    if (c.req.header('If-None-Match') === etag) return new Response(null, { status: 304, headers })
+    return new Response(file, { headers })
   })
 
   controller.get('/channels/:id/logo', (c) => {

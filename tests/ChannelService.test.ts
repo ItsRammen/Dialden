@@ -143,6 +143,12 @@ describe('ChannelService', () => {
         episodeNumber: 5,
         episodeTitle: 'Gets.a.Bright.Idea.480p.WEBRip',
         episodeMetadataTitle: 'Gets a Bright Idea',
+        episodeOverview: 'The class investigates light.',
+        episodeAirDate: '1996-10-12',
+        collectionOverview: 'A class explores science.',
+        collectionCertification: 'TV-Y',
+        collectionCertificationRegion: 'US',
+        collectionRatingStatus: 'resolved',
       },
     ])
     const metadataPolicy: LibraryPolicyDocument = {
@@ -163,7 +169,10 @@ describe('ChannelService', () => {
       title: 'Gets a Bright Idea',
       collectionTitle: 'The Magic School Bus',
       episodeLabel: 'S03E05',
+      metadata: { overview: 'The class investigates light.', overviewScope: 'episode', airDate: '1996-10-12', rating: 'TV-Y', ratingRegion: 'US' },
     })
+    const guide = await service.getGuide('kids-club', 1)
+    expect(guide?.programs.find(p => p.mediaId === 1)?.metadata?.overview).toBe('The class investigates light.')
   })
 
   test('keeps combined episode names while hiding filename quality tokens', async () => {

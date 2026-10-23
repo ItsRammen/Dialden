@@ -140,6 +140,9 @@ const MEDIA_COLUMNS = `
     WHERE media_collections.id = media.collection_id) AS collection_metadata_title,
   (SELECT genres_json FROM media_collections
     WHERE media_collections.id = media.collection_id) AS collection_genres_json,
+  (SELECT overview FROM media_collections WHERE id = media.collection_id) AS collection_overview,
+  (SELECT certification_region FROM media_collections WHERE id = media.collection_id) AS collection_certification_region,
+  (SELECT rating_status FROM media_collections WHERE id = media.collection_id) AS collection_rating_status,
   season_number, episode_number, episode_title,
   episode_metadata_title, episode_overview, episode_air_date, episode_still_path
 `
@@ -1841,6 +1844,9 @@ export class MediaRepository implements IMediaRepository {
       libraryKind: this.normalizeLibraryKind(row.library_kind),
       collectionTitle:
         (row.collection_title as string) ?? (row.filename as string),
+      collectionOverview: (row.collection_overview as string | null) ?? null,
+      collectionCertificationRegion: (row.collection_certification_region as string | null) ?? null,
+      collectionRatingStatus: (row.collection_rating_status as string | null) ?? null,
       collectionCertification: (row.collection_certification as string | null) ?? null,
       collectionMetadataTitle:
         (row.collection_metadata_title as string | null) ?? null,

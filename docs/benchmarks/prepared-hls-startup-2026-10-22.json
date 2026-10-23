@@ -1,0 +1,80 @@
+{
+  "note": "Local software FFmpeg/HTTP benchmark; process-cold, not OS page-cache-cold, not LG first-picture measurement. Timings exclude ahead-of-time preparation. No production channel changes.",
+  "preparationMs": 3683.399008,
+  "cacheReused": false,
+  "cacheBytes": 16027188,
+  "durationSeconds": 21.133333,
+  "clipBoundariesSeconds": [
+    8,
+    13.141,
+    21.141
+  ],
+  "streams": [
+    {
+      "codec": "h264",
+      "width": 1920,
+      "height": 1080
+    },
+    {
+      "codec": "aac",
+      "sampleRate": "48000",
+      "channels": 2
+    }
+  ],
+  "videoFrames": 634,
+  "maxFrameGapSeconds": 0.03333400000000086,
+  "maxAudioGapSeconds": 6.666666697401069e-7,
+  "results": [
+    {
+      "mode": "prepared-new-process",
+      "trial": 0,
+      "playlistMs": 9.190903000000162,
+      "firstSegmentMs": 9.989722000000256,
+      "decoderOpenToFirstFrameMs": 75.26997200000005,
+      "totalBootToFirstFrameMs": 85.25969400000031
+    },
+    {
+      "mode": "prepared-new-process",
+      "trial": 1,
+      "playlistMs": 10.786571000000095,
+      "firstSegmentMs": 11.967371000000185,
+      "decoderOpenToFirstFrameMs": 69.34857000000011,
+      "totalBootToFirstFrameMs": 81.3159410000003
+    },
+    {
+      "mode": "prepared-new-process",
+      "trial": 2,
+      "playlistMs": 9.411317999999937,
+      "firstSegmentMs": 9.960712999999942,
+      "decoderOpenToFirstFrameMs": 69.3666159999998,
+      "totalBootToFirstFrameMs": 79.32732899999974
+    },
+    {
+      "mode": "paced-software-cold",
+      "trial": 0,
+      "probeMs": 85.06612099999984,
+      "playlistMs": 2988.392971,
+      "firstSegmentMs": 2990.6323540000003,
+      "decoderOpenToFirstFrameMs": 86.67221599999993,
+      "totalBootToFirstFrameMs": 3077.3045700000002
+    },
+    {
+      "mode": "paced-software-cold",
+      "trial": 1,
+      "probeMs": 99.24705800000083,
+      "playlistMs": 3001.191947000001,
+      "firstSegmentMs": 3003.577247000001,
+      "decoderOpenToFirstFrameMs": 119.5029740000009,
+      "totalBootToFirstFrameMs": 3123.080221000002
+    },
+    {
+      "mode": "paced-software-cold",
+      "trial": 2,
+      "probeMs": 91.27476999999999,
+      "playlistMs": 3054.2780679999996,
+      "firstSegmentMs": 3055.9614139999994,
+      "decoderOpenToFirstFrameMs": 71.77334200000041,
+      "totalBootToFirstFrameMs": 3127.734756
+    }
+  ]
+}

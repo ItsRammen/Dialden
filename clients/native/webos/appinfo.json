@@ -1,0 +1,16 @@
+{
+  "id": "com.itsrammen.dialden.native",
+  "version": "0.1.11",
+  "vendor": "Dialden",
+  "type": "native",
+  "main": "dialden-native",
+  "title": "Dialden",
+  "appDescription": "Live channels and guide for your Dialden server.",
+  "icon": "icon.png",
+  "largeIcon": "largeIcon.png",
+  "nativeLifeCycleInterfaceVersion": 2,
+  "handlesRelaunch": false,
+  "requiredMemory": 160,
+  "noSplashOnLaunch": true,
+  "spinnerOnLaunch": false
+}

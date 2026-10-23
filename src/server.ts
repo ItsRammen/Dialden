@@ -1,3 +1,4 @@
+import { ChannelIconService } from './services/ChannelIconService'
 import { PlaybackHealthService } from './services/PlaybackHealthService'
 import { AudioNormalizationService } from './services/AudioNormalizationService'
 import { PlaybackIncidentService } from './services/PlaybackIncidentService'
@@ -35,6 +36,8 @@ import { ChannelConfigurationStore } from './services/ChannelConfigurationStore'
 import { createChannelController } from './controllers/ChannelController'
 import { MediaDeliveryService } from './services/MediaDeliveryService'
 import { createMediaController } from './controllers/MediaController'
+import { createMediaStillController } from './controllers/MediaStillController'
+import { MediaStillService } from './services/MediaStillService'
 import { CollectionLibraryService } from './services/CollectionLibraryService'
 import { createCollectionLibraryController } from './controllers/CollectionLibraryController'
 import { createCollectionLibraryPageController } from './controllers/CollectionLibraryPageController'
@@ -425,6 +428,7 @@ export async function createServer(
   const channelController = createChannelController({
     channels: channelService,
     logos: channelLogos,
+    icons: new ChannelIconService(channelLogos, new ChannelLogoStore(getDataPath('channel-icons'))),
     branding: channelTimeline,
     suggestChannelLineup: async (request, signal) => {
       const config = await loadPersistedReviewAssistantConfig(
@@ -649,6 +653,7 @@ export async function createServer(
   app.route('/', channelStreamController)
   app.route('/', virtualTunerStreamController)
   app.route('/', mediaController)
+  app.route('/', createMediaStillController({ media: mediaDeliveryService, stills: new MediaStillService(getDataPath('stills')) }))
   app.route('/', collectionLibraryController)
   app.route('/', collectionLibraryPageController)
   app.route('/', bumperAdministrationController)

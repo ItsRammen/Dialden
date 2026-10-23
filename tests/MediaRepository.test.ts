@@ -43,6 +43,21 @@ describe('MediaRepository', () => {
     await repo.close()
   })
 
+  test('projects stored collection descriptions and rating provenance onto media', async () => {
+    const [collection] = await repo.upsertCollections([{
+      rootId: 'tv', libraryKind: 'tv', identityKey: 'example',
+      sourceTitle: 'Example', parsedTitle: 'Example', year: null,
+    }])
+    const db = (repo as unknown as { db: Database }).db
+    db.query("UPDATE media_collections SET overview = ?, certification = ?, certification_region = ?, rating_status = ? WHERE id = ?")
+      .run('A collection description.', 'TV-Y', 'US', 'resolved', collection!.id)
+    await repo.upsertMedia(createInput({ collectionId: collection!.id }))
+    expect((await repo.getAll())[0]).toMatchObject({
+      collectionOverview: 'A collection description.', collectionCertification: 'TV-Y',
+      collectionCertificationRegion: 'US', collectionRatingStatus: 'resolved',
+    })
+  })
+
   test('library change tokens ignore repeat writes but track content, availability and removal', async () => {
     const empty = await repo.getLibraryChangeToken()
     const item = createInput({ rootId: 'tv', rootAvailable: true })

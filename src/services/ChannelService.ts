@@ -1,3 +1,4 @@
+import { programMetadata, type ProgramMetadata } from './ProgramMetadata'
 import { channelCollectionKey, isGeneralParentalGuidance } from '../policy/ChannelParentalGuidance'
 import { selectBlockShorts } from './ShortProgrammingService'
 import type { IMediaRepository } from '../repositories/IMediaRepository'
@@ -104,6 +105,7 @@ export interface ScheduledProgram {
   readonly continuationTitle?: string
   readonly title: string
   readonly collectionTitle: string
+  readonly metadata?: ProgramMetadata
   readonly episodeLabel?: string
   readonly scheduledStart: string
   readonly scheduledEnd: string
@@ -2096,7 +2098,7 @@ export class ChannelService {
       collectionTitle: isInterlude
         ? 'Interlude'
         : this.programCollectionTitle(item),
-      ...(isInterlude ? {} : this.programEpisodeLabel(item)),
+      ...(isInterlude ? {} : { ...this.programEpisodeLabel(item), metadata: programMetadata(item) }),
       scheduledStart: scheduledStart.toISOString(),
       scheduledEnd: scheduledEnd.toISOString(),
       durationSeconds: scheduledDurationSeconds,
